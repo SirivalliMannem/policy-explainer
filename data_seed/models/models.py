@@ -112,7 +112,9 @@ class CoreForm(OrgScoped, Base):
 
     __tablename__ = "core_form"
 
-    policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    policy_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("core_policy.id"), nullable=True, index=True
+    )
     form_number: Mapped[str] = mapped_column(String(40), index=True)
     edition: Mapped[str] = mapped_column(String(16))
     title: Mapped[str] = mapped_column(String(200))
@@ -129,7 +131,7 @@ class CoreBilling(OrgScoped, Base):
 
     __tablename__ = "core_billing"
 
-    policy_id: Mapped[str] = mapped_column(String(36), index=True)
+    policy_id: Mapped[str] = mapped_column(String(36), ForeignKey("core_policy.id"), index=True)
     account_number: Mapped[str] = mapped_column(String(32), default="")
     plan: Mapped[str] = mapped_column(String(40), default="Monthly")
     status: Mapped[str] = mapped_column(String(30), default="current")
@@ -144,7 +146,7 @@ class CoreClaim(OrgScoped, Base):
 
     __tablename__ = "core_claim"
 
-    policy_id: Mapped[str] = mapped_column(String(36), index=True)
+    policy_id: Mapped[str] = mapped_column(String(36), ForeignKey("core_policy.id"), index=True)
     claim_number: Mapped[str] = mapped_column(String(32), index=True)
     loss_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     reported_date: Mapped[date | None] = mapped_column(Date, nullable=True)
