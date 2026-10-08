@@ -168,3 +168,55 @@ def test_policy_number_in_question_does_not_create_evidence(seeded_policy_id):
     data = res.json()
     assert data["status"] == "insufficient_evidence"
     assert data["evidence"] == []
+
+
+def _policy(number):
+    db = SessionLocal()
+    try:
+        return db.query(CorePolicy).filter(CorePolicy.policy_number == number).order_by(CorePolicy.term_number.desc()).first().id
+    finally:
+        db.close()
+
+
+def test_policyholder_name_is_not_a_search_term():
+    from app.services.retrieval.evidence_retriever import EvidenceRetriever
+    db = SessionLocal()
+    try:
+        _, stats = EvidenceRetriever.retrieve_with_stats(
+            "Does Margaret Chen have water backup coverage?", _policy("HO-2847-1193"), db
+        )
+    finally:
+        db.close()
+    assert "margaret" not in stats["query_terms"] and "chen" not in stats["query_terms"]
+
+
+def test_phrase_keywords_match_golden_rental_question():
+    """Curated keywords such as "rental car" are phrases and must match as phrases."""
+    from app.services.retrieval.evidence_retriever import EvidenceRetriever
+    db = SessionLocal()
+    try:
+        evidence = EvidenceRetriever.retrieve(
+            "Am I covered for a rental car while my car is being repaired?", _policy("PA-5518-0042"), db
+        )
+    finally:
+        db.close()
+    assert evidence and (evidence[0].form_number, evidence[0].heading) == ("PP 00 01", "Transportation Expenses")
+
+
+def test_suggestions_follow_the_policys_own_coverage():
+    """A policy without the water back-up endorsement is never offered questions about its limit."""
+    from app.models.policy import CorePolicy as Policy
+    from app.services.suggestions.generator import SuggestionGenerator
+    db = SessionLocal()
+    try:
+        without_backup = db.query(Policy).filter(Policy.policy_number == "HO-3310-8821").first()
+        suggestions = SuggestionGenerator.generate("Does this policy have water backup coverage?", without_backup, [])
+        assert suggestions and not any("water backup limit" in s.lower() for s in suggestions)
+
+        auto = db.query(Policy).filter(Policy.policy_number == "PA-5518-0042").first()
+        asked = "Am I covered for a rental car while my car is being repaired?"
+        suggestions = SuggestionGenerator.generate(asked, auto, [])
+        assert not any("rental car while my vehicle is being repaired" in s for s in suggestions)  # near-repeat dropped
+        assert len(suggestions) == 3
+    finally:
+        db.close()

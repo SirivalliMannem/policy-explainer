@@ -27,7 +27,7 @@ function CheckIcon({ status }: { status: string }) {
 
 export function GuardrailStatusBadge({ status }: { status: string }) {
   const passed = status === 'passed';
-  const noEvidence = status === 'no_evidence';
+  const noEvidence = status === 'no_evidence' || status === 'not_applicable';
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold ${
@@ -39,7 +39,15 @@ export function GuardrailStatusBadge({ status }: { status: string }) {
       }`}
     >
       {passed ? <Check className="h-3 w-3" strokeWidth={3} /> : <AlertTriangle className="h-3 w-3" />}
-      {passed ? 'Passed' : noEvidence ? 'No evidence' : status === 'flagged' ? 'Flagged' : 'Failed'}
+      {passed
+        ? 'Passed'
+        : status === 'not_applicable'
+        ? 'Not applicable'
+        : noEvidence
+        ? 'No evidence'
+        : status === 'flagged'
+        ? 'Flagged'
+        : 'Failed'}
     </span>
   );
 }

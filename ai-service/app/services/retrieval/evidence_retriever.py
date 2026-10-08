@@ -115,6 +115,9 @@ class EvidenceRetriever:
         q_clean = POLICY_NUMBER_REFERENCE.sub(" ", question).strip()
         q_lower = q_clean.lower()
         q_tokens = _tokenize(q_clean)
+        # The policyholder's name identifies the policy; it is never something its wording says.
+        holder_tokens = _tokenize(policy.account.name) if policy.account else set()
+        q_tokens -= holder_tokens
         stats["query_terms"] = sorted(q_tokens)
 
         evidence_items: list[EvidenceItem] = []
@@ -150,7 +153,9 @@ class EvidenceRetriever:
                 score += 8.0
             if any(k in q_tokens for k in ["collision", "crash"]) and "collision" in cov.name.lower():
                 score += 8.0
-            if any(k in q_tokens for k in ["rental", "transportation"]) and "rental" in cov.name.lower():
+            if any(k in q_tokens for k in ["rental", "transportation"]) and (
+                "rental" in cov.name.lower() or "transportation" in cov.name.lower() or "rental" in cov.pattern_code.lower()
+            ):
                 score += 8.0
 
             if score >= 3.0:
@@ -242,7 +247,9 @@ class EvidenceRetriever:
             score = 0.0
 
             # Direct keyword hits (from curated domain indexing)
-            kw_hits = q_tokens & clause_keywords
+            # Curated keywords are often phrases ("rental car", "living expenses"); a phrase hits
+            # when every one of its words is in the question.
+            kw_hits = {k for k in clause_keywords if (kw_tokens := _tokenize(k)) and kw_tokens <= q_tokens}
             if kw_hits:
                 score += len(kw_hits) * 3.0
 

@@ -26,10 +26,14 @@ def ensure_ledger_columns(engine: Engine) -> list[str]:
     inspector = inspect(engine)
     if "evidence_ledger" not in inspector.get_table_names():
         return []
-    existing = {column["name"] for column in inspector.get_columns("evidence_ledger")}
-    missing = [name for name in LEDGER_COLUMNS if name not in existing]
-    if missing:
+    columns = {column["name"]: column for column in inspector.get_columns("evidence_ledger")}
+    missing = [name for name in LEDGER_COLUMNS if name not in columns]
+    # Portfolio answers are recorded without a policy, so policy_id must accept NULL.
+    relax_policy_id = "policy_id" in columns and not columns["policy_id"]["nullable"]
+    if missing or relax_policy_id:
         with engine.begin() as conn:
             for name in missing:
                 conn.execute(text(f"ALTER TABLE evidence_ledger ADD COLUMN {name} {LEDGER_COLUMNS[name]}"))
-    return missing
+            if relax_policy_id:
+                conn.execute(text("ALTER TABLE evidence_ledger ALTER COLUMN policy_id DROP NOT NULL"))
+    return missing + (["policy_id:nullable"] if relax_policy_id else [])

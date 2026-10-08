@@ -125,6 +125,15 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
                 </div>
               </Section>
 
+              {entry.answer_type === 'portfolio' ? (
+                <Section title="Answer source">
+                  <p className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-[12.5px] text-[#475569]">
+                    Customer / portfolio question answered directly from policy records for{' '}
+                    <span className="font-semibold text-[#0F2A43]">{entry.insured}</span>. No language model or policy wording
+                    was involved, so guardrail checks do not apply.
+                  </p>
+                </Section>
+              ) : (
               <Section title="Resolved policy">
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 sm:grid-cols-3">
                   <Field label="Insured">{entry.insured ?? '—'}</Field>
@@ -139,6 +148,7 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
                   <Field label="Agent">{entry.agent ?? '—'}</Field>
                 </dl>
               </Section>
+              )}
 
               <Section title={`Sources (${entry.citations.length} verified)`}>
                 {entry.citations.length === 0 ? (

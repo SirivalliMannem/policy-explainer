@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, Cpu, Minus, X } from 'lucide-react';
-import { GuardrailSummary } from './GuardrailSummary';
+import { GuardrailStatusBadge, GuardrailSummary } from './GuardrailSummary';
 import {
   ProcessState,
   STAGES,
@@ -90,7 +90,11 @@ export function AIProcessSidebar({ process, policyNumber }: AIProcessSidebarProp
           <h3 className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#0F2A43]">AI Process</h3>
         </div>
         <span className={`rounded-md px-2 py-0.5 text-[10.5px] font-semibold ring-1 ${badge.className}`}>
-          {result?.status === 'insufficient_evidence' && process.phase === 'completed' ? 'Insufficient evidence' : badge.label}
+          {result?.status === 'insufficient_evidence' && process.phase === 'completed'
+            ? result.answer_type === 'portfolio'
+              ? 'No match'
+              : 'Insufficient evidence'
+            : badge.label}
         </span>
       </div>
 
@@ -170,7 +174,36 @@ export function AIProcessSidebar({ process, policyNumber }: AIProcessSidebarProp
         </p>
       )}
 
-      {process.phase === 'completed' && result && (
+      {process.phase === 'completed' && result && result.answer_type === 'portfolio' && (
+        <div className="space-y-3 border-t border-[#E2E8F0] pt-3">
+          <dl className="grid grid-cols-2 gap-2">
+            <div className="col-span-2 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-2.5">
+              <dt className="text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">Answer source</dt>
+              <dd className="mt-0.5 text-sm font-bold text-[#0F2A43]">Policy records</dd>
+            </div>
+            <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-2.5">
+              <dt className="text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">Policies</dt>
+              <dd className="mt-0.5 text-sm font-bold text-[#EA580C]">{result.portfolio?.policies.length ?? 0}</dd>
+            </div>
+            <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-2.5">
+              <dt className="text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">Policyholders</dt>
+              <dd className="mt-0.5 text-sm font-bold text-[#0F2A43]">
+                {new Set(result.portfolio?.policies.map((p) => p.customer_id)).size}
+              </dd>
+            </div>
+          </dl>
+          <div className="flex items-center justify-between">
+            <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[#64748B]">Guardrails</span>
+            <GuardrailStatusBadge status={result.guardrail_status} />
+          </div>
+          <div className="flex items-center justify-between border-t border-slate-100 pt-2.5 text-[10.5px] text-[#64748B]">
+            <span>No language model used</span>
+            <span className="shrink-0 font-mono">{formatMs(result.latency_ms)}</span>
+          </div>
+        </div>
+      )}
+
+      {process.phase === 'completed' && result && result.answer_type !== 'portfolio' && (
         <div className="space-y-3 border-t border-[#E2E8F0] pt-3">
           <dl className="grid grid-cols-2 gap-2">
             <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-2.5">

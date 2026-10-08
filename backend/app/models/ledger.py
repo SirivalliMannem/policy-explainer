@@ -26,7 +26,8 @@ class EvidenceLedger(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     conversation_id: Mapped[str] = mapped_column(String(36), index=True)
     question_id: Mapped[str] = mapped_column(String(36), index=True)
-    policy_id: Mapped[str] = mapped_column(String(36), index=True)
+    # Empty for customer / portfolio answers, which are not about one policy.
+    policy_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     question: Mapped[str] = mapped_column(Text)
     retrieved_evidence: Mapped[list] = mapped_column(JSON, default=list)
     grounding_context: Mapped[str] = mapped_column(Text, default="")

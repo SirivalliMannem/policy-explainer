@@ -1,6 +1,6 @@
 """Schemas for AI Policy Explainer answers, evidence, and citations."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.conversation import PolicyContextSummary
@@ -50,6 +50,32 @@ class GuardrailCheck(BaseModel):
     detail: str = ""
 
 
+class PortfolioPolicy(BaseModel):
+    """One policy listed in a customer or portfolio answer (its current term)."""
+
+    policy_id: str
+    policy_number: str
+    customer_id: str
+    customer_name: str
+    line_of_business: str
+    product_name: Optional[str] = None
+    status: str
+    state: Optional[str] = None
+    term_number: int
+    effective_date: date
+    expiration_date: date
+    earlier_terms: int = 0
+
+
+class PortfolioAnswer(BaseModel):
+    """Facts read from policy records for a customer, household or whole-book question."""
+
+    scope: str  # customer | household | book | not_found
+    customers: list[str] = []
+    filters: dict[str, str] = {}
+    policies: list[PortfolioPolicy] = []
+
+
 class QuestionAnswerResponse(BaseModel):
     """Structured answer response produced by the Policy Explainer pipeline."""
 
@@ -59,7 +85,11 @@ class QuestionAnswerResponse(BaseModel):
     question_id: str
     question: str
     answer: str
-    policy_context: PolicyContextSummary
+    # policy_explanation: grounded answer about one policy's wording
+    # portfolio: customer / book facts read from policy records (no language model)
+    answer_type: str = "policy_explanation"
+    portfolio: Optional[PortfolioAnswer] = None
+    policy_context: Optional[PolicyContextSummary] = None
     evidence: list[EvidenceItemSchema] = []
     citations: list[CitationItem] = []
     confidence: str = "high"

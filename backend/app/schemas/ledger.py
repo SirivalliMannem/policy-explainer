@@ -27,7 +27,8 @@ class LedgerRow(BaseModel):
     agent: Optional[str] = None
     insured: Optional[str] = None
     customer_id: Optional[str] = None
-    policy_id: str
+    policy_id: Optional[str] = None
+    answer_type: str = "policy_explanation"
     policy_number: Optional[str] = None
     policy_term: Optional[int] = None
     policy_effective: Optional[date] = None

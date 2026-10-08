@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ChevronRight,
   Compass,
+  Database,
   ExternalLink,
   FileSearch,
   Link2,
@@ -19,8 +20,10 @@ import {
   checkLabel,
   citationLine,
   evidenceByIndex,
+  formatDate,
   lineLabel,
   modelLabel,
+  statusLabel,
 } from '../../lib/explainer';
 
 export type ChatMessage =
@@ -230,6 +233,139 @@ function AnswerCard({
   );
 }
 
+function PortfolioCard({
+  result,
+  time,
+  activePolicyId,
+  isWorking,
+  onAsk,
+  onChooseCandidate,
+  onOpenSource,
+}: {
+  result: QuestionAnswerResponse;
+  time: string;
+  activePolicyId?: string | null;
+  isWorking: boolean;
+  onAsk: (q: string) => void;
+  onChooseCandidate: (candidate: PolicyContextCandidate) => void;
+  onOpenSource: (item: EvidenceItem) => void;
+}) {
+  const portfolio = result.portfolio;
+  const policies = portfolio?.policies ?? [];
+
+  return (
+    <div className="message-in flex items-start gap-3">
+      <AssistantAvatar />
+      <div className="min-w-0 max-w-[46rem] flex-1 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3.5 shadow-sm sm:px-5">
+        <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <span className="font-bold text-[#0F2A43]">Policy Explainer</span>
+            <span className="text-slate-300">·</span>
+            <span className="text-[#64748B]">{time}</span>
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[#475569] ring-1 ring-slate-200">
+            <Database className="h-3 w-3" /> From policy records
+          </span>
+        </div>
+
+        <p className="text-[13.5px] leading-relaxed text-[#1E293B]">{result.answer}</p>
+
+        {policies.length > 0 && (
+          <ul className="mt-3 divide-y divide-[#F1F5F9] overflow-hidden rounded-xl border border-[#E2E8F0]">
+            {policies.map((p) => {
+              const isActive = p.policy_id === activePolicyId;
+              const evidence = result.evidence.find((e) => e.source_id === p.policy_id);
+              return (
+                <li key={p.policy_id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-[12.5px] font-bold text-[#0F2A43]">{p.policy_number}</span>
+                      <span className="rounded border border-[#FDBA74] bg-[#FFF7ED] px-1.5 py-px text-[10px] font-semibold uppercase text-[#C2410C]">
+                        {lineLabel(p.line_of_business)}
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-px text-[10px] font-semibold ring-1 ${
+                          p.status === 'in_force' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-600 ring-slate-200'
+                        }`}
+                      >
+                        {statusLabel(p.status)}
+                      </span>
+                    </div>
+                    <span className="mt-0.5 block text-[11.5px] text-[#64748B]">
+                      {p.customer_name} · {p.state} · Term {p.term_number}, {formatDate(p.effective_date)} – {formatDate(p.expiration_date)}
+                      {p.earlier_terms > 0 && ` · ${p.earlier_terms} earlier term${p.earlier_terms > 1 ? 's' : ''}`}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {evidence && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenSource(evidence)}
+                        className="rounded-md border border-[#E2E8F0] px-2 py-1 text-[11px] font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] cursor-pointer"
+                      >
+                        Record
+                      </button>
+                    )}
+                    {isActive ? (
+                      <span className="px-2 py-1 text-[11px] font-semibold text-emerald-700">Current context</span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isWorking}
+                        onClick={() =>
+                          onChooseCandidate({
+                            policy_id: p.policy_id,
+                            policy_number: p.policy_number,
+                            customer_id: p.customer_id,
+                            customer_name: p.customer_name,
+                            line_of_business: p.line_of_business,
+                            product_name: p.product_name,
+                            status: p.status,
+                            effective_date: p.effective_date,
+                            expiration_date: p.expiration_date,
+                          })
+                        }
+                        className="rounded-md bg-[#0F2A43] px-2 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-[#16385A] disabled:opacity-60 cursor-pointer"
+                      >
+                        Use as context
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <p className="mt-2.5 text-[10.5px] text-[#94A3B8]">
+          Read directly from the policy system — no language model or policy wording involved.
+        </p>
+
+        {result.suggested_questions.length > 0 && (
+          <div className="mt-3 border-t border-slate-100 pt-3">
+            <span className="mb-2 flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">
+              <Compass className="h-3.5 w-3.5 text-[#F97316]" /> Explore these policies
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {result.suggested_questions.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => onAsk(q)}
+                  className="inline-flex items-center gap-1 rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1 text-[12px] text-[#0F2A43] transition-colors hover:border-[#F97316] hover:bg-[#FFF7ED] hover:text-[#C2410C] cursor-pointer"
+                >
+                  {q}
+                  <ChevronRight className="h-3 w-3 text-[#F97316]" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ConversationStream({
   messages,
   isWorking,
@@ -347,6 +483,20 @@ export function ConversationStream({
             );
 
           case 'answer':
+            if (msg.result.answer_type === 'portfolio') {
+              return (
+                <PortfolioCard
+                  key={msg.id}
+                  result={msg.result}
+                  time={msg.time}
+                  activePolicyId={activePolicy?.policy_id}
+                  isWorking={isWorking}
+                  onAsk={onAsk}
+                  onChooseCandidate={onChooseCandidate}
+                  onOpenSource={onOpenSource}
+                />
+              );
+            }
             return (
               <AnswerCard
                 key={msg.id}

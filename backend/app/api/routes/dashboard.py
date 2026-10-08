@@ -184,6 +184,7 @@ def get_dashboard_stats(
             CorePolicy,
             CoreAccount,
             EvidenceLedger.confidence,
+            EvidenceLedger.retrieval,
         )
         .outerjoin(CorePolicy, CorePolicy.id == ConversationQuestion.policy_id)
         .outerjoin(CoreAccount, CoreAccount.id == CorePolicy.account_id)
@@ -194,9 +195,14 @@ def get_dashboard_stats(
     )
 
     recent_items: list[RecentQuestionItem] = []
-    for cq, policy, account, conf in raw_recent:
+    for cq, policy, account, conf, retrieval in raw_recent:
         cust_name = account.name if (account and account.name) else "Context pending"
         pol_num = policy.policy_number if (policy and policy.policy_number) else "Context pending"
+        if (retrieval or {}).get("answer_type") == "portfolio":
+            # Customer / portfolio answers are about many policies, not a pending context.
+            customers = ((retrieval or {}).get("portfolio") or {}).get("customers") or []
+            cust_name = ", ".join(customers) or "All policyholders"
+            pol_num = "Portfolio"
         final_conf = conf if conf else ("none" if cq.status == "insufficient_evidence" else None)
         
         recent_items.append(

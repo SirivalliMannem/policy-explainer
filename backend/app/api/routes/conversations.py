@@ -23,6 +23,13 @@ from app.schemas.conversation import (
 from app.schemas.explainer import ConversationMessage, QuestionAnswerResponse
 from app.services.ai_client import ai_client
 from app.services.ledger.ledger_service import LedgerService, answer_outcome
+from app.services.portfolio import (
+    answer_portfolio_question,
+    is_portfolio_question,
+    portfolio_evidence,
+    portfolio_payload,
+    portfolio_suggestions,
+)
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -184,6 +191,12 @@ def submit_question(
         )
 
     conv = _get_conversation_or_404(conversation_id, db)
+
+    # Customer and portfolio questions ("how many policies does X have?") are answered from
+    # policy records and do not need, or change, the conversation's single-policy context.
+    if is_portfolio_question(question_text):
+        return _answer_portfolio_question(conv, question_text, db)
+
     if not conv.policy_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -299,6 +312,89 @@ def submit_question(
     )
 
 
+def _answer_portfolio_question(conv: Conversation, question_text: str, db: Session) -> QuestionAnswerResponse:
+    """Answer a customer/portfolio question from policy records and record it in the ledger."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    started = time.perf_counter()
+    result = answer_portfolio_question(question_text, db)
+    lookup_ms = int(round((time.perf_counter() - started) * 1000))
+
+    payload = portfolio_payload(result)
+    evidence, citations = portfolio_evidence(result)
+    suggestions = portfolio_suggestions(result)
+    found = result.scope != "not_found"
+    retrieval = {
+        "answer_type": "portfolio",
+        "portfolio": payload,
+        "policies_matched": len(result.policies),
+    }
+
+    question_record = ConversationQuestion(
+        conversation_id=conv.id,
+        policy_id=None,
+        question=question_text,
+        status="answered" if found else "insufficient_evidence",
+        created_at=now,
+    )
+    conv.updated_at = now
+    db.add(question_record)
+    db.commit()
+    db.refresh(question_record)
+
+    latency_ms = int(round((time.perf_counter() - started) * 1000))
+    outcome = "answered" if found else "insufficient_evidence"
+    ledger_entry = LedgerService.record_entry(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        policy_id=None,
+        question=question_text,
+        evidence=evidence,
+        grounding_context="Answered from policy records (core_policy, core_account); no policy wording involved.",
+        raw_llm_response="",
+        final_answer=result.answer,
+        citations=citations,
+        # Record lookups are exact rather than inferred; there is nothing to grade.
+        confidence="high" if found else "none",
+        guardrail_status="not_applicable",
+        suggested_questions=suggestions,
+        db=db,
+        employee_id=conv.employee_id,
+        outcome=outcome,
+        guardrail_checks=[],
+        model_used="none",
+        provider="none",
+        is_fallback=False,
+        latency_ms=latency_ms,
+        timings_ms={"retrieval": lookup_ms},
+        retrieval=retrieval,
+    )
+
+    return QuestionAnswerResponse(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        question=question_text,
+        answer=result.answer,
+        answer_type="portfolio",
+        portfolio=payload,
+        policy_context=_build_policy_context(conv.policy_id, db),
+        evidence=evidence,
+        citations=citations,
+        confidence="high" if found else "none",
+        status=question_record.status,
+        suggested_questions=suggestions,
+        guardrail_status="not_applicable",
+        guardrail_checks=[],
+        outcome=outcome,
+        model_used="none",
+        provider="none",
+        is_fallback=False,
+        retrieval=retrieval,
+        timings_ms={"retrieval": lookup_ms},
+        latency_ms=latency_ms,
+        ledger_id=ledger_entry.id,
+    )
+
+
 @router.get("/{conversation_id}/messages", response_model=list[ConversationMessage])
 def get_conversation_messages(
     conversation_id: str,
@@ -322,13 +418,17 @@ def get_conversation_messages(
         entry = entries.get(q.id)
         answer = None
         if entry is not None:
+            retrieval = entry.retrieval or {}
+            is_portfolio = retrieval.get("answer_type") == "portfolio"
             policy_context = _build_policy_context(entry.policy_id, db)
-            if policy_context:
+            if policy_context or is_portfolio:
                 answer = QuestionAnswerResponse(
                     conversation_id=conv.id,
                     question_id=q.id,
                     question=q.question,
                     answer=entry.final_answer,
+                    answer_type="portfolio" if is_portfolio else "policy_explanation",
+                    portfolio=retrieval.get("portfolio") if is_portfolio else None,
                     policy_context=policy_context,
                     evidence=entry.retrieved_evidence or [],
                     citations=entry.citations or [],
@@ -342,7 +442,7 @@ def get_conversation_messages(
                     provider=entry.provider or "unknown",
                     is_fallback=bool(entry.is_fallback),
                     fallback_reason=entry.fallback_reason,
-                    retrieval=entry.retrieval or {},
+                    retrieval=retrieval,
                     timings_ms=entry.timings_ms or {},
                     latency_ms=entry.latency_ms,
                     ledger_id=entry.id,

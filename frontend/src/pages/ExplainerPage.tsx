@@ -54,6 +54,11 @@ function timeOf(iso: string): string {
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Clarification replies are short ("Margaret Chen", "HO-2847-1193"); a full question is a new question. */
+function looksLikeReply(text: string): boolean {
+  return !text.includes('?') && (text.match(/\S+/g) || []).length <= 4;
+}
+
 /** True when a message only names a policy ("Margaret Chen", "it's HO-2847-1193") rather than asking something new. */
 function isBareReference(text: string, resolution: QuestionResolution): boolean {
   if (text.includes('?')) return false;
@@ -136,20 +141,23 @@ export function ExplainerPage() {
     return conv.conversation_id;
   };
 
-  /** Stages 2–6: submit to the backend, which calls the AI service and records the Evidence Ledger. */
-  const runPipeline = async (question: string, convId: string, contextDetail: string) => {
+  /** Stages 2–6: submit to the backend, which answers it (AI service or policy records) and records the Evidence Ledger. */
+  const runPipeline = async (question: string, convId: string, contextDetail: string, recordLookup = false) => {
     setProcess((prev) => ({
       phase: 'running',
       result: null,
       stages: { ...prev.stages, context: { status: 'completed', detail: contextDetail }, retrieve: { status: 'processing' } },
     }));
     clearTimers();
-    timersRef.current = STAGE_SCHEDULE.map(({ at, complete, start }) =>
-      setTimeout(() => {
-        setStage(complete, { status: 'completed' });
-        setStage(start, { status: 'processing' });
-      }, at)
-    );
+    // A records lookup has no grounding or generation stages to pace.
+    if (!recordLookup) {
+      timersRef.current = STAGE_SCHEDULE.map(({ at, complete, start }) =>
+        setTimeout(() => {
+          setStage(complete, { status: 'completed' });
+          setStage(start, { status: 'processing' });
+        }, at)
+      );
+    }
 
     try {
       const result = await submitQuestion(convId, question);
@@ -201,7 +209,7 @@ export function ExplainerPage() {
         // A reply to a clarification is resolved together with the question it answers, so the
         // question's wording ("water backup", "my car") can narrow a policyholder's policies.
         const pending = pendingQuestionRef.current;
-        resolution = await resolvePolicyFromQuestion(pending ? `${text} — ${pending}` : text);
+        resolution = await resolvePolicyFromQuestion(pending && looksLikeReply(text) ? `${text} — ${pending}` : text);
       } catch (err) {
         const friendly = describeError(err);
         failProcess(friendly.title);
@@ -209,6 +217,14 @@ export function ExplainerPage() {
         return;
       } finally {
         setIsResolving(false);
+      }
+
+      // Customer / portfolio questions are answered from policy records. They need no single-policy
+      // context, and they neither change the active context nor ask which policy to check.
+      if (resolution.intent === 'portfolio') {
+        const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
+        await runPipeline(text, convId, `${subject} — answered from policy records`, true);
+        return;
       }
 
       let question = text;

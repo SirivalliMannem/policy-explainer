@@ -29,7 +29,7 @@ class LedgerService:
     def record_entry(
         conversation_id: str,
         question_id: str,
-        policy_id: str,
+        policy_id: Optional[str],
         question: str,
         evidence: list[Any],
         grounding_context: str,

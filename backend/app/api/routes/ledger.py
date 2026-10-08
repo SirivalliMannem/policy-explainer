@@ -64,13 +64,18 @@ def _cites_carrier_source(entry: EvidenceLedger) -> bool:
 def _row(entry: EvidenceLedger, policy: Optional[CorePolicy], account: Optional[CoreAccount],
          conversation: Optional[Conversation]) -> dict:
     sources = _source_labels(entry.citations or [])
+    portfolio = (entry.retrieval or {}).get("portfolio") if (entry.retrieval or {}).get("answer_type") == "portfolio" else None
+    insured = account.name if account else None
+    if portfolio is not None and not insured:
+        insured = ", ".join(portfolio.get("customers") or []) or "All policyholders"
     return dict(
         id=entry.id,
         created_at=entry.created_at,
         conversation_id=entry.conversation_id,
         question_id=entry.question_id,
         agent=entry.employee_id or (conversation.employee_id if conversation else None),
-        insured=account.name if account else None,
+        insured=insured,
+        answer_type="portfolio" if portfolio is not None else "policy_explanation",
         customer_id=account.id if account else None,
         policy_id=entry.policy_id,
         policy_number=policy.policy_number if policy else None,

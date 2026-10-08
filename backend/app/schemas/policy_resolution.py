@@ -37,6 +37,8 @@ class QuestionResolution(BaseModel):
     """Outcome of resolving a policy reference from a question."""
 
     status: str  # resolved | ambiguous | not_found | no_reference
+    # policy: about one policy's contents; portfolio: counts or lists policies/customers
+    intent: str = "policy"
     matched_on: Optional[str] = None
     reference: Optional[str] = None
     policy: Optional[PolicyContextCandidate] = None

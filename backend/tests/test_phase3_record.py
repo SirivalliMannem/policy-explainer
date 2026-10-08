@@ -158,3 +158,77 @@ def test_ai_service_down_marks_question_failed(monkeypatch):
 
 def test_ledger_migration_is_idempotent():
     assert ensure_ledger_columns(engine) == []
+
+
+# ---- Customer / portfolio questions (answered from policy records) ---------------------------
+
+def ask(conversation_id: str, question: str) -> dict:
+    r = client.post(f"/api/conversations/{conversation_id}/questions", json={"question": question})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_resolution_reports_portfolio_intent():
+    assert resolve("How many policies does Margaret Chen have?")["intent"] == "portfolio"
+    assert resolve("What policies do we have?")["intent"] == "portfolio"
+    assert resolve("Does Margaret Chen have water backup coverage?")["intent"] == "policy"
+    assert resolve("Which policies cover water backup?")["intent"] == "policy"  # about wording, not a list
+
+
+def test_customer_policy_count_without_context():
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    d = ask(conv, "How many policies does Margaret Chen have?")
+    assert d["answer_type"] == "portfolio" and d["status"] == "answered"
+    assert d["model_used"] == "none" and d["guardrail_status"] == "not_applicable"
+    numbers = {p["policy_number"] for p in d["portfolio"]["policies"]}
+    assert numbers == {"HO-2847-1193", "PA-6120-7742"}  # current policies; spouse's not included
+    assert d["answer"].startswith("Margaret Chen has 2 current policies")
+    assert next(p for p in d["portfolio"]["policies"] if p["policy_number"] == "HO-2847-1193")["earlier_terms"] == 1
+
+
+def test_portfolio_question_keeps_active_context():
+    res = resolve("Does Margaret Chen have water backup coverage?")
+    conv = client.post("/api/conversations", json={"policy_id": res["policy"]["policy_id"]}).json()["conversation_id"]
+    d = ask(conv, "how many policies do Margaret Chen have ?")
+    assert d["answer_type"] == "portfolio"
+    assert client.get(f"/api/conversations/{conv}").json()["policy_context"]["policy_number"] == "HO-2847-1193"
+
+
+def test_whole_book_and_filters():
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    book = ask(conv, "What policies do we have?")
+    assert book["portfolio"]["scope"] == "book"
+    assert len(book["portfolio"]["policies"]) == 9  # 10 policy rows, one is an earlier term
+    auto = ask(conv, "Which customers have auto policies?")
+    assert {p["line_of_business"] for p in auto["portfolio"]["policies"]} == {"personal_auto"}
+    texas = ask(conv, "How many policies are in Texas?")
+    assert {p["state"] for p in texas["portfolio"]["policies"]} == {"TX"}
+
+
+def test_household_only_when_asked():
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    d = ask(conv, "What policies does the Chen household have?")
+    assert d["portfolio"]["scope"] == "household"
+    assert "PA-6120-7741" in {p["policy_number"] for p in d["portfolio"]["policies"]}
+
+
+def test_unknown_policyholder_is_not_answered_with_whole_book():
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    d = ask(conv, "How many policies does John Smith have?")
+    assert d["portfolio"]["scope"] == "not_found" and d["portfolio"]["policies"] == []
+    assert d["outcome"] == "insufficient_evidence"
+    assert "John Smith" in d["answer"]
+
+
+def test_portfolio_answer_is_recorded_and_restorable():
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    d = ask(conv, f"How many policies does Priya Raghavan have? {marker}")
+    row = client.get("/api/ledger", params={"search": marker}).json()["items"][0]
+    assert row["id"] == d["ledger_id"]
+    assert row["answer_type"] == "portfolio" and row["policy_id"] is None
+    assert row["insured"] == "Priya Raghavan" and row["outcome"] == "answered"
+    restored = client.get(f"/api/conversations/{conv}/messages").json()[0]["answer"]
+    assert restored["answer_type"] == "portfolio" and restored["portfolio"]["policies"][0]["policy_number"] == "HO-3310-8821"
+    policy_src = client.get(f"/api/sources/policy/{d['evidence'][0]['source_id']}").json()
+    assert policy_src["policy_number"] == "HO-3310-8821"

@@ -150,7 +150,9 @@ export type ResolutionStatus = 'resolved' | 'ambiguous' | 'not_found' | 'no_refe
 
 export interface QuestionResolution {
   status: ResolutionStatus;
-  matched_on?: 'policy_number' | 'customer_name' | 'surname' | null;
+  /** "portfolio": counts or lists policies/customers; answered from policy records, no single-policy context needed. */
+  intent: 'policy' | 'portfolio';
+  matched_on?: 'policy_number' | 'customer_name' | 'surname' | 'first_name' | null;
   reference?: string | null;
   policy?: PolicyContextCandidate | null;
   candidates: PolicyContextCandidate[];
@@ -209,11 +211,36 @@ export interface RetrievalSummary {
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
 
+export interface PortfolioPolicy {
+  policy_id: string;
+  policy_number: string;
+  customer_id: string;
+  customer_name: string;
+  line_of_business: string;
+  product_name?: string | null;
+  status: string;
+  state?: string | null;
+  term_number: number;
+  effective_date: string;
+  expiration_date: string;
+  earlier_terms: number;
+}
+
+export interface PortfolioAnswer {
+  scope: 'customer' | 'household' | 'book' | 'not_found' | string;
+  customers: string[];
+  filters: Record<string, string>;
+  policies: PortfolioPolicy[];
+}
+
 export interface QuestionAnswerResponse {
   conversation_id: string;
   question_id: string;
   question: string;
   answer: string;
+  /** policy_explanation: grounded answer about one policy; portfolio: facts read from policy records. */
+  answer_type: 'policy_explanation' | 'portfolio' | string;
+  portfolio?: PortfolioAnswer | null;
   policy_context?: PolicyContextCandidate | null;
   evidence: EvidenceItem[];
   citations: CitationItem[];
@@ -321,7 +348,8 @@ export interface LedgerRow {
   agent?: string | null;
   insured?: string | null;
   customer_id?: string | null;
-  policy_id: string;
+  policy_id?: string | null;
+  answer_type: 'policy_explanation' | 'portfolio' | string;
   policy_number?: string | null;
   policy_term?: number | null;
   policy_effective?: string | null;

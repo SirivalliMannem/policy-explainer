@@ -176,6 +176,23 @@ export function stagesFromResult(result: QuestionAnswerResponse, contextDetail: 
   const stages = freshStages();
   stages.context = { status: 'completed', detail: contextDetail };
 
+  if (result.answer_type === 'portfolio') {
+    const portfolio = result.portfolio;
+    const found = portfolio?.scope !== 'not_found';
+    stages.retrieve = {
+      status: found ? 'completed' : 'failed',
+      detail: found
+        ? `${portfolio?.policies.length ?? 0} policy records matched in the policy system`
+        : 'No matching policyholder on file',
+      ms: t.retrieval,
+    };
+    stages.ground = { status: 'skipped', detail: 'Not needed — answered from policy records, not policy wording' };
+    stages.generate = { status: 'skipped', detail: 'No language model used' };
+    stages.validate = { status: 'skipped', detail: 'Guardrails apply to generated answers, not record lookups' };
+    stages.deliver = { status: 'completed', detail: 'Policy list returned to the browser', ms: result.latency_ms };
+    return stages;
+  }
+
   if (result.status === 'insufficient_evidence') {
     stages.retrieve = { status: 'failed', detail: `No matching evidence (searched ${searched})`, ms: t.retrieval };
     stages.ground = { status: 'skipped', detail: 'Nothing to ground' };

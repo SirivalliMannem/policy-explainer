@@ -27,15 +27,29 @@ NON_NAME_WORDS = {
     "with", "under", "policy", "coverage", "coverages", "endorsement", "form", "forms", "deductible",
     "water", "backup", "homeowners", "auto", "personal", "special", "texas", "new", "york", "coverage",
     "section", "part", "show", "tell", "explain", "list", "please", "has", "have", "any", "all",
+    "give", "display", "name", "there", "we", "our", "us", "me", "my", "is", "are", "was", "were",
+    "home", "homeowner", "customers", "customer", "policyholders", "policyholder", "insureds", "insured",
+    "accounts", "account", "households", "household", "policies", "in", "on", "of", "currently", "active",
+}
+
+# Words of US state names, so "Texas" or "York" are never read as a surname.
+STATE_WORDS = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware",
+    "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
+    "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota", "mississippi", "missouri",
+    "montana", "nebraska", "nevada", "hampshire", "jersey", "mexico", "carolina", "dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode", "island", "tennessee", "texas", "utah", "vermont",
+    "virginia", "washington", "west", "wisconsin", "wyoming", "north", "south",
 }
 
 HOME_HINTS = (
     "home", "house", "dwelling", "roof", "water", "backup", "back-up", "sewer", "sump", "flood",
-    "basement", "hail", "wind", "jewel", "personal property", "homeowner", "loss of use", "hotel",
+    "basement", "hail", "wind", "windstorm", "jewelry", "jewellery", "personal property", "homeowner",
+    "homeowners", "loss of use", "hotel",
     "other structures", "ho-3", "ho 00 03",
 )
 AUTO_HINTS = (
-    "auto", "car", "vehicle", "collision", "comprehensive", "driver", "driving", "rental", "uber",
+    "auto", "car", "cars", "vehicle", "vehicles", "collision", "comprehensive", "driver", "driving", "rental", "uber",
     "rideshare", "windshield", "windscreen", "uninsured", "motorist", "bodily injury", "crash",
 )
 
@@ -50,10 +64,15 @@ class ResolutionResult:
     message: str = ""
 
 
-def _line_hint(question: str) -> Optional[str]:
+def _mentions(text: str, hint: str) -> bool:
+    # Whole words only: "household" must not read as "home", nor "carrier" as "car".
+    return re.search(rf"(?<![a-z0-9]){re.escape(hint)}(?![a-z0-9])", text) is not None
+
+
+def line_hint(question: str) -> Optional[str]:
     text = question.lower()
-    home = any(h in text for h in HOME_HINTS)
-    auto = any(h in text for h in AUTO_HINTS)
+    home = any(_mentions(text, h) for h in HOME_HINTS)
+    auto = any(_mentions(text, h) for h in AUTO_HINTS)
     if home and not auto:
         return "homeowners"
     if auto and not home:
@@ -61,7 +80,7 @@ def _line_hint(question: str) -> Optional[str]:
     return None
 
 
-def _current_terms(policies: list[CorePolicy]) -> list[CorePolicy]:
+def current_terms(policies: list[CorePolicy]) -> list[CorePolicy]:
     """One row per policy number: the in-force term if there is one, else the latest term."""
     by_number: dict[str, CorePolicy] = {}
     for policy in policies:
@@ -74,16 +93,48 @@ def _current_terms(policies: list[CorePolicy]) -> list[CorePolicy]:
 
 def _choose(policies: list[CorePolicy], question: str) -> list[CorePolicy]:
     """Narrow a customer's policies using status and any line-of-business hint in the question."""
-    current = _current_terms(policies)
+    current = current_terms(policies)
     in_force = [p for p in current if p.status == "in_force"]
     if in_force:
         current = in_force
-    hint = _line_hint(question)
+    hint = line_hint(question)
     if hint:
         hinted = [p for p in current if p.line_of_business == hint]
         if hinted:
             current = hinted
     return current
+
+
+def find_accounts(text: str, db: Session) -> tuple[list[CoreAccount], Optional[str]]:
+    """Policyholders named in the text: full names first, then a capitalised surname alone."""
+    accounts = (
+        db.query(CoreAccount)
+        .filter(func.lower(literal(text)).contains(func.lower(CoreAccount.name)))
+        .all()
+    )
+    if accounts:
+        return accounts, "customer_name"
+
+    words = name_words(text)
+    for surname in words:
+        accounts.extend(db.query(CoreAccount).filter(CoreAccount.name.ilike(f"% {surname}")).all())
+    if accounts:
+        return accounts, "surname"
+
+    for first in words:
+        accounts.extend(db.query(CoreAccount).filter(CoreAccount.name.ilike(f"{first} %")).all())
+    return accounts, ("first_name" if accounts else None)
+
+
+def name_words(text: str) -> list[str]:
+    """Capitalised words that could be part of a person's name."""
+    found = []
+    for word in CAPITALISED_WORD.findall(text):
+        lowered = word.lower()
+        if lowered in NON_NAME_WORDS or lowered in STATE_WORDS or word in found:
+            continue
+        found.append(word)
+    return found
 
 
 def resolve_policy_from_question(question: str, db: Session) -> ResolutionResult:
@@ -102,7 +153,7 @@ def resolve_policy_from_question(question: str, db: Session) -> ResolutionResult
             policies = query.filter(CorePolicy.policy_number == f"{prefix}-{first}-{second}").all()
         else:
             policies = query.filter(CorePolicy.policy_number.like(f"{prefix}-{first}-%")).all()
-        terms = _current_terms(policies)
+        terms = current_terms(policies)
         if not terms:
             return ResolutionResult(
                 status="not_found", matched_on="policy_number", reference=reference,
@@ -115,23 +166,8 @@ def resolve_policy_from_question(question: str, db: Session) -> ResolutionResult
             )
         return ResolutionResult(status="resolved", matched_on="policy_number", reference=reference, policy=terms[0])
 
-    # 2. Full policyholder name contained in the question.
-    accounts = (
-        db.query(CoreAccount)
-        .filter(func.lower(literal(text)).contains(func.lower(CoreAccount.name)))
-        .all()
-    )
-    matched_on = "customer_name"
-
-    # 3. Surname alone ("What deductible does Chen have?").
-    if not accounts:
-        surnames = {
-            word for word in CAPITALISED_WORD.findall(text) if word.lower() not in NON_NAME_WORDS
-        }
-        for surname in surnames:
-            accounts.extend(db.query(CoreAccount).filter(CoreAccount.name.ilike(f"% {surname}")).all())
-        matched_on = "surname"
-
+    # 2-3. Policyholder named by full name or surname.
+    accounts, matched_on = find_accounts(text, db)
     if not accounts:
         return ResolutionResult(status="no_reference", message="The question does not name a policy or policyholder.")
 

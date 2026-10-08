@@ -14,6 +14,7 @@ from app.schemas.policy_resolution import (
     QuestionResolveRequest,
 )
 from app.services.policy_resolver import resolve_policy_from_question
+from app.services.portfolio import is_portfolio_question
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
 
@@ -94,11 +95,14 @@ def resolve_policy_from_question_text(
     """Resolve the policy a free-text question refers to by policy number or policyholder name.
 
     Returns ``no_reference`` when the question names neither, so the caller can keep the
-    conversation's current context or ask the employee which policy to check.
+    conversation's current context or ask the employee which policy to check. ``intent`` is
+    ``portfolio`` for questions that count or list policies or customers; those are answered from
+    policy records and need no single-policy context.
     """
     result = resolve_policy_from_question(payload.question, db)
     return QuestionResolution(
         status=result.status,
+        intent="portfolio" if is_portfolio_question(payload.question) else "policy",
         matched_on=result.matched_on,
         reference=result.reference,
         policy=_to_candidate(result.policy) if result.policy else None,

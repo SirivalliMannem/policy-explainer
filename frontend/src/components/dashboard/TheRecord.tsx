@@ -288,18 +288,29 @@ export function TheRecord() {
                   <td className="whitespace-nowrap px-3 py-2.5 font-mono text-[11px] text-[#475569]">{row.agent ?? '—'}</td>
                   <td className="whitespace-nowrap px-3 py-2.5">
                     <span className="font-semibold text-[#0F2A43]">{row.insured ?? '—'}</span>
-                    <span className="block text-[10.5px] text-[#94A3B8]">
-                      {lineLabel(row.line_of_business)} · {row.state ?? '—'}
-                    </span>
+                    {row.answer_type !== 'portfolio' && (
+                      <span className="block text-[10.5px] text-[#94A3B8]">
+                        {lineLabel(row.line_of_business)} · {row.state ?? '—'}
+                      </span>
+                    )}
                   </td>
                   <td className="min-w-[16rem] max-w-[22rem] px-3 py-2.5 text-[#0F2A43]">
                     <span className="line-clamp-2">{row.question}</span>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5">
-                    <span className="font-mono font-semibold text-[#0F2A43]">{row.policy_number ?? '—'}</span>
-                    <span className="block text-[10.5px] text-[#94A3B8]">
-                      Term {row.policy_term ?? '—'} · eff. {formatDate(row.policy_effective)}
-                    </span>
+                    {row.answer_type === 'portfolio' ? (
+                      <>
+                        <span className="font-semibold text-[#0F2A43]">Portfolio</span>
+                        <span className="block text-[10.5px] text-[#94A3B8]">Policy records lookup</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-mono font-semibold text-[#0F2A43]">{row.policy_number ?? '—'}</span>
+                        <span className="block text-[10.5px] text-[#94A3B8]">
+                          Term {row.policy_term ?? '—'} · eff. {formatDate(row.policy_effective)}
+                        </span>
+                      </>
+                    )}
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="flex max-w-[13rem] flex-wrap gap-1">
@@ -316,7 +327,7 @@ export function TheRecord() {
                     </div>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-[11px] text-[#475569]">
-                    {row.model_used && row.model_used !== 'none' ? row.model_used : '—'}
+                    {row.model_used && row.model_used !== 'none' ? row.model_used : row.answer_type === 'portfolio' ? 'none (records)' : '—'}
                     {row.is_fallback && <span className="block text-[10.5px] text-amber-700">fallback engine</span>}
                     {row.latency_ms !== null && row.latency_ms !== undefined && (
                       <span className="block text-[10.5px] text-[#94A3B8]">{formatMs(row.latency_ms)}</span>

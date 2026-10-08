@@ -253,4 +253,25 @@ def get_source(source_type: str, source_id: str, db: Session = Depends(get_db)):
             },
         )
 
+    if source_type == "policy":
+        policy = db.query(CorePolicy).filter(CorePolicy.id == source_id).first()
+        if not policy:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
+        return SourceDocument(
+            source_type="policy",
+            source_id=policy.id,
+            scope="policy_record",
+            policy_id=policy.id,
+            policy_number=policy.policy_number,
+            heading=f"Policy {policy.policy_number}",
+            text="Policy record from the policy administration system.",
+            record_fields={
+                "Policyholder": policy.account.name if policy.account else "—",
+                "Product": policy.product_name or policy.line_of_business,
+                "Status": policy.status.replace("_", " "),
+                "State": policy.state or "—",
+                "Term": f"{policy.term_number} · {policy.effective_date} to {policy.expiration_date}",
+            },
+        )
+
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported source type '{source_type}'")
