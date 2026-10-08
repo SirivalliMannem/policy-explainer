@@ -39,8 +39,8 @@ class EvidenceLedger(Base):
     suggested_questions: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now)
 
-    # Audit detail for "The Record". Added after the first release, so they are nullable and are
-    # added to existing databases by app.db.migrations.ensure_ledger_columns.
+    # Audit detail for "The Record". Nullable so rows written before these columns existed
+    # remain valid when Alembic adds them.
     employee_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     outcome: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     guardrail_checks: Mapped[list | None] = mapped_column(JSON, nullable=True)

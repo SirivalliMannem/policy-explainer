@@ -7,19 +7,9 @@ the designated seed organization identifier.
 from __future__ import annotations
 
 import sys
-from data_seed.database import Base, SessionLocal, engine
-from data_seed.models.models import (
-    Clause,
-    CoreAccount,
-    CoreBilling,
-    CoreClaim,
-    CoreCoverage,
-    CoreForm,
-    CorePolicy,
-    GoldenQuestion,
-    KnowledgeCollection,
-    KnowledgeDocument,
-)
+from pathlib import Path
+
+from data_seed.database import SessionLocal
 from data_seed.sources import pack
 
 # Standalone organization identifier for synthetic demo data
@@ -35,8 +25,8 @@ def run_seed(org_id: str = ORG_ID) -> dict:
     Returns:
         dict: Seeding counts and metrics summary.
     """
-    print(f"Creating required tables for org_id='{org_id}'...")
-    Base.metadata.create_all(bind=engine)
+    print(f"Applying database migrations for org_id='{org_id}'...")
+    _apply_migrations()
 
     print(f"Starting seed process for org_id='{org_id}'...")
     db = SessionLocal()
@@ -53,6 +43,17 @@ def run_seed(org_id: str = ORG_ID) -> dict:
         raise
     finally:
         db.close()
+
+
+def _apply_migrations() -> None:
+    """Upgrade the shared database before inserting seed rows."""
+    backend_dir = Path(__file__).resolve().parents[1] / "backend"
+    backend_path = str(backend_dir)
+    if backend_path not in sys.path:
+        sys.path.insert(0, backend_path)
+    from app.db.migrate import run_migrations
+
+    run_migrations()
 
 
 def main():
