@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.services.recent_questions import recent_questions
 from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CorePolicy
@@ -178,47 +179,7 @@ def get_dashboard_stats(
     )
 
     # 4. Recent Policy Questions (Most recent 10)
-    raw_recent = (
-        db.query(
-            ConversationQuestion,
-            CorePolicy,
-            CoreAccount,
-            EvidenceLedger.confidence,
-            EvidenceLedger.retrieval,
-        )
-        .outerjoin(CorePolicy, CorePolicy.id == ConversationQuestion.policy_id)
-        .outerjoin(CoreAccount, CoreAccount.id == CorePolicy.account_id)
-        .outerjoin(EvidenceLedger, EvidenceLedger.question_id == ConversationQuestion.id)
-        .order_by(ConversationQuestion.created_at.desc())
-        .limit(10)
-        .all()
-    )
-
-    recent_items: list[RecentQuestionItem] = []
-    for cq, policy, account, conf, retrieval in raw_recent:
-        cust_name = account.name if (account and account.name) else "Context pending"
-        pol_num = policy.policy_number if (policy and policy.policy_number) else "Context pending"
-        if (retrieval or {}).get("answer_type") == "portfolio":
-            # Customer / portfolio answers are about many policies, not a pending context.
-            customers = ((retrieval or {}).get("portfolio") or {}).get("customers") or []
-            cust_name = ", ".join(customers) or "All policyholders"
-            pol_num = "Portfolio"
-        final_conf = conf if conf else ("none" if cq.status == "insufficient_evidence" else None)
-        
-        recent_items.append(
-            RecentQuestionItem(
-                question_id=cq.id,
-                conversation_id=cq.conversation_id,
-                question=cq.question,
-                status=cq.status,
-                confidence=final_conf,
-                customer_name=cust_name,
-                customer_id=account.id if account else None,
-                policy_number=pol_num,
-                policy_id=policy.id if policy else None,
-                created_at=cq.created_at.isoformat(),
-            )
-        )
+    recent_items = recent_questions(db, limit=10)
 
     return DashboardResponse(
         metrics=metrics,

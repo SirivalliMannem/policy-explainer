@@ -11,9 +11,11 @@ import {
 interface AIProcessSidebarProps {
   process: ProcessState;
   policyNumber?: string | null;
+  /** Inside the tabbed rail: no card chrome and no header (the tab carries the title and status). */
+  embedded?: boolean;
 }
 
-const PHASE_BADGE: Record<string, { label: string; className: string }> = {
+export const PHASE_BADGE: Record<string, { label: string; className: string }> = {
   idle: { label: 'Idle', className: 'bg-slate-100 text-[#64748B] ring-slate-200' },
   running: { label: 'Processing', className: 'bg-[#FFF7ED] text-[#C2410C] ring-[#FDBA74]' },
   completed: { label: 'Completed', className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
@@ -76,12 +78,20 @@ function stageStatusText(stage: StageState): string {
   }
 }
 
-export function AIProcessSidebar({ process, policyNumber }: AIProcessSidebarProps) {
+export function AIProcessSidebar({ process, policyNumber, embedded = false }: AIProcessSidebarProps) {
   const badge = PHASE_BADGE[process.phase];
   const result = process.result;
 
   return (
-    <aside aria-label="AI process" className="flex w-full flex-col gap-4 rounded-xl border border-[#E2E8F0] bg-white p-4 text-xs shadow-sm lg:w-[19rem]">
+    <aside
+      aria-label="AI process"
+      className={
+        embedded
+          ? 'flex w-full flex-col gap-4 text-xs'
+          : 'flex w-full flex-col gap-4 rounded-xl border border-[#E2E8F0] bg-white p-4 text-xs shadow-sm lg:w-[19rem]'
+      }
+    >
+      {!embedded && (
       <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
         <div className="flex items-center gap-2">
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#0F2A43] text-[#F97316]">
@@ -97,6 +107,7 @@ export function AIProcessSidebar({ process, policyNumber }: AIProcessSidebarProp
             : badge.label}
         </span>
       </div>
+      )}
 
       {process.phase === 'idle' ? (
         <div className="space-y-3 py-1">

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, FileText, FileX2, Loader2, X } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronUp, FileText, FileX2, Loader2, X } from 'lucide-react';
 import { getSource } from '../../services/api';
-import type { SourceDocument, SourceTarget } from '../../types';
+import type { SourceDocument, SourcePassage, SourceTarget } from '../../types';
 import { describeError } from '../../lib/explainer';
 
 interface SourceViewerProps {
@@ -14,6 +14,39 @@ const SCOPE_LABEL: Record<string, string> = {
   product_wording: 'Generic product wording',
   policy_record: "Policy's declarations / records",
 };
+
+// Passages scoring above this word overlap restate each other (measured on the form library:
+// restatements 0.50-0.75, distinct clauses 0.20 or less).
+const RESTATEMENT_OVERLAP = 0.4;
+
+function wordSet(text: string): Set<string> {
+  return new Set(text.toLowerCase().match(/[a-z]+/g) ?? []);
+}
+
+function overlap(a: Set<string>, b: Set<string>): number {
+  let shared = 0;
+  a.forEach((w) => b.has(w) && shared++);
+  const union = a.size + b.size - shared;
+  return union ? shared / union : 0;
+}
+
+/** Split passages into those to show and those that only restate a shown (or the cited) passage. */
+function splitRestatements(passages: SourcePassage[]): { shown: SourcePassage[]; similar: SourcePassage[] } {
+  const ordered = [...passages.filter((p) => p.is_cited), ...passages.filter((p) => !p.is_cited)];
+  const shownSets: Set<string>[] = [];
+  const shownIds = new Set<string>();
+  const similar: SourcePassage[] = [];
+  for (const passage of ordered) {
+    const words = wordSet(passage.text);
+    if (!passage.is_cited && shownSets.some((s) => overlap(words, s) >= RESTATEMENT_OVERLAP)) {
+      similar.push(passage);
+    } else {
+      shownSets.push(words);
+      shownIds.add(passage.source_id);
+    }
+  }
+  return { shown: passages.filter((p) => shownIds.has(p.source_id)), similar };
+}
 
 function Meta({ label, value }: { label: string; value?: string | number | null }) {
   return (
@@ -31,6 +64,7 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<'text' | 'pdf'>('text');
+  const [showSimilar, setShowSimilar] = useState(false);
   const citedRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -39,6 +73,7 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
     setDoc(null);
     setError(null);
     setTab('text');
+    setShowSimilar(false);
     setLoading(true);
     getSource(target.sourceType, target.sourceId)
       .then((d) => active && setDoc(d))
@@ -197,7 +232,9 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                       Governing wording in {doc.form_number}
                     </p>
                   )}
-                  {doc.passages.map((p) => (
+                  {(() => {
+                    const { shown, similar } = splitRestatements(doc.passages);
+                    const renderPassage = (p: SourcePassage) => (
                     <div
                       key={p.source_id}
                       ref={p.is_cited ? citedRef : undefined}
@@ -229,7 +266,27 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                         </div>
                       )}
                     </div>
-                  ))}
+);
+                    return (
+                      <>
+                        {shown.map(renderPassage)}
+                        {similar.length > 0 && (
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => setShowSimilar(!showSimilar)}
+                              className="flex items-center gap-1 text-[11.5px] font-semibold text-[#64748B] hover:text-[#0F2A43] cursor-pointer"
+                              aria-expanded={showSimilar}
+                            >
+                              {showSimilar ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                              Similar wording on this page ({similar.length})
+                            </button>
+                            {showSimilar && <div className="mt-2 space-y-3 opacity-90">{similar.map(renderPassage)}</div>}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
                 (doc?.text || evidence?.content) && (

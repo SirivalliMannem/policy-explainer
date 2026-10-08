@@ -3,7 +3,7 @@
 import time
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.auth import EmployeeUser, get_current_employee
@@ -20,9 +20,11 @@ from app.schemas.conversation import (
     QuestionSubmitRequest,
     QuestionSubmitResponse,
 )
+from app.schemas.dashboard import RecentQuestionItem
 from app.schemas.explainer import ConversationMessage, QuestionAnswerResponse
 from app.services.ai_client import ai_client
 from app.services.ledger.ledger_service import LedgerService, answer_outcome
+from app.services.recent_questions import recent_questions
 from app.services.interpretation import (
     asks_about_portfolio,
     interpret as interpret_question,
@@ -105,6 +107,15 @@ def create_conversation(
         updated_at=conversation.updated_at,
         policy_context=_build_policy_context(conversation.policy_id, db),
     )
+
+
+@router.get("/recent", response_model=list[RecentQuestionItem])
+def list_recent_questions(
+    limit: int = Query(15, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """Most recently asked questions across conversations, newest first (declared before /{id})."""
+    return recent_questions(db, limit=limit)
 
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)

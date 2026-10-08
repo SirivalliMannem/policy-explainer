@@ -17,6 +17,7 @@ import type {
   PolicyDetail,
   QuestionAnswerResponse,
   QuestionResolution,
+  RecentQuestionItem,
   SourceDocument,
 } from '../types';
 
@@ -238,6 +239,11 @@ export async function submitQuestion(
     { question },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
+}
+
+/** Most recently asked questions across conversations, newest first. */
+export async function getRecentQuestions(limit = 30): Promise<RecentQuestionItem[]> {
+  return apiClient.get<RecentQuestionItem[]>('/api/conversations/recent', { params: { limit } });
 }
 
 export async function getConversationMessages(conversationId: string): Promise<ConversationMessageRecord[]> {

@@ -1,12 +1,13 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ChevronDown, ChevronUp, Cpu, RefreshCw, Send } from 'lucide-react';
-import type { EvidenceItem, PolicyContextCandidate, QuestionResolution, SourceTarget } from '../types';
+import type { EvidenceItem, PolicyContextCandidate, QuestionResolution, RecentQuestionItem, SourceTarget } from '../types';
 import {
   clearConversationContext,
   createConversation,
   getConversation,
   getConversationMessages,
+  getRecentQuestions,
   resolvePolicyContext,
   resolvePolicyFromQuestion,
   setConversationContext,
@@ -15,7 +16,7 @@ import {
 import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner';
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
 import { ChatMessage, ConversationStream } from '../components/explainer/ConversationStream';
-import { AIProcessSidebar } from '../components/explainer/AIProcessSidebar';
+import { ExplainerRail, RailTab } from '../components/explainer/ExplainerRail';
 import { SourceViewer } from '../components/explainer/SourceViewer';
 import {
   FriendlyError,
@@ -89,6 +90,22 @@ export function ExplainerPage() {
   const [highlight, setHighlight] = useState<{ type: 'coverage' | 'form'; id: string } | null>(null);
   const [sourceTarget, setSourceTarget] = useState<SourceTarget | null>(null);
   const [showMobileProcess, setShowMobileProcess] = useState(false);
+  const [railTab, setRailTab] = useState<RailTab>('process');
+  const [recent, setRecent] = useState<RecentQuestionItem[] | null>(null);
+  const [recentError, setRecentError] = useState<string | null>(null);
+  const [recentLoading, setRecentLoading] = useState(false);
+
+  const loadRecent = useCallback(async () => {
+    setRecentLoading(true);
+    try {
+      setRecent(await getRecentQuestions());
+      setRecentError(null);
+    } catch (err) {
+      setRecentError(describeError(err).message);
+    } finally {
+      setRecentLoading(false);
+    }
+  }, []);
 
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
@@ -172,6 +189,45 @@ export function ExplainerPage() {
       failProcess(friendly.title);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
     }
+    loadRecent();
+  };
+
+  /** Clear the conversation view before reopening another conversation or starting a new one. */
+  const resetView = () => {
+    clearTimers();
+    setMessages([]);
+    setActivePolicy(null);
+    pendingQuestionRef.current = null;
+    setFeatureTab(null);
+    setHighlight(null);
+    setSourceTarget(null);
+    setProcess(IDLE_PROCESS);
+  };
+
+  const openConversation = async (convId: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    resetView();
+    try {
+      await loadConversation(convId);
+    } catch (err) {
+      const friendly = describeError(err);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const newConversation = async () => {
+    if (busyRef.current) return;
+    resetView();
+    setConversationId(null);
+    try {
+      await ensureConversation();
+    } catch (err) {
+      setInitError(describeError(err));
+    }
+    setRailTab('process');
   };
 
   const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string) => {
@@ -190,6 +246,7 @@ export function ExplainerPage() {
     setIsWorking(true);
     setInput('');
     push({ kind: 'user', id: nextId('user'), time: nowTime(), text });
+    setRailTab('process');
     setProcess({ phase: 'running', result: null, stages: { ...freshStages(), context: { status: 'processing' } } });
 
     try {
@@ -428,6 +485,7 @@ export function ExplainerPage() {
     if (initRef.current) return; // StrictMode mounts twice in development; start one session.
     initRef.current = true;
     startSession();
+    loadRecent();
     return clearTimers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -524,7 +582,20 @@ export function ExplainerPage() {
             </button>
             {showMobileProcess && (
               <div className="max-h-[45vh] overflow-y-auto px-3 pb-3">
-                <AIProcessSidebar process={process} policyNumber={activePolicy?.policy_number} />
+                <ExplainerRail
+                  tab={railTab}
+                  onTabChange={setRailTab}
+                  process={process}
+                  policyNumber={activePolicy?.policy_number}
+                  recent={recent}
+                  recentError={recentError}
+                  recentLoading={recentLoading}
+                  conversationId={conversationId}
+                  busy={isWorking}
+                  onOpenConversation={openConversation}
+                  onNewConversation={newConversation}
+                  onRefreshRecent={loadRecent}
+                />
               </div>
             )}
           </div>
@@ -552,7 +623,20 @@ export function ExplainerPage() {
         </section>
 
         <div className="hidden shrink-0 overflow-y-auto lg:block">
-          <AIProcessSidebar process={process} policyNumber={activePolicy?.policy_number} />
+          <ExplainerRail
+                  tab={railTab}
+                  onTabChange={setRailTab}
+                  process={process}
+                  policyNumber={activePolicy?.policy_number}
+                  recent={recent}
+                  recentError={recentError}
+                  recentLoading={recentLoading}
+                  conversationId={conversationId}
+                  busy={isWorking}
+                  onOpenConversation={openConversation}
+                  onNewConversation={newConversation}
+                  onRefreshRecent={loadRecent}
+                />
         </div>
       </div>
 

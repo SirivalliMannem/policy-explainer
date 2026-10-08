@@ -22,8 +22,6 @@ import {
   RefreshCw,
   Search,
   Clock,
-  User,
-  FileText,
   AlertCircle,
   Loader2,
 } from 'lucide-react';
@@ -32,7 +30,7 @@ import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Skeleton } from '../components/ui/Skeleton';
 import { getDashboardStats } from '../services/api';
-import { DashboardResponse, RecentQuestionItem } from '../types';
+import { DashboardResponse } from '../types';
 import { TheRecord } from '../components/dashboard/TheRecord';
 
 interface ActivityTooltipProps {
@@ -163,35 +161,6 @@ export function DashboardPage() {
     const query = quickQuestion.trim();
     if (!query) return;
     navigate('/app/explainer', { state: { initialQuestion: query } });
-  };
-
-  const handleRecentClick = (item: RecentQuestionItem) => {
-    // Reopen the recorded conversation; never re-submit the question (that would write a new ledger entry).
-    navigate('/app/explainer', {
-      state: {
-        conversationId: item.conversation_id,
-      },
-    });
-  };
-
-  const formatRelativeTime = (isoString: string) => {
-    try {
-      // The backend sends naive UTC timestamps; without a zone marker they would parse as local time.
-      const date = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(isoString) ? isoString : `${isoString}Z`);
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      const diffHours = Math.floor(diffMins / 60);
-      const diffDays = Math.floor(diffHours / 24);
-
-      if (diffMins < 1) return 'Just now';
-      if (diffMins < 60) return `${diffMins}m ago`;
-      if (diffHours < 24) return `${diffHours}h ago`;
-      if (diffDays === 1) return 'Yesterday';
-      return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    } catch {
-      return isoString;
-    }
   };
 
   const hasActivityData = Boolean(
@@ -668,105 +637,6 @@ export function DashboardPage() {
               ))}
             </div>
           </form>
-        </div>
-      </Card>
-
-      {/* 6. RECENT POLICY QUESTIONS SECTION */}
-      <Card className="border-border bg-card shadow-card p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-border/50 gap-2">
-          <div>
-            <h3 className="text-lg font-display font-normal text-espresso">
-              Recent Policy Questions
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Live Q&A activity across insured portfolios
-            </p>
-          </div>
-          <span className="text-xs text-muted-foreground">
-            Click row to view conversation details
-          </span>
-        </div>
-
-        <div className="overflow-x-auto pt-2">
-          {isInitialLoading ? (
-            <div className="space-y-3 py-4">
-              {[1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : data?.recent_questions && data.recent_questions.length > 0 ? (
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[11px]">
-                  <th className="py-3 px-3">Customer</th>
-                  <th className="py-3 px-3">Policy</th>
-                  <th className="py-3 px-3">Question</th>
-                  <th className="py-3 px-3 text-center">Confidence</th>
-                  <th className="py-3 px-3 text-right">Time</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/60">
-                {data.recent_questions.map((item) => (
-                  <tr
-                    key={item.question_id}
-                    onClick={() => handleRecentClick(item)}
-                    className="hover:bg-surface-subtle/50 transition-colors cursor-pointer group"
-                  >
-                    <td className="py-3 px-3 font-medium text-espresso whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <User className="h-3.5 w-3.5 text-caramel shrink-0" />
-                        <span>{item.customer_name}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      {item.policy_number !== 'Context pending' ? (
-                        <span className="inline-flex items-center gap-1 font-mono text-[11px] px-2 py-0.5 rounded bg-surface-subtle text-espresso border border-primary/20">
-                          <FileText className="h-3 w-3 text-primary" />
-                          {item.policy_number}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground italic">Context pending</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-foreground max-w-md truncate group-hover:text-primary transition-colors">
-                      {item.question}
-                    </td>
-                    <td className="py-3 px-3 text-center whitespace-nowrap">
-                      {item.confidence === 'high' ? (
-                        <Badge variant="success" className="py-0.5 px-2 text-[10px]">
-                          High
-                        </Badge>
-                      ) : item.confidence === 'medium' ? (
-                        <Badge variant="secondary" className="py-0.5 px-2 text-[10px]">
-                          Medium
-                        </Badge>
-                      ) : item.confidence === 'none' || item.status === 'insufficient_evidence' ? (
-                        <Badge variant="destructive" className="py-0.5 px-2 text-[10px]">
-                          Low / None
-                        </Badge>
-                      ) : item.status === 'failed' ? (
-                        <Badge variant="destructive" className="py-0.5 px-2 text-[10px]">
-                          Not answered
-                        </Badge>
-                      ) : (
-                        <Badge variant="default" className="py-0.5 px-2 text-[10px]">
-                          Pending
-                        </Badge>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-right text-muted-foreground whitespace-nowrap">
-                      {formatRelativeTime(item.created_at)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="py-12 text-center text-xs text-muted-foreground">
-              <FileText className="h-8 w-8 mx-auto text-caramel opacity-50 mb-2" />
-              <span>No policy questions have been submitted yet.</span>
-            </div>
-          )}
         </div>
       </Card>
 

@@ -267,3 +267,17 @@ def test_interpretation_is_returned_and_recorded():
     assert "deductible" in d["interpretation"]["normalized"].lower()
     detail = client.get(f"/api/ledger/{d['ledger_id']}").json()
     assert detail["retrieval"]["interpretation"]["original"] == d["interpretation"]["original"]
+
+
+def test_recent_questions_endpoint():
+    """Newest first, grouped data the Explainer's Recent tab needs; 'recent' is not read as a conversation id."""
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    ask(conv, f"How many policies does Priya Raghavan have? {marker}")
+    recent = client.get("/api/conversations/recent", params={"limit": 5})
+    assert recent.status_code == 200
+    newest = recent.json()[0]
+    assert newest["conversation_id"] == conv and marker in newest["question"]
+    assert newest["customer_name"] == "Priya Raghavan" and newest["policy_number"] == "Portfolio"
+    assert client.get(f"/api/conversations/{conv}").status_code == 200
+    assert client.get("/api/conversations/recent", params={"limit": 0}).status_code == 422

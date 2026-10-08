@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ExternalLink, Loader2, MessageSquare, X } from 'lucide-react';
 import { getLedgerEntry } from '../../services/api';
 import type { EvidenceItem, LedgerDetail, SourceTarget } from '../../types';
-import { AnswerText, SourceChip } from '../explainer/AnswerText';
+import { AnswerText } from '../explainer/AnswerText';
 import { GuardrailCheckList, GuardrailStatusBadge } from '../explainer/GuardrailSummary';
 import { SourceViewer } from '../explainer/SourceViewer';
 import {
-  citationLine,
   describeError,
-  evidenceByIndex,
+  distinctSources,
+  evidenceChipLabel,
   formatDate,
   formatDateTime,
   formatMs,
@@ -17,6 +17,8 @@ import {
   interpretedText,
   lineLabel,
   modelLabel,
+  sourceKindLabel,
+  sourceTitle,
 } from '../../lib/explainer';
 import { ConfidenceBadge, OutcomeBadge } from './RecordBadges';
 
@@ -183,23 +185,39 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
               </Section>
               )}
 
-              <Section title={`Sources (${entry.citations.length} verified)`}>
-                {entry.citations.length === 0 ? (
-                  <p className="text-[12px] text-[#64748B]">No citations were attached to this answer.</p>
-                ) : (
-                  <ul className="space-y-1.5">
-                    {entry.citations.map((c, i) => {
-                      const ev = c.evidence_index ? evidenceByIndex(entry.evidence, c.evidence_index) : undefined;
-                      return (
-                        <li key={i} className="flex flex-wrap items-center gap-2">
-                          {ev ? <SourceChip item={ev} onOpen={openSource} size="md" /> : null}
-                          <span className="text-[11.5px] text-[#475569]">{citationLine(c)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </Section>
+              {(() => {
+                const sources = distinctSources(entry.citations, entry.evidence);
+                return (
+                  <Section title={`Sources (${sources.length})`}>
+                    {sources.length === 0 ? (
+                      <p className="text-[12px] text-[#64748B]">No citations were attached to this answer.</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {sources.map(({ key, evidence }) => (
+                          <li key={key}>
+                            <button
+                              type="button"
+                              onClick={() => openSource(evidence)}
+                              className="group flex w-full items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1 text-left transition-colors hover:border-[#FDBA74] hover:bg-[#FFF7ED] cursor-pointer"
+                            >
+                              <span className="shrink-0 rounded-md border border-[#FDBA74] bg-[#FFF7ED] px-1.5 py-px font-mono text-[10.5px] font-semibold text-[#C2410C] group-hover:bg-[#F97316] group-hover:text-white">
+                                {evidenceChipLabel(evidence)}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#0F2A43]">
+                                {sourceTitle(evidence)}
+                              </span>
+                              <span className="shrink-0 text-[10.5px] text-[#94A3B8]">
+                                {sourceKindLabel(evidence.source_type)}
+                                {evidence.edition ? ` · Ed. ${evidence.edition}` : ''}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </Section>
+                );
+              })()}
 
               <Section title={`Retrieved evidence (${entry.evidence.length})`}>
                 <ul className="divide-y divide-[#E2E8F0] rounded-xl border border-[#E2E8F0]">
