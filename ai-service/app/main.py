@@ -1,5 +1,7 @@
 """Main FastAPI application for Policy Explainer AI Service microservice."""
 
+import logging
+
 from fastapi import Depends, FastAPI, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -7,6 +9,12 @@ from sqlalchemy.orm import Session
 from app.api.routes.explain import router as explain_router
 from app.core.config import settings
 from app.db.database import get_db
+
+# Application loggers (provider calls, fallbacks) at INFO; messages never include credentials.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
+# httpx logs full request URLs at INFO, and the Gemini endpoint carries its API key in the URL.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

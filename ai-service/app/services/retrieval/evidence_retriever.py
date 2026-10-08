@@ -48,6 +48,9 @@ STOP_WORDS = {
 }
 
 
+POLICY_NUMBER_REFERENCE = re.compile(r"\b(?:HO|PA)[-\s]?\d{4}(?:[-\s]\d{4})?\b", re.IGNORECASE)
+
+
 def _tokenize(text: str) -> set[str]:
     """Extract lowercased alphanumeric words and normalized tokens from text."""
     if not text:
@@ -82,31 +85,59 @@ class EvidenceRetriever:
         limit: int = 8,
     ) -> list[EvidenceItem]:
         """Retrieve relevant evidence items for a given question and policy."""
+        items, _ = EvidenceRetriever.retrieve_with_stats(question, policy_id, db, limit)
+        return items
+
+    @staticmethod
+    def retrieve_with_stats(
+        question: str,
+        policy_id: str,
+        db: Session,
+        limit: int = 8,
+    ) -> tuple[list[EvidenceItem], dict]:
+        """Retrieve evidence plus a summary of what was searched (for audit and insufficient-evidence UX)."""
+        stats: dict = {
+            "query_terms": [],
+            "coverages_searched": 0,
+            "forms_searched": 0,
+            "clauses_searched": 0,
+            "claims_searched": 0,
+            "billing_searched": 0,
+            "candidates_scored": 0,
+            "duplicates_removed": 0,
+        }
         policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
         if not policy:
-            return []
+            return [], stats
 
-        q_clean = question.strip()
+        # A policy number says *which* policy to search, not *what* to search for. Left in, its
+        # "HO"/"PA" prefix overlaps every form number and surfaces unrelated forms as evidence.
+        q_clean = POLICY_NUMBER_REFERENCE.sub(" ", question).strip()
         q_lower = q_clean.lower()
         q_tokens = _tokenize(q_clean)
+        stats["query_terms"] = sorted(q_tokens)
 
         evidence_items: list[EvidenceItem] = []
 
         # ── 1. Match Policy Coverages ──────────────────────────────────────────
         coverages = db.query(CoreCoverage).filter(CoreCoverage.policy_id == policy_id).all()
+        stats["coverages_searched"] = len(coverages)
         matched_coverage_patterns: set[str] = set()
 
         for cov in coverages:
             cov_tokens = _tokenize(cov.name) | _tokenize(cov.pattern_code)
             overlap = q_tokens & cov_tokens
-            is_deductible_q = "deductible" in q_tokens and ("deductible" in cov.name.lower() or cov.deductible_text)
+            has_deductible = bool(cov.deductible_text) and cov.deductible_text.strip().lower() not in ("none", "")
+            is_deductible_q = "deductible" in q_tokens and ("deductible" in cov.name.lower() or has_deductible)
             is_limit_q = "limit" in q_tokens and cov.limit_text
 
             score = 0.0
             if overlap:
                 score += len(overlap) * 4.0
             if is_deductible_q:
-                score += 5.0
+                # The declarations schedule is the policy-specific source of truth for amounts,
+                # so it must outrank generic clause wording that merely mentions deductibles.
+                score += 10.0
             if is_limit_q:
                 score += 2.0
 
@@ -148,6 +179,7 @@ class EvidenceRetriever:
 
         # ── 2. Match Policy Attached Forms ─────────────────────────────────────
         forms = db.query(CoreForm).filter(CoreForm.policy_id == policy_id).all()
+        stats["forms_searched"] = len(forms)
         for form in forms:
             form_tokens = _tokenize(form.form_number) | _tokenize(form.title) | _tokenize(form.kind)
             form_overlap = q_tokens & form_tokens
@@ -199,6 +231,7 @@ class EvidenceRetriever:
         )
 
         all_candidate_clauses = [(c, True) for c in customer_clauses] + [(c, False) for c in product_clauses]
+        stats["clauses_searched"] = len(all_candidate_clauses)
 
         for clause, is_customer_form in all_candidate_clauses:
             clause_keywords = set(k.lower() for k in (clause.keywords or []))
@@ -271,6 +304,7 @@ class EvidenceRetriever:
         # ── 4. Match Claims (if loss / claim inquiry) ──────────────────────────
         if any(term in q_tokens for term in ["claim", "loss", "accident", "damage", "adjuster", "open"]):
             claims = db.query(CoreClaim).filter(CoreClaim.policy_id == policy_id).all()
+            stats["claims_searched"] = len(claims)
             for claim in claims:
                 content = (
                     f"Claim Number: {claim.claim_number}, Status: {claim.status}, Loss Cause: {claim.loss_cause}, "
@@ -291,6 +325,7 @@ class EvidenceRetriever:
         # ── 5. Match Billing (if billing / payment inquiry) ────────────────────
         if any(term in q_tokens for term in ["bill", "billing", "payment", "due", "premium", "pay"]):
             billing_records = db.query(CoreBilling).filter(CoreBilling.policy_id == policy_id).all()
+            stats["billing_searched"] = len(billing_records)
             for bill in billing_records:
                 content = (
                     f"Billing Plan: {bill.plan}, Status: {bill.status}, Next Due: {bill.next_due_date}, "
@@ -310,16 +345,30 @@ class EvidenceRetriever:
         # Filter items with meaningful score (threshold >= 1.5)
         filtered = [item for item in evidence_items if item.relevance_score >= 1.5]
 
-        # Sort descending by score, deduplicate by source_id
+        stats["candidates_scored"] = len(filtered)
+
+        # Sort descending by score, deduplicate by source_id and by citation identity:
+        # product wording is stored once per seeded policy, so identical clauses must not
+        # crowd out other evidence.
         filtered.sort(key=lambda x: x.relevance_score, reverse=True)
 
         seen_ids = set()
+        seen_citations = set()
         deduped = []
         for item in filtered:
-            if item.source_id not in seen_ids:
-                seen_ids.add(item.source_id)
-                deduped.append(item)
+            citation_key = (
+                (item.source_type, item.form_number, item.edition, item.page, item.heading)
+                if item.source_type == "clause"
+                else None
+            )
+            if item.source_id in seen_ids or (citation_key and citation_key in seen_citations):
+                stats["duplicates_removed"] += 1
+                continue
+            seen_ids.add(item.source_id)
+            if citation_key:
+                seen_citations.add(citation_key)
+            deduped.append(item)
             if len(deduped) >= limit:
                 break
 
-        return deduped
+        return deduped, stats

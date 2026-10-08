@@ -215,3 +215,31 @@ def test_gemini_provider_direct_call_without_key_raises_error():
     provider = GeminiProvider(api_key="", model="gemini-2.5-flash")
     with pytest.raises(LLMConfigurationError):
         provider.generate("test", "context", [])
+
+
+def test_groq_rate_limit_retries_once_when_window_is_short(monkeypatch, sample_evidence):
+    """HTTP 429 with a short retry-after is retried once instead of falling back immediately."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_mock_key")
+
+    limited = MagicMock(status_code=429, headers={"retry-after": "0"})
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"choices": [{"message": {"content": "Covered under HO 04 95 [E1]."}}]}
+
+    with patch("httpx.Client.post", side_effect=[limited, ok]) as post:
+        res = LLMService.generate_answer("Is water backup covered?", "Context", sample_evidence)
+    assert post.call_count == 2
+    assert res.is_fallback is False and res.provider == "groq"
+
+
+def test_groq_long_rate_limit_falls_back_with_reason(monkeypatch, sample_evidence):
+    """A long rate-limit window falls back and records why, rather than stalling the request."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_mock_key")
+
+    limited = MagicMock(status_code=429, headers={"retry-after": "60"})
+    with patch("httpx.Client.post", return_value=limited) as post:
+        res = LLMService.generate_answer("Is water backup covered?", "Context", sample_evidence)
+    assert post.call_count == 1
+    assert res.is_fallback is True
+    assert "429" in (res.fallback_reason or "")

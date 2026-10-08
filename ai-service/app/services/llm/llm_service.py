@@ -9,6 +9,7 @@ from app.services.llm.base import (
     BaseLLMProvider,
     LLMGenerationResult,
     extract_citations_from_evidence,
+    normalize_evidence_references,
 )
 from app.services.llm.exceptions import LLMConfigurationError
 from app.services.llm.gemini_provider import GeminiProvider
@@ -77,22 +78,30 @@ class LLMService:
             try:
                 result = provider.generate(question, grounding_context, evidence)
                 if result:
+                    logger.info("%s answered with model %s", provider.name.capitalize(), result.model_used)
+                    result.answer = normalize_evidence_references(result.answer)
                     return result
+                fallback_reason = f"{provider.name.capitalize()} returned no answer"
             except Exception as e:
-                # Never log raw sensitive API keys or auth headers
+                # Provider errors carry only status codes / exception class names, never credentials
+                fallback_reason = str(e)
                 logger.warning(
                     "%s LLM invocation failed; engaging deterministic grounded fallback: %s",
                     provider.name.capitalize(),
-                    str(e),
+                    fallback_reason,
                 )
         else:
+            fallback_reason = f"No API key configured for provider '{provider.name}'"
             logger.info(
                 "Active provider '%s' has no API key configured; engaging deterministic grounded fallback",
                 provider.name,
             )
 
         # Deterministic grounded synthesizer (approved policy wording & coverage facts)
-        return cls._synthesize_grounded_answer(question, evidence)
+        result = cls._synthesize_grounded_answer(question, evidence)
+        result.provider = provider.name
+        result.fallback_reason = fallback_reason
+        return result
 
     @classmethod
     def _synthesize_grounded_answer(
@@ -101,43 +110,52 @@ class LLMService:
         evidence: list[EvidenceItem],
     ) -> LLMGenerationResult:
         """Deterministic grounded synthesizer using approved carrier plain-language wording."""
-        cov_items = [e for e in evidence if e.source_type == "coverage"]
-        clause_items = [e for e in evidence if e.source_type == "clause"]
-        form_items = [e for e in evidence if e.source_type == "form"]
-        claim_items = [e for e in evidence if e.source_type == "claim"]
-        billing_items = [e for e in evidence if e.source_type == "billing"]
+        def first(source_type: str) -> Optional[tuple[int, EvidenceItem]]:
+            for index, item in enumerate(evidence, start=1):
+                if item.source_type == source_type:
+                    return index, item
+            return None
+
+        cov_hit = first("coverage")
+        clause_hit = first("clause")
+        form_hit = first("form")
+        claim_hit = first("claim")
+        billing_hit = first("billing")
 
         sentences = []
         citations = extract_citations_from_evidence(evidence)
 
         # Case 1: Coverage details present
-        if cov_items:
-            primary_cov = cov_items[0]
-            sentences.append(f"Based on your policy schedule, {primary_cov.content}.")
+        if cov_hit:
+            index, primary_cov = cov_hit
+            sentences.append(f"Based on your policy schedule, {primary_cov.content.rstrip('.')} [E{index}].")
 
         # Case 2: Matching clause with approved explanation
-        if clause_items:
-            primary_clause = clause_items[0]
+        if clause_hit:
+            index, primary_clause = clause_hit
             explanation = primary_clause.plain_language or primary_clause.content
             source_ref = f"Under {primary_clause.form_number}"
             if primary_clause.heading:
                 source_ref += f" ({primary_clause.heading})"
-            sentences.append(f"{source_ref}: {explanation}")
+            sentences.append(f"{source_ref}: {explanation} [E{index}]")
 
         # Case 3: Attached form inquiry
-        elif form_items:
-            primary_form = form_items[0]
-            sentences.append(f"This policy attaches {primary_form.content}.")
+        elif form_hit:
+            index, primary_form = form_hit
+            sentences.append(f"This policy attaches {primary_form.content.rstrip('.')} [E{index}].")
 
         # Case 4: Claims inquiry
-        elif claim_items:
-            primary_claim = claim_items[0]
-            sentences.append(f"Regarding claims on this policy: {primary_claim.content}.")
+        elif claim_hit:
+            index, primary_claim = claim_hit
+            sentences.append(f"Regarding claims on this policy: {primary_claim.content.rstrip('.')} [E{index}].")
 
         # Case 5: Billing inquiry
-        elif billing_items:
-            primary_bill = billing_items[0]
-            sentences.append(f"Regarding billing on this policy: {primary_bill.content}.")
+        elif billing_hit:
+            index, primary_bill = billing_hit
+            sentences.append(f"Regarding billing on this policy: {primary_bill.content.rstrip('.')} [E{index}].")
+
+        cov_items = [cov_hit] if cov_hit else []
+        clause_items = [clause_hit] if clause_hit else []
 
         if not sentences:
             sentences.append(

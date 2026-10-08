@@ -25,3 +25,20 @@ class PolicyResolveRequest(BaseModel):
     """Request payload to resolve policy context by policy_id."""
 
     policy_id: str
+
+
+class QuestionResolveRequest(BaseModel):
+    """Request payload to resolve the policy a free-text question refers to."""
+
+    question: str
+
+
+class QuestionResolution(BaseModel):
+    """Outcome of resolving a policy reference from a question."""
+
+    status: str  # resolved | ambiguous | not_found | no_reference
+    matched_on: Optional[str] = None
+    reference: Optional[str] = None
+    policy: Optional[PolicyContextCandidate] = None
+    candidates: list[PolicyContextCandidate] = []
+    message: str = ""

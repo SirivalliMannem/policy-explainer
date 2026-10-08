@@ -1,7 +1,8 @@
 """Schemas for AI Policy Explainer answers, evidence, and citations."""
 
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from datetime import datetime
+from typing import Any, Optional
+from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.conversation import PolicyContextSummary
 
 
@@ -11,6 +12,8 @@ class CitationItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     source_id: Optional[str] = None
+    source_type: Optional[str] = None
+    evidence_index: Optional[int] = None
     form_number: Optional[str] = None
     edition: Optional[str] = None
     page: Optional[int] = None
@@ -35,6 +38,16 @@ class EvidenceItemSchema(BaseModel):
     content: str
     plain_language: Optional[str] = None
     relevance_score: float = 1.0
+    evidence_index: Optional[int] = None
+    scope: Optional[str] = None  # customer_form | product_wording | policy_record
+
+
+class GuardrailCheck(BaseModel):
+    """Result of one deterministic guardrail check executed by the AI service."""
+
+    name: str
+    status: str  # passed | warning | failed
+    detail: str = ""
 
 
 class QuestionAnswerResponse(BaseModel):
@@ -52,6 +65,28 @@ class QuestionAnswerResponse(BaseModel):
     confidence: str = "high"
     status: str = "answered"
     suggested_questions: list[str] = []
+    guardrail_status: str = "passed"
+    guardrail_checks: list[GuardrailCheck] = []
+    outcome: str = "answered"
+    model_used: str = "none"
+    provider: str = "none"
+    is_fallback: bool = False
+    fallback_reason: Optional[str] = None
+    retrieval: dict[str, Any] = {}
+    timings_ms: dict[str, int] = {}
+    latency_ms: Optional[int] = None
+    ledger_id: Optional[str] = None
+
+
+class ConversationMessage(BaseModel):
+    """A recorded question and, when the pipeline produced one, its ledger-backed answer."""
+
+    question_id: str
+    question: str
+    status: str
+    policy_id: Optional[str] = None
+    created_at: datetime
+    answer: Optional[QuestionAnswerResponse] = None
 
 
 class AIServiceResponse(BaseModel):
@@ -67,5 +102,12 @@ class AIServiceResponse(BaseModel):
     citations: list[CitationItem] = []
     suggested_questions: list[str] = []
     guardrail_status: str = "passed"
+    guardrail_checks: list[GuardrailCheck] = Field(default_factory=list)
     grounding_context: str = ""
     raw_llm_response: str = ""
+    model_used: str = "none"
+    provider: str = "none"
+    is_fallback: bool = False
+    fallback_reason: Optional[str] = None
+    retrieval: dict[str, Any] = Field(default_factory=dict)
+    timings_ms: dict[str, int] = Field(default_factory=dict)

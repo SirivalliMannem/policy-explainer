@@ -1,5 +1,6 @@
 """Conversation sessions and pre-RAG question history API endpoints."""
 
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
 from app.models.conversation import Conversation, ConversationQuestion
+from app.models.ledger import EvidenceLedger
 from app.models.policy import CorePolicy
 from app.schemas.conversation import (
     ConversationContextUpdateRequest,
@@ -18,9 +20,9 @@ from app.schemas.conversation import (
     QuestionSubmitRequest,
     QuestionSubmitResponse,
 )
-from app.schemas.explainer import QuestionAnswerResponse
+from app.schemas.explainer import ConversationMessage, QuestionAnswerResponse
 from app.services.ai_client import ai_client
-from app.services.ledger.ledger_service import LedgerService
+from app.services.ledger.ledger_service import LedgerService, answer_outcome
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -195,6 +197,19 @@ def submit_question(
             detail="Resolved policy associated with conversation no longer exists",
         )
 
+    # The most recent answered question on the same policy lets the AI service resolve follow-ups
+    # such as "what endorsement provides that coverage?".
+    previous = (
+        db.query(ConversationQuestion)
+        .filter(
+            ConversationQuestion.conversation_id == conv.id,
+            ConversationQuestion.policy_id == conv.policy_id,
+            ConversationQuestion.status == "answered",
+        )
+        .order_by(ConversationQuestion.created_at.desc())
+        .first()
+    )
+
     # 1. Record incoming question
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     question_record = ConversationQuestion(
@@ -210,15 +225,25 @@ def submit_question(
     db.refresh(question_record)
 
     # 2. Invoke AI Service microservice boundary
-    ai_resp = ai_client.explain(
-        question=question_text,
-        policy_id=conv.policy_id,
-        conversation_id=conv.id,
-        policy_context=policy_context,
-    )
+    started = time.perf_counter()
+    try:
+        ai_resp = ai_client.explain(
+            question=question_text,
+            policy_id=conv.policy_id,
+            conversation_id=conv.id,
+            policy_context=policy_context,
+            previous_question=previous.question if previous else None,
+        )
+    except HTTPException:
+        # Never leave the question stuck in "processing" when the AI service fails.
+        question_record.status = "failed"
+        db.commit()
+        raise
+    latency_ms = int(round((time.perf_counter() - started) * 1000))
+    outcome = answer_outcome(ai_resp.status, ai_resp.guardrail_status)
 
     # 3. Persist Evidence Ledger entry
-    LedgerService.record_entry(
+    ledger_entry = LedgerService.record_entry(
         conversation_id=conv.id,
         question_id=question_record.id,
         policy_id=conv.policy_id,
@@ -232,6 +257,16 @@ def submit_question(
         guardrail_status=ai_resp.guardrail_status,
         suggested_questions=ai_resp.suggested_questions,
         db=db,
+        employee_id=conv.employee_id,
+        outcome=outcome,
+        guardrail_checks=[c.model_dump() for c in ai_resp.guardrail_checks],
+        model_used=ai_resp.model_used,
+        provider=ai_resp.provider,
+        is_fallback=ai_resp.is_fallback,
+        fallback_reason=ai_resp.fallback_reason,
+        latency_ms=latency_ms,
+        timings_ms=ai_resp.timings_ms,
+        retrieval=ai_resp.retrieval,
     )
 
     # 4. Update question status
@@ -250,7 +285,79 @@ def submit_question(
         confidence=ai_resp.confidence,
         status=ai_resp.status,
         suggested_questions=ai_resp.suggested_questions,
+        guardrail_status=ai_resp.guardrail_status,
+        guardrail_checks=ai_resp.guardrail_checks,
+        outcome=outcome,
+        model_used=ai_resp.model_used,
+        provider=ai_resp.provider,
+        is_fallback=ai_resp.is_fallback,
+        fallback_reason=ai_resp.fallback_reason,
+        retrieval=ai_resp.retrieval,
+        timings_ms=ai_resp.timings_ms,
+        latency_ms=latency_ms,
+        ledger_id=ledger_entry.id,
     )
+
+
+@router.get("/{conversation_id}/messages", response_model=list[ConversationMessage])
+def get_conversation_messages(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+):
+    """Retrieve questions with their recorded answers, so a conversation can be reopened read-only."""
+    conv = _get_conversation_or_404(conversation_id, db)
+    questions = (
+        db.query(ConversationQuestion)
+        .filter(ConversationQuestion.conversation_id == conv.id)
+        .order_by(ConversationQuestion.created_at.asc())
+        .all()
+    )
+    entries = {
+        entry.question_id: entry
+        for entry in db.query(EvidenceLedger).filter(EvidenceLedger.conversation_id == conv.id).all()
+    }
+
+    messages: list[ConversationMessage] = []
+    for q in questions:
+        entry = entries.get(q.id)
+        answer = None
+        if entry is not None:
+            policy_context = _build_policy_context(entry.policy_id, db)
+            if policy_context:
+                answer = QuestionAnswerResponse(
+                    conversation_id=conv.id,
+                    question_id=q.id,
+                    question=q.question,
+                    answer=entry.final_answer,
+                    policy_context=policy_context,
+                    evidence=entry.retrieved_evidence or [],
+                    citations=entry.citations or [],
+                    confidence=entry.confidence,
+                    status=q.status,
+                    suggested_questions=entry.suggested_questions or [],
+                    guardrail_status=entry.guardrail_status,
+                    guardrail_checks=entry.guardrail_checks or [],
+                    outcome=entry.outcome or answer_outcome(q.status, entry.guardrail_status),
+                    model_used=entry.model_used or "unknown",
+                    provider=entry.provider or "unknown",
+                    is_fallback=bool(entry.is_fallback),
+                    fallback_reason=entry.fallback_reason,
+                    retrieval=entry.retrieval or {},
+                    timings_ms=entry.timings_ms or {},
+                    latency_ms=entry.latency_ms,
+                    ledger_id=entry.id,
+                )
+        messages.append(
+            ConversationMessage(
+                question_id=q.id,
+                question=q.question,
+                status=q.status,
+                policy_id=q.policy_id,
+                created_at=q.created_at,
+                answer=answer,
+            )
+        )
+    return messages
 
 
 @router.get("/{conversation_id}/questions", response_model=list[QuestionHistoryItem])

@@ -262,7 +262,7 @@ export function PolicyFeaturesPanel({
           onClick={onToggleOpen}
           className="flex items-center justify-center gap-1 text-xs font-semibold text-[#64748B] hover:text-[#0F2A43] py-1 px-2 rounded hover:bg-slate-200/50 transition-colors cursor-pointer shrink-0 self-end sm:self-center"
         >
-          <span>{isOpen ? 'Collapse Panel' : 'Expand Panel'}</span>
+          <span>{isOpen ? 'Close' : 'Open'}</span>
           {isOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
         </button>
       </div>

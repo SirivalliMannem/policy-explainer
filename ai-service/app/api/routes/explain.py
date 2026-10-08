@@ -22,4 +22,5 @@ def explain_question(
         db=db,
         policy_context=payload.policy_context,
         conversation_id=payload.conversation_id,
+        previous_question=(payload.previous_question or "").strip() or None,
     )

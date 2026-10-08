@@ -1,6 +1,26 @@
 import { APP_CONFIG } from '../config';
-import { HealthCheckResponse } from '../types';
+import type {
+  BillingItem,
+  ClaimItem,
+  ConversationMessageRecord,
+  ConversationResponse,
+  CoverageItem,
+  DashboardResponse,
+  FormItem,
+  HealthCheckResponse,
+  LedgerDetail,
+  LedgerFilters,
+  LedgerPage,
+  LedgerQuery,
+  LedgerSummary,
+  PolicyContextCandidate,
+  PolicyDetail,
+  QuestionAnswerResponse,
+  QuestionResolution,
+  SourceDocument,
+} from '../types';
 
+/** status 0 = the backend could not be reached; 408 = the browser gave up waiting. */
 export class ApiError extends Error {
   status: number;
   data?: unknown;
@@ -11,14 +31,25 @@ export class ApiError extends Error {
     this.status = status;
     this.data = data;
   }
+
+  /** The FastAPI `detail` string, when the backend sent one. */
+  get detail(): string | undefined {
+    const data = this.data as { detail?: unknown } | undefined;
+    return typeof data?.detail === 'string' ? data.detail : undefined;
+  }
 }
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;
+  timeoutMs?: number;
 }
 
+const DEFAULT_TIMEOUT_MS = 15_000;
+// The backend allows the AI service 45s; leave headroom for the backend's own work.
+const QUESTION_TIMEOUT_MS = 60_000;
+
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-  const { params, headers, ...rest } = options;
+  const { params, headers, timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = options;
   const baseUrl = (APP_CONFIG.apiBaseUrl || '').replace(/\/$/, '');
   const pathWithSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const fullPath = `${baseUrl}${pathWithSlash}`;
@@ -28,26 +59,40 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined) {
+      if (value !== undefined && value !== '') {
         url.searchParams.append(key, String(value));
       }
     });
   }
 
-  const response = await fetch(url.toString(), {
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
-    ...rest,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      ...rest,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new ApiError(408, `Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw new ApiError(0, `Could not reach the backend at ${baseUrl || window.location.origin}`, err);
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     let errorData: unknown;
     try {
       errorData = await response.json();
     } catch {
-      errorData = await response.text();
+      errorData = await response.text().catch(() => undefined);
     }
     throw new ApiError(
       response.status,
@@ -85,7 +130,7 @@ export const apiClient = {
  * Health check helper querying the backend health endpoint.
  */
 export async function checkHealth(): Promise<HealthCheckResponse> {
-  return apiClient.get<HealthCheckResponse>('/health');
+  return apiClient.get<HealthCheckResponse>('/health', { timeoutMs: 5_000 });
 }
 
 /**
@@ -93,8 +138,8 @@ export async function checkHealth(): Promise<HealthCheckResponse> {
  */
 export async function getDashboardStats(
   timeRange: 'today' | '7d' | '30d' = '7d'
-): Promise<import('../types').DashboardResponse> {
-  return apiClient.get<import('../types').DashboardResponse>('/api/dashboard/stats', {
+): Promise<DashboardResponse> {
+  return apiClient.get<DashboardResponse>('/api/dashboard/stats', {
     params: { range: timeRange },
   });
 }
@@ -103,61 +148,66 @@ export async function getDashboardStats(
 // Policy Features API Endpoints
 // ==========================================
 
-export async function getPolicy(policyId: string): Promise<import('../types').PolicyDetail> {
-  return apiClient.get<import('../types').PolicyDetail>(`/api/policies/${encodeURIComponent(policyId)}`);
+export async function getPolicy(policyId: string): Promise<PolicyDetail> {
+  return apiClient.get<PolicyDetail>(`/api/policies/${encodeURIComponent(policyId)}`);
 }
 
-export async function getPolicyCoverages(policyId: string): Promise<import('../types').CoverageItem[]> {
-  return apiClient.get<import('../types').CoverageItem[]>(`/api/policies/${encodeURIComponent(policyId)}/coverages`);
+export async function getPolicyCoverages(policyId: string): Promise<CoverageItem[]> {
+  return apiClient.get<CoverageItem[]>(`/api/policies/${encodeURIComponent(policyId)}/coverages`);
 }
 
-export async function getPolicyForms(policyId: string): Promise<import('../types').FormItem[]> {
-  return apiClient.get<import('../types').FormItem[]>(`/api/policies/${encodeURIComponent(policyId)}/forms`);
+export async function getPolicyForms(policyId: string): Promise<FormItem[]> {
+  return apiClient.get<FormItem[]>(`/api/policies/${encodeURIComponent(policyId)}/forms`);
 }
 
-export async function getPolicyClaims(policyId: string): Promise<import('../types').ClaimItem[]> {
-  return apiClient.get<import('../types').ClaimItem[]>(`/api/policies/${encodeURIComponent(policyId)}/claims`);
+export async function getPolicyClaims(policyId: string): Promise<ClaimItem[]> {
+  return apiClient.get<ClaimItem[]>(`/api/policies/${encodeURIComponent(policyId)}/claims`);
 }
 
-export async function getPolicyBilling(policyId: string): Promise<import('../types').BillingItem[]> {
-  return apiClient.get<import('../types').BillingItem[]>(`/api/policies/${encodeURIComponent(policyId)}/billing`);
+export async function getPolicyBilling(policyId: string): Promise<BillingItem[]> {
+  return apiClient.get<BillingItem[]>(`/api/policies/${encodeURIComponent(policyId)}/billing`);
 }
 
 // ==========================================
 // Policy Resolution API Endpoints
 // ==========================================
 
-export async function searchPolicyContext(query: string): Promise<import('../types').PolicyContextCandidate[]> {
-  return apiClient.get<import('../types').PolicyContextCandidate[]>('/api/policy-resolution/search', {
+export async function searchPolicyContext(query: string): Promise<PolicyContextCandidate[]> {
+  return apiClient.get<PolicyContextCandidate[]>('/api/policy-resolution/search', {
     params: { q: query },
   });
 }
 
-export async function resolvePolicyContext(policyId: string): Promise<import('../types').PolicyContextCandidate> {
-  return apiClient.post<import('../types').PolicyContextCandidate>('/api/policy-resolution/resolve', {
+export async function resolvePolicyContext(policyId: string): Promise<PolicyContextCandidate> {
+  return apiClient.post<PolicyContextCandidate>('/api/policy-resolution/resolve', {
     policy_id: policyId,
   });
+}
+
+/** Ask the backend which policy, if any, a free-text question refers to. */
+export async function resolvePolicyFromQuestion(question: string): Promise<QuestionResolution> {
+  return apiClient.post<QuestionResolution>('/api/policy-resolution/from-question', { question });
 }
 
 // ==========================================
 // Conversation & Question Endpoints
 // ==========================================
 
-export async function createConversation(policyId?: string): Promise<import('../types').ConversationResponse> {
-  return apiClient.post<import('../types').ConversationResponse>('/api/conversations', {
+export async function createConversation(policyId?: string): Promise<ConversationResponse> {
+  return apiClient.post<ConversationResponse>('/api/conversations', {
     policy_id: policyId || undefined,
   });
 }
 
-export async function getConversation(conversationId: string): Promise<import('../types').ConversationResponse> {
-  return apiClient.get<import('../types').ConversationResponse>(`/api/conversations/${encodeURIComponent(conversationId)}`);
+export async function getConversation(conversationId: string): Promise<ConversationResponse> {
+  return apiClient.get<ConversationResponse>(`/api/conversations/${encodeURIComponent(conversationId)}`);
 }
 
 export async function setConversationContext(
   conversationId: string,
   policyId: string
-): Promise<import('../types').ConversationResponse> {
-  return apiClient.post<import('../types').ConversationResponse>(
+): Promise<ConversationResponse> {
+  return apiClient.post<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/context`,
     { policy_id: policyId }
   );
@@ -165,8 +215,8 @@ export async function setConversationContext(
 
 export async function clearConversationContext(
   conversationId: string
-): Promise<import('../types').ConversationResponse> {
-  return apiClient.delete<import('../types').ConversationResponse>(
+): Promise<ConversationResponse> {
+  return apiClient.delete<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/context`
   );
 }
@@ -174,14 +224,44 @@ export async function clearConversationContext(
 export async function submitQuestion(
   conversationId: string,
   question: string
-): Promise<import('../types').QuestionAnswerResponse> {
-  return apiClient.post<import('../types').QuestionAnswerResponse>(
+): Promise<QuestionAnswerResponse> {
+  return apiClient.post<QuestionAnswerResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
-    { question }
+    { question },
+    { timeoutMs: QUESTION_TIMEOUT_MS }
   );
 }
 
-export async function getQuestionHistory(conversationId: string): Promise<unknown[]> {
-  return apiClient.get<unknown[]>(`/api/conversations/${encodeURIComponent(conversationId)}/questions`);
+export async function getConversationMessages(conversationId: string): Promise<ConversationMessageRecord[]> {
+  return apiClient.get<ConversationMessageRecord[]>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages`
+  );
 }
 
+// ==========================================
+// Sources & Evidence Ledger
+// ==========================================
+
+export async function getSource(sourceType: string, sourceId: string): Promise<SourceDocument> {
+  return apiClient.get<SourceDocument>(
+    `/api/sources/${encodeURIComponent(sourceType)}/${encodeURIComponent(sourceId)}`
+  );
+}
+
+export async function getLedgerSummary(): Promise<LedgerSummary> {
+  return apiClient.get<LedgerSummary>('/api/ledger/summary');
+}
+
+export async function getLedgerFilters(): Promise<LedgerFilters> {
+  return apiClient.get<LedgerFilters>('/api/ledger/filters');
+}
+
+export async function getLedger(query: LedgerQuery): Promise<LedgerPage> {
+  return apiClient.get<LedgerPage>('/api/ledger', {
+    params: query as Record<string, string | number | undefined>,
+  });
+}
+
+export async function getLedgerEntry(entryId: string): Promise<LedgerDetail> {
+  return apiClient.get<LedgerDetail>(`/api/ledger/${encodeURIComponent(entryId)}`);
+}

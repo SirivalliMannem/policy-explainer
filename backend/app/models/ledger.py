@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import DateTime, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
@@ -37,3 +37,16 @@ class EvidenceLedger(Base):
     guardrail_status: Mapped[str] = mapped_column(String(30), default="passed")
     suggested_questions: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now)
+
+    # Audit detail for "The Record". Added after the first release, so they are nullable and are
+    # added to existing databases by app.db.migrations.ensure_ledger_columns.
+    employee_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    outcome: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    guardrail_checks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    model_used: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    is_fallback: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    timings_ms: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    retrieval: Mapped[dict | None] = mapped_column(JSON, nullable=True)

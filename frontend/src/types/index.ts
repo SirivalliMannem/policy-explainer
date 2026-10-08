@@ -146,8 +146,21 @@ export interface PolicyContextCandidate {
   expiration_date: string;
 }
 
+export type ResolutionStatus = 'resolved' | 'ambiguous' | 'not_found' | 'no_reference';
+
+export interface QuestionResolution {
+  status: ResolutionStatus;
+  matched_on?: 'policy_number' | 'customer_name' | 'surname' | null;
+  reference?: string | null;
+  policy?: PolicyContextCandidate | null;
+  candidates: PolicyContextCandidate[];
+  message: string;
+}
+
 export interface CitationItem {
   source_id?: string | null;
+  source_type?: string | null;
+  evidence_index?: number | null;
   form_number?: string | null;
   edition?: string | null;
   page?: number | null;
@@ -155,6 +168,8 @@ export interface CitationItem {
   heading?: string | null;
   citation_text?: string | null;
 }
+
+export type EvidenceScope = 'customer_form' | 'product_wording' | 'policy_record';
 
 export interface EvidenceItem {
   source_type: string;
@@ -168,7 +183,31 @@ export interface EvidenceItem {
   content: string;
   plain_language?: string | null;
   relevance_score?: number | null;
+  evidence_index?: number | null;
+  scope?: EvidenceScope | string | null;
 }
+
+export type GuardrailCheckStatus = 'passed' | 'warning' | 'failed';
+
+export interface GuardrailCheck {
+  name: string;
+  status: GuardrailCheckStatus | string;
+  detail: string;
+}
+
+export interface RetrievalSummary {
+  query_terms?: string[];
+  coverages_searched?: number;
+  forms_searched?: number;
+  clauses_searched?: number;
+  claims_searched?: number;
+  billing_searched?: number;
+  candidates_scored?: number;
+  duplicates_removed?: number;
+  used_previous_question?: boolean;
+}
+
+export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
 
 export interface QuestionAnswerResponse {
   conversation_id: string;
@@ -181,6 +220,17 @@ export interface QuestionAnswerResponse {
   confidence: string;
   status: string;
   suggested_questions: string[];
+  guardrail_status: string;
+  guardrail_checks: GuardrailCheck[];
+  outcome: AnswerOutcome | string;
+  model_used: string;
+  provider: string;
+  is_fallback: boolean;
+  fallback_reason?: string | null;
+  retrieval: RetrievalSummary;
+  timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
+  latency_ms?: number | null;
+  ledger_id?: string | null;
 }
 
 export interface ConversationResponse {
@@ -189,20 +239,143 @@ export interface ConversationResponse {
   status: string;
   created_at: string;
   updated_at: string;
-  policy_context?: PolicyContextCandidate | null;
+  policy_context?: Pick<
+    PolicyContextCandidate,
+    'policy_id' | 'policy_number' | 'customer_id' | 'customer_name' | 'line_of_business' | 'product_name' | 'status'
+  > | null;
 }
 
-export interface ChatMessage {
-  id: string;
-  sender: 'user' | 'assistant';
+export interface ConversationMessageRecord {
+  question_id: string;
+  question: string;
+  status: string;
+  policy_id?: string | null;
+  created_at: string;
+  answer?: QuestionAnswerResponse | null;
+}
+
+// ==========================================
+// Source Viewer
+// ==========================================
+
+export interface SourcePassage {
+  source_id: string;
+  page?: number | null;
+  section?: string | null;
+  heading?: string | null;
   text: string;
-  timestamp: string;
-  confidence?: string;
-  evidence?: EvidenceItem[];
-  citations?: CitationItem[];
-  suggestedQuestions?: string[];
-  status?: string;
-  isAnalyzing?: boolean;
-  policyContext?: PolicyContextCandidate | null;
+  plain_language?: string | null;
+  is_cited: boolean;
 }
 
+export interface SourceDocument {
+  source_type: string;
+  source_id: string;
+  representation: string;
+  pdf_available: boolean;
+  scope?: string | null;
+  policy_id?: string | null;
+  policy_number?: string | null;
+  form_number?: string | null;
+  form_title?: string | null;
+  form_kind?: string | null;
+  edition?: string | null;
+  page?: number | null;
+  page_count?: number | null;
+  section?: string | null;
+  heading?: string | null;
+  text: string;
+  plain_language?: string | null;
+  record_fields: Record<string, string>;
+  passages: SourcePassage[];
+}
+
+/** What the source viewer is asked to open: a stored source, optionally with the evidence row it came from. */
+export interface SourceTarget {
+  sourceType: string;
+  sourceId: string;
+  evidence?: EvidenceItem | null;
+}
+
+// ==========================================
+// Evidence Ledger ("The Record")
+// ==========================================
+
+export interface LedgerSummary {
+  answers_recorded: number;
+  carrier_source_count: number;
+  carrier_source_pct: number;
+  resolved_without_person_count: number;
+  resolved_without_person_pct: number;
+  p95_response_ms?: number | null;
+  waiting_on_person: number;
+  model_answers: number;
+  fallback_answers: number;
+}
+
+export interface LedgerRow {
+  id: string;
+  created_at: string;
+  conversation_id: string;
+  question_id: string;
+  agent?: string | null;
+  insured?: string | null;
+  customer_id?: string | null;
+  policy_id: string;
+  policy_number?: string | null;
+  policy_term?: number | null;
+  policy_effective?: string | null;
+  policy_expiration?: string | null;
+  state?: string | null;
+  line_of_business?: string | null;
+  question: string;
+  sources: string[];
+  source_count: number;
+  model_used?: string | null;
+  provider?: string | null;
+  is_fallback?: boolean | null;
+  confidence: string;
+  guardrail_status: string;
+  outcome: AnswerOutcome | string;
+  reviewer?: string | null;
+  latency_ms?: number | null;
+}
+
+export interface LedgerPage {
+  items: LedgerRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LedgerFilters {
+  insureds: { value: string; label: string }[];
+  states: string[];
+  lines: string[];
+  outcomes: string[];
+}
+
+export interface LedgerDetail extends LedgerRow {
+  answer: string;
+  product_name?: string | null;
+  evidence: EvidenceItem[];
+  citations: CitationItem[];
+  guardrail_checks: GuardrailCheck[];
+  suggested_questions: string[];
+  fallback_reason?: string | null;
+  retrieval: RetrievalSummary;
+  timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
+}
+
+export interface LedgerQuery {
+  search?: string;
+  insured?: string;
+  state?: string;
+  line?: string;
+  outcome?: string;
+  date_from?: string;
+  date_to?: string;
+  sort?: 'newest' | 'oldest' | 'slowest' | 'fastest';
+  limit?: number;
+  offset?: number;
+}

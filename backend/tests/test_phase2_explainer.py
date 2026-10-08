@@ -3,6 +3,7 @@
 Validates all 12 required test scenarios plus database safety and Backend -> AI Service communication.
 """
 
+import re
 import sys
 import os
 import pytest
@@ -115,7 +116,8 @@ def test_01_policy_specific_coverage_question(seeded_policy_id):
     assert "question_id" in data
     assert data["question"] == "Does this policy have water backup coverage?"
     assert len(data["answer"]) > 0
-    assert "water back-up" in data["answer"].lower() or "water backup" in data["answer"].lower()
+    # LLM wording varies ("water backup", "water back-up", "water-back-up"); compare without separators.
+    assert "waterbackup" in re.sub(r"[\s\-]", "", data["answer"].lower())
     assert data["confidence"] in ["high", "medium"]
     assert data["status"] == "answered"
 

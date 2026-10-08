@@ -1,137 +1,111 @@
-import React from 'react';
-import { Shield, User, Calendar, RefreshCw, ChevronDown, CheckCircle2 } from 'lucide-react';
-import { PolicyDetail, PolicyContextCandidate } from '../../types';
+import { FileText, Loader2, Shield, X } from 'lucide-react';
+import type { PolicyContextCandidate } from '../../types';
+import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
+import { QUICK_ACTIONS } from './QuickPolicyActions';
+import { formatDate, lineLabel, statusLabel } from '../../lib/explainer';
 
 interface PolicyContextBannerProps {
-  policy: PolicyDetail | PolicyContextCandidate | null;
-  onChangePolicyClick: () => void;
-  isLoading?: boolean;
+  policy: PolicyContextCandidate | null;
+  isResolving?: boolean;
+  openTab?: PolicyFeatureTab | null;
+  onOpenTab: (tab: PolicyFeatureTab) => void;
+  onClear: () => void;
 }
 
-function formatDate(dateStr?: string | null): string {
-  if (!dateStr) return 'N/A';
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  } catch {
-    return dateStr;
-  }
-}
-
-export function PolicyContextBanner({
-  policy,
-  onChangePolicyClick,
-  isLoading,
-}: PolicyContextBannerProps) {
+/**
+ * Lightweight context strip. Before a policy is resolved it only explains that context is
+ * resolved from the question; after, it shows just what is needed to read the answers.
+ */
+export function PolicyContextBanner({ policy, isResolving, openTab, onOpenTab, onClear }: PolicyContextBannerProps) {
   if (!policy) {
     return (
-      <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-[#0F2A43]/5 border border-[#0F2A43]/10 flex items-center justify-center text-[#0F2A43] shrink-0">
-            <Shield className="w-5 h-5 text-[#F97316]" />
+      <div className="flex items-center gap-3 rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#0F2A43]/10 bg-[#0F2A43]/5">
+          {isResolving ? <Loader2 className="h-4 w-4 animate-spin text-[#F97316]" /> : <Shield className="h-4 w-4 text-[#F97316]" />}
+        </span>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">Policy context</span>
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-[#64748B]">
+              {isResolving ? 'Resolving…' : 'Auto-resolving on question'}
+            </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-[#64748B]">
-                Policy Context
-              </span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-[#64748B]">
-                Auto-Resolving on Question
-              </span>
-            </div>
-            <p className="text-sm text-[#0F2A43] font-medium mt-0.5">
-              Ask any question directly or choose a policyholder to inspect.
-            </p>
-          </div>
+          <p className="mt-0.5 text-[12.5px] text-[#475569]">
+            Ask any question directly about coverage, deductibles, forms, exclusions, claims, or billing.
+          </p>
         </div>
-
-        <button
-          type="button"
-          onClick={onChangePolicyClick}
-          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#E2E8F0] hover:border-[#F97316] bg-white text-xs font-semibold text-[#0F2A43] hover:text-[#F97316] transition-colors shadow-sm shrink-0 cursor-pointer"
-        >
-          <User className="w-3.5 h-3.5 text-[#F97316]" />
-          Select Policy
-          <ChevronDown className="w-3.5 h-3.5 text-[#64748B]" />
-        </button>
       </div>
     );
   }
 
-  const isInForce = (policy.status || '').toLowerCase() === 'in_force';
+  const inForce = policy.status === 'in_force';
 
   return (
-    <div className="bg-white border border-[#E2E8F0] rounded-xl p-3 sm:p-4 shadow-sm">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-        {/* Left: Customer & Policy ID */}
-        <div className="flex items-start sm:items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-[#0F2A43] text-white flex items-center justify-center shrink-0 mt-0.5 sm:mt-0 shadow-sm">
-            <Shield className="w-5 h-5 text-[#F97316]" />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#64748B]">
-                POLICY CONTEXT
-              </span>
+    <div className="message-in rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0F2A43]">
+            <Shield className="h-4 w-4 text-[#F97316]" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">Policy context</span>
               <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                  isInForce
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-px text-[10.5px] font-semibold ring-1 ${
+                  inForce ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-600 ring-slate-200'
                 }`}
               >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${isInForce ? 'bg-emerald-500' : 'bg-slate-400'}`}
-                />
-                {isInForce ? 'In Force' : policy.status}
+                <span className={`h-1.5 w-1.5 rounded-full ${inForce ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                {statusLabel(policy.status)}
               </span>
-              <span className="text-xs font-semibold text-[#F97316] uppercase bg-orange-50 px-2 py-0.5 rounded border border-orange-200">
-                {policy.line_of_business === 'homeowners' ? 'Homeowners' : 'Personal Auto'}
+              <span className="rounded border border-[#FDBA74] bg-[#FFF7ED] px-1.5 py-px text-[10.5px] font-semibold uppercase text-[#C2410C]">
+                {lineLabel(policy.line_of_business)}
               </span>
             </div>
-
-            <div className="flex flex-wrap items-baseline gap-2 mt-0.5">
-              <h3 className="text-base sm:text-lg font-bold text-[#0F2A43] tracking-tight">
-                {policy.customer_name}
-              </h3>
-              <span className="font-mono text-xs sm:text-sm font-semibold text-[#0F2A43] bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                {policy.policy_number}
+            <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+              <span className="text-[15px] font-bold text-[#0F2A43]">{policy.customer_name}</span>
+              <span className="font-mono text-[12.5px] font-semibold text-[#0F2A43]">{policy.policy_number}</span>
+              <span className="text-[11.5px] text-[#64748B]">
+                {formatDate(policy.effective_date)} – {formatDate(policy.expiration_date)}
               </span>
-              {'product_name' in policy && policy.product_name && (
-                <span className="text-xs text-[#64748B] hidden lg:inline">
-                  · {policy.product_name}
-                </span>
-              )}
             </div>
           </div>
         </div>
 
-        {/* Right: Dates & Change Policy Action */}
-        <div className="flex items-center justify-between md:justify-end gap-3 sm:gap-4 border-t md:border-t-0 pt-2 md:pt-0 border-slate-100 text-xs">
-          <div className="flex items-center gap-3 text-[#64748B]">
-            <div className="flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-[#64748B]" />
-              <span>
-                Effective: <strong className="text-[#0F2A43]">{formatDate(policy.effective_date)}</strong>
-              </span>
-            </div>
-            <span className="hidden sm:inline text-slate-300">|</span>
-            <div className="hidden sm:flex items-center gap-1.5">
-              <span>
-                Expires: <strong className="text-[#0F2A43]">{formatDate(policy.expiration_date)}</strong>
-              </span>
-            </div>
-          </div>
-
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            onClick={onChangePolicyClick}
-            disabled={isLoading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E2E8F0] hover:border-[#F97316] bg-slate-50 hover:bg-orange-50 text-xs font-semibold text-[#0F2A43] hover:text-[#EA580C] transition-all cursor-pointer shadow-xs disabled:opacity-60"
+            onClick={() => onOpenTab('overview')}
+            className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-semibold transition-colors cursor-pointer ${
+              openTab === 'overview'
+                ? 'border-[#0F2A43] bg-[#0F2A43] text-white'
+                : 'border-[#E2E8F0] text-[#0F2A43] hover:border-[#F97316] hover:text-[#EA580C]'
+            }`}
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>Change Policy</span>
+            <FileText className="h-3.5 w-3.5" /> Overview
+          </button>
+          {QUICK_ACTIONS.map(({ tab, shortTitle, icon: Icon }) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => onOpenTab(tab)}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-semibold transition-colors cursor-pointer ${
+                openTab === tab
+                  ? 'border-[#0F2A43] bg-[#0F2A43] text-white'
+                  : 'border-[#E2E8F0] text-[#0F2A43] hover:border-[#F97316] hover:text-[#EA580C]'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" /> {shortTitle}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={onClear}
+            title="Clear policy context"
+            aria-label="Clear policy context"
+            className="ml-0.5 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
       </div>

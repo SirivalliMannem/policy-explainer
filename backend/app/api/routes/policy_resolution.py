@@ -7,9 +7,29 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.models.policy import CoreAccount, CorePolicy
-from app.schemas.policy_resolution import PolicyContextCandidate, PolicyResolveRequest
+from app.schemas.policy_resolution import (
+    PolicyContextCandidate,
+    PolicyResolveRequest,
+    QuestionResolution,
+    QuestionResolveRequest,
+)
+from app.services.policy_resolver import resolve_policy_from_question
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
+
+
+def _to_candidate(policy: CorePolicy) -> PolicyContextCandidate:
+    return PolicyContextCandidate(
+        policy_id=policy.id,
+        policy_number=policy.policy_number,
+        customer_id=policy.account_id,
+        customer_name=policy.account.name if policy.account else "",
+        line_of_business=policy.line_of_business,
+        product_name=policy.product_name,
+        status=policy.status,
+        effective_date=policy.effective_date,
+        expiration_date=policy.expiration_date,
+    )
 
 
 @router.get("/search", response_model=list[PolicyContextCandidate])
@@ -40,20 +60,7 @@ def search_policy_context(
         .all()
     )
 
-    return [
-        PolicyContextCandidate(
-            policy_id=policy.id,
-            policy_number=policy.policy_number,
-            customer_id=policy.account_id,
-            customer_name=policy.account.name if policy.account else "",
-            line_of_business=policy.line_of_business,
-            product_name=policy.product_name,
-            status=policy.status,
-            effective_date=policy.effective_date,
-            expiration_date=policy.expiration_date,
-        )
-        for policy in results
-    ]
+    return [_to_candidate(policy) for policy in results]
 
 
 @router.post("/resolve", response_model=PolicyContextCandidate)
@@ -76,14 +83,25 @@ def resolve_policy_context(
             detail="Policy not found",
         )
 
-    return PolicyContextCandidate(
-        policy_id=policy.id,
-        policy_number=policy.policy_number,
-        customer_id=policy.account_id,
-        customer_name=policy.account.name if policy.account else "",
-        line_of_business=policy.line_of_business,
-        product_name=policy.product_name,
-        status=policy.status,
-        effective_date=policy.effective_date,
-        expiration_date=policy.expiration_date,
+    return _to_candidate(policy)
+
+
+@router.post("/from-question", response_model=QuestionResolution)
+def resolve_policy_from_question_text(
+    payload: QuestionResolveRequest,
+    db: Session = Depends(get_db),
+):
+    """Resolve the policy a free-text question refers to by policy number or policyholder name.
+
+    Returns ``no_reference`` when the question names neither, so the caller can keep the
+    conversation's current context or ask the employee which policy to check.
+    """
+    result = resolve_policy_from_question(payload.question, db)
+    return QuestionResolution(
+        status=result.status,
+        matched_on=result.matched_on,
+        reference=result.reference,
+        policy=_to_candidate(result.policy) if result.policy else None,
+        candidates=[_to_candidate(p) for p in result.candidates],
+        message=result.message,
     )

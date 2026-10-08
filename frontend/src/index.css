@@ -226,3 +226,63 @@
     color: #F97316 !important;
   }
 }
+
+/* ==================================================
+   POLICY EXPLAINER — AI PROCESS & CONVERSATION MOTION
+   Restrained, state-driven motion: a stage only animates when its real status changes.
+   ================================================== */
+@keyframes stagePop {
+  0% { transform: scale(0.55); opacity: 0; }
+  70% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+@keyframes stageRing {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes drawerIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+@keyframes modalIn {
+  from { transform: translateY(8px) scale(0.99); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.stage-pop {
+  animation: stagePop 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.stage-ring {
+  animation: stageRing 1.4s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+.message-in {
+  animation: messageIn 0.28s ease-out both;
+}
+
+.drawer-in {
+  animation: drawerIn 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.modal-in {
+  animation: modalIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-pop,
+  .stage-ring,
+  .message-in,
+  .drawer-in,
+  .modal-in {
+    animation: none;
+  }
+}

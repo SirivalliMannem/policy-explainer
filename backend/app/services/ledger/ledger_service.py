@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.models.ledger import EvidenceLedger
+
+
+def answer_outcome(question_status: str, guardrail_status: str) -> str:
+    """Classify what happened to a question for the audit record.
+
+    answered              grounded answer delivered with all blocking guardrails passed
+    insufficient_evidence no policy evidence matched; nothing was generated
+    needs_review          an answer exists but a blocking guardrail failed, so a person must review it
+    """
+    if question_status == "insufficient_evidence":
+        return "insufficient_evidence"
+    if guardrail_status in ("flagged", "failed"):
+        return "needs_review"
+    return "answered"
 
 
 class LedgerService:
@@ -26,6 +40,16 @@ class LedgerService:
         guardrail_status: str,
         suggested_questions: list[str],
         db: Session,
+        employee_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        guardrail_checks: Optional[list[dict]] = None,
+        model_used: Optional[str] = None,
+        provider: Optional[str] = None,
+        is_fallback: Optional[bool] = None,
+        fallback_reason: Optional[str] = None,
+        latency_ms: Optional[int] = None,
+        timings_ms: Optional[dict] = None,
+        retrieval: Optional[dict] = None,
     ) -> EvidenceLedger:
         """Create and persist an evidence ledger entry."""
         evidence_dicts: list[dict[str, Any]] = []
@@ -65,6 +89,16 @@ class LedgerService:
             confidence=confidence,
             guardrail_status=guardrail_status,
             suggested_questions=suggested_questions,
+            employee_id=employee_id,
+            outcome=outcome,
+            guardrail_checks=guardrail_checks or [],
+            model_used=model_used,
+            provider=provider,
+            is_fallback=is_fallback,
+            fallback_reason=fallback_reason,
+            latency_ms=latency_ms,
+            timings_ms=timings_ms or {},
+            retrieval=retrieval or {},
         )
         db.add(ledger_entry)
         db.commit()

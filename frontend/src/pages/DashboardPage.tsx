@@ -33,6 +33,7 @@ import { Badge } from '../components/ui/Badge';
 import { Skeleton } from '../components/ui/Skeleton';
 import { getDashboardStats } from '../services/api';
 import { DashboardResponse, RecentQuestionItem } from '../types';
+import { TheRecord } from '../components/dashboard/TheRecord';
 
 interface ActivityTooltipProps {
   active?: boolean;
@@ -165,17 +166,18 @@ export function DashboardPage() {
   };
 
   const handleRecentClick = (item: RecentQuestionItem) => {
+    // Reopen the recorded conversation; never re-submit the question (that would write a new ledger entry).
     navigate('/app/explainer', {
       state: {
         conversationId: item.conversation_id,
-        initialQuestion: item.question,
       },
     });
   };
 
   const formatRelativeTime = (isoString: string) => {
     try {
-      const date = new Date(isoString);
+      // The backend sends naive UTC timestamps; without a zone marker they would parse as local time.
+      const date = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(isoString) ? isoString : `${isoString}Z`);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffMins = Math.floor(diffMs / 60000);
@@ -742,6 +744,10 @@ export function DashboardPage() {
                         <Badge variant="destructive" className="py-0.5 px-2 text-[10px]">
                           Low / None
                         </Badge>
+                      ) : item.status === 'failed' ? (
+                        <Badge variant="destructive" className="py-0.5 px-2 text-[10px]">
+                          Not answered
+                        </Badge>
                       ) : (
                         <Badge variant="default" className="py-0.5 px-2 text-[10px]">
                           Pending
@@ -763,6 +769,9 @@ export function DashboardPage() {
           )}
         </div>
       </Card>
+
+      {/* 7. EVIDENCE LEDGER — THE RECORD */}
+      <TheRecord />
     </div>
   );
 }

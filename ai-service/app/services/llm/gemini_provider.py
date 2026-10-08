@@ -9,6 +9,7 @@ from app.services.llm.base import (
     BaseLLMProvider,
     LLMGenerationResult,
     SYSTEM_PROMPT,
+    USER_INSTRUCTION,
     extract_citations_from_evidence,
 )
 from app.services.llm.exceptions import LLMProviderError
@@ -52,10 +53,7 @@ class GeminiProvider(BaseLLMProvider):
             "Content-Type": "application/json",
         }
 
-        user_content = (
-            f"{grounding_context}\n\n"
-            f"Based ONLY on the above evidence, answer the employee question: '{question}'."
-        )
+        user_content = f"{grounding_context}\n\n{USER_INSTRUCTION.format(question=question)}"
 
         payload = {
             "contents": [
@@ -89,7 +87,9 @@ class GeminiProvider(BaseLLMProvider):
                                     confidence="high",
                                     model_used=self.model,
                                     is_fallback=False,
+                                    provider=self.name,
                                 )
+                    raise LLMProviderError("Gemini returned an empty answer")
                 else:
                     # Log failure without leaking the API key in the URL
                     logger.warning(

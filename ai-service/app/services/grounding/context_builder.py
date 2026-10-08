@@ -15,6 +15,7 @@ class GroundingContextBuilder:
         policy: CorePolicy,
         customer: CoreAccount,
         evidence: list[EvidenceItem],
+        previous_question: str | None = None,
     ) -> str:
         """Construct prompt context clearly separating sections."""
         lines = []
@@ -45,8 +46,15 @@ class GroundingContextBuilder:
             lines.append("No specific policy evidence retrieved for this question.")
         else:
             for i, item in enumerate(evidence, start=1):
-                lines.append(f"[Evidence Item {i}]")
+                lines.append(f"[E{i}]")
                 lines.append(f"Source Type: {item.source_type.upper()}")
+                if item.source_type == "clause":
+                    scope = item.metadata.get("scope")
+                    lines.append(
+                        "Applies To: generic product wording (not specific to this policy)"
+                        if scope == "product_wording"
+                        else "Applies To: this policy's own attached form"
+                    )
                 lines.append(f"Title: {item.title}")
 
                 # Format source metadata
@@ -69,6 +77,11 @@ class GroundingContextBuilder:
                 if item.plain_language:
                     lines.append(f"Approved Explanation: {item.plain_language}")
                 lines.append("")
+
+        if previous_question:
+            lines.append("=== PREVIOUS QUESTION IN THIS CONVERSATION (for resolving references only) ===")
+            lines.append(previous_question.strip())
+            lines.append("")
 
         lines.append("=== USER QUESTION ===")
         lines.append(question.strip())

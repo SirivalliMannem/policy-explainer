@@ -8,14 +8,18 @@ from sqlalchemy.orm import Session
 from app.api.routes.conversations import router as conversations_router
 from app.api.routes.customers import router as customers_router
 from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.ledger import router as ledger_router
 from app.api.routes.policies import router as policies_router
 from app.api.routes.policy_resolution import router as policy_resolution_router
+from app.api.routes.sources import router as sources_router
 from app.core.config import settings
 from app.db.database import Base, engine, get_db
+from app.db.migrations import ensure_ledger_columns
 
 # Ensure new conversation application tables and evidence ledger exist
 from app.models import Conversation, ConversationQuestion, EvidenceLedger  # noqa: F401
 Base.metadata.create_all(bind=engine)
+ensure_ledger_columns(engine)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -44,6 +48,8 @@ app.include_router(policy_resolution_router)
 app.include_router(policies_router)
 app.include_router(conversations_router)
 app.include_router(dashboard_router)
+app.include_router(ledger_router)
+app.include_router(sources_router)
 
 
 @app.get("/health")

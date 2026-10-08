@@ -1,5 +1,6 @@
 """Tests for the dedicated AI Service microservice."""
 
+import re
 import sys
 import os
 import pytest
@@ -60,7 +61,8 @@ def test_ai_service_explain_coverage(seeded_policy_id):
     data = res.json()
     assert data["question"] == "Does this policy have water backup coverage?"
     assert len(data["answer"]) > 0
-    assert "water back-up" in data["answer"].lower() or "water backup" in data["answer"].lower()
+    # LLM wording varies ("water backup", "water back-up", "water-back-up"); compare without separators.
+    assert "waterbackup" in re.sub(r"[\s\-]", "", data["answer"].lower())
     assert data["confidence"] in ["high", "medium"]
     assert data["status"] == "answered"
     assert len(data["evidence"]) > 0
@@ -154,3 +156,15 @@ def test_ai_service_citation_validation_guardrails(seeded_policy_id):
     finally:
         db.close()
 
+
+
+def test_policy_number_in_question_does_not_create_evidence(seeded_policy_id):
+    """Naming the policy must not turn its number into matches against every HO form."""
+    res = client.post("/api/explain", json={
+        "question": "Does HO-2847-1193 cover damage from alien spacecraft?",
+        "policy_id": seeded_policy_id,
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "insufficient_evidence"
+    assert data["evidence"] == []
