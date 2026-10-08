@@ -191,6 +191,18 @@ class BaseLLMProvider(ABC):
             )
 
     @abstractmethod
+    def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 1500,
+        json_mode: bool = False,
+        timeout_seconds: Optional[float] = None,
+    ) -> str:
+        """Run one completion and return its text; raise LLMProviderError on any failure."""
+        raise NotImplementedError
+
+    @abstractmethod
     def generate(
         self,
         question: str,

@@ -13,6 +13,8 @@ import {
   formatDate,
   formatDateTime,
   formatMs,
+  interpretationMethodLabel,
+  interpretedText,
   lineLabel,
   modelLabel,
 } from '../../lib/explainer';
@@ -118,6 +120,37 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
                 <GuardrailStatusBadge status={entry.guardrail_status} />
                 <span className="ml-auto text-[11px] text-[#64748B]">{formatDateTime(entry.created_at)}</span>
               </div>
+
+              {entry.retrieval.interpretation && (
+                <Section title="Question understanding">
+                  <dl className="grid grid-cols-1 gap-x-4 gap-y-3 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 sm:grid-cols-2">
+                    <Field label="As typed">{entry.retrieval.interpretation.original}</Field>
+                    <Field label="Understood as">
+                      {interpretedText(entry.retrieval.interpretation) ?? 'Unchanged'}
+                    </Field>
+                    <Field label="Method">
+                      {interpretationMethodLabel(entry.retrieval.interpretation)}
+                      {entry.retrieval.interpretation.fallback_reason && (
+                        <span className="block text-[11px] font-normal text-[#94A3B8]">
+                          Model not used: {entry.retrieval.interpretation.fallback_reason}
+                        </span>
+                      )}
+                    </Field>
+                    <Field label="Corrections">
+                      {entry.retrieval.interpretation.corrections.length
+                        ? entry.retrieval.interpretation.corrections.map((c) => `${c.from} → ${c.to}`).join(', ')
+                        : '—'}
+                    </Field>
+                    <div className="sm:col-span-2">
+                      <Field label="Searched for">
+                        {entry.retrieval.interpretation.search_terms.length
+                          ? entry.retrieval.interpretation.search_terms.join(', ')
+                          : '—'}
+                      </Field>
+                    </div>
+                  </dl>
+                </Section>
+              )}
 
               <Section title="Answer">
                 <div className="rounded-xl border border-[#E2E8F0] bg-white px-4 py-3">

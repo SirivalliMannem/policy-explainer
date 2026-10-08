@@ -22,14 +22,22 @@ from app.services.llm.base import citations_from_references
 from app.services.llm.llm_service import LLMService
 from app.services.retrieval.evidence_retriever import EvidenceItem, EvidenceRetriever
 from app.services.suggestions.generator import SuggestionGenerator
+from app.core.config import settings
+from app.services.understanding import Interpretation, QueryInterpreter
+from app.services.understanding.interpreter import FOLLOW_UP_REFERENCE
 
 # Evidence scoring thresholds used to grade confidence (see EvidenceRetriever scoring).
 STRONG_EVIDENCE_SCORE = 12.0
 
-# Words that make a question depend on the one before it ("what endorsement provides *that*?").
-FOLLOW_UP_REFERENCE = re.compile(
-    r"\b(that|it|its|this coverage|this endorsement|those|they|them|same|above)\b", re.IGNORECASE
-)
+def _interpretation_from(data: Optional[dict]) -> Optional[Interpretation]:
+    """Rebuild an interpretation sent by the backend, ignoring anything malformed."""
+    if not data:
+        return None
+    try:
+        fields = Interpretation.__dataclass_fields__
+        return Interpretation(**{k: v for k, v in data.items() if k in fields})
+    except TypeError:
+        return None
 
 
 def retrieval_query(question: str, previous_question: Optional[str]) -> str:
@@ -79,6 +87,7 @@ class ExplainerPipeline:
         policy_context: Optional[PolicyContextSummary] = None,
         conversation_id: Optional[str] = None,
         previous_question: Optional[str] = None,
+        interpretation: Optional[dict] = None,
     ) -> ExplainResponse:
         """Execute full Explainer pipeline for a policy question."""
         policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
@@ -91,9 +100,17 @@ class ExplainerPipeline:
         customer = policy.account
         timings: dict[str, int] = {}
 
+        # 0. Understand the question (spelling, paraphrase, policy vocabulary). Reuse the backend's
+        # interpretation when it sent one so the language model is not asked twice.
+        interp = _interpretation_from(interpretation)
+        if interp is None and settings.QUERY_INTERPRETER.lower() != "off":
+            interp = QueryInterpreter.interpret(question, db, previous_question=previous_question)
+            timings["interpretation"] = interp.latency_ms
+        interpretation_payload = interp.to_dict() if interp else None
+
         # 1. Retrieve relevant evidence grounded in policy
         started = time.perf_counter()
-        search_text = retrieval_query(question, previous_question)
+        search_text = retrieval_query(interp.search_text if interp else question, previous_question)
         evidence, retrieval_stats = EvidenceRetriever.retrieve_with_stats(search_text, policy.id, db)
         retrieval_stats["used_previous_question"] = search_text != question
         timings["retrieval"] = _elapsed_ms(started)
@@ -126,6 +143,7 @@ class ExplainerPipeline:
                 is_fallback=False,
                 retrieval=retrieval_stats,
                 timings_ms=timings,
+                interpretation=interpretation_payload,
             )
 
         # 2. Build grounding context
@@ -136,6 +154,7 @@ class ExplainerPipeline:
             customer=customer,
             evidence=evidence,
             previous_question=previous_question if retrieval_stats["used_previous_question"] else None,
+            interpreted_question=interp.corrected if interp and interp.corrected != question else None,
         )
         timings["grounding"] = _elapsed_ms(started)
 
@@ -234,4 +253,5 @@ class ExplainerPipeline:
             fallback_reason=llm_result.fallback_reason,
             retrieval=retrieval_stats,
             timings_ms=timings,
+            interpretation=interpretation_payload,
         )

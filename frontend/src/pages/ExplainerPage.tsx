@@ -24,6 +24,7 @@ import {
   StageKey,
   describeError,
   freshStages,
+  interpretedText,
   stagesFromResult,
 } from '../lib/explainer';
 
@@ -31,6 +32,7 @@ const MATCH_LABEL: Record<string, string> = {
   policy_number: 'policy number',
   customer_name: 'policyholder name',
   surname: 'surname',
+  first_name: 'first name',
 };
 
 // Visual pacing for stages 2–4 while the single synchronous request runs. The real response
@@ -209,7 +211,10 @@ export function ExplainerPage() {
         // A reply to a clarification is resolved together with the question it answers, so the
         // question's wording ("water backup", "my car") can narrow a policyholder's policies.
         const pending = pendingQuestionRef.current;
-        resolution = await resolvePolicyFromQuestion(pending && looksLikeReply(text) ? `${text} — ${pending}` : text);
+        resolution = await resolvePolicyFromQuestion(
+          pending && looksLikeReply(text) ? `${text} — ${pending}` : text,
+          convId
+        );
       } catch (err) {
         const friendly = describeError(err);
         failProcess(friendly.title);
@@ -219,11 +224,14 @@ export function ExplainerPage() {
         setIsResolving(false);
       }
 
+      const understood = interpretedText(resolution.interpretation);
+      const understoodNote = understood ? ` · understood as “${understood}”` : '';
+
       // Customer / portfolio questions are answered from policy records. They need no single-policy
       // context, and they neither change the active context nor ask which policy to check.
       if (resolution.intent === 'portfolio') {
         const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
-        await runPipeline(text, convId, `${subject} — answered from policy records`, true);
+        await runPipeline(text, convId, `${subject} — answered from policy records${understoodNote}`, true);
         return;
       }
 
@@ -261,10 +269,10 @@ export function ExplainerPage() {
         }
         contextDetail = `${resolved.customer_name} · ${resolved.policy_number} — matched on ${
           MATCH_LABEL[resolution.matched_on || ''] || 'reference'
-        }`;
+        }${understoodNote}`;
       } else if (resolution.status === 'ambiguous') {
         if (current && resolution.candidates.some((c) => c.policy_id === current.policy_id)) {
-          contextDetail = `Using active context · ${current.policy_number}`;
+          contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
         } else {
           pendingQuestionRef.current = pendingQuestionRef.current ?? text;
           askForPolicy(
@@ -283,7 +291,7 @@ export function ExplainerPage() {
         );
         return;
       } else if (current) {
-        contextDetail = `Using active context · ${current.policy_number}`;
+        contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
       } else {
         pendingQuestionRef.current = text;
         askForPolicy('Which policy or policyholder should I check?', [], 'No policy named and no active context');

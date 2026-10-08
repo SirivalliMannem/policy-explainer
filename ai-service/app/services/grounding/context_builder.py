@@ -16,6 +16,7 @@ class GroundingContextBuilder:
         customer: CoreAccount,
         evidence: list[EvidenceItem],
         previous_question: str | None = None,
+        interpreted_question: str | None = None,
     ) -> str:
         """Construct prompt context clearly separating sections."""
         lines = []
@@ -85,5 +86,9 @@ class GroundingContextBuilder:
 
         lines.append("=== USER QUESTION ===")
         lines.append(question.strip())
+        if interpreted_question:
+            lines.append("")
+            lines.append("=== QUESTION AS UNDERSTOOD (spelling and wording normalised) ===")
+            lines.append(interpreted_question.strip())
 
         return "\n".join(lines)

@@ -56,6 +56,34 @@ class ExplainRequest(BaseModel):
     previous_question: Optional[str] = Field(
         None, description="Most recent prior question in the conversation, used to resolve follow-up references"
     )
+    interpretation: Optional[dict[str, Any]] = Field(
+        None, description="Interpretation already produced by /api/interpret, so it is not computed twice"
+    )
+
+
+class InterpretRequest(BaseModel):
+    """Request to understand a loosely written question."""
+
+    question: str = Field(..., min_length=1)
+    previous_question: Optional[str] = None
+    mode: Optional[str] = Field(None, description="auto (language model + rules) or rules (no model call)")
+
+
+class InterpretationSchema(BaseModel):
+    """How a question was understood before retrieval."""
+
+    original: str
+    corrected: str
+    normalized: str
+    method: str
+    intent: Optional[str] = None
+    policyholders: list[str] = Field(default_factory=list)
+    policy_numbers: list[str] = Field(default_factory=list)
+    line_of_business: Optional[str] = None
+    search_terms: list[str] = Field(default_factory=list)
+    corrections: list[dict[str, str]] = Field(default_factory=list)
+    fallback_reason: Optional[str] = None
+    latency_ms: int = 0
 
 
 class ExplainResponse(BaseModel):
@@ -80,3 +108,4 @@ class ExplainResponse(BaseModel):
     fallback_reason: Optional[str] = None
     retrieval: dict[str, Any] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
+    interpretation: Optional[InterpretationSchema] = None

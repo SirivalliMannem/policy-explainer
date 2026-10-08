@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Compass,
   Database,
+  Wand2,
   ExternalLink,
   FileSearch,
   Link2,
@@ -21,6 +22,8 @@ import {
   citationLine,
   evidenceByIndex,
   formatDate,
+  interpretationMethodLabel,
+  interpretedText,
   lineLabel,
   modelLabel,
   statusLabel,
@@ -56,6 +59,32 @@ const MATCH_LABEL: Record<string, string> = {
   customer_name: 'matched on policyholder name',
   surname: 'matched on surname',
 };
+
+/** "Interpreted as …" — shown only when the understood wording differs from what was typed. */
+function InterpretedAs({ result }: { result: QuestionAnswerResponse }) {
+  const interpretation = result.interpretation;
+  const understood = interpretedText(interpretation);
+  if (!interpretation || !understood) return null;
+  const details = [
+    interpretation.corrections.length
+      ? `Corrected: ${interpretation.corrections.map((c) => `${c.from} → ${c.to}`).join(', ')}`
+      : '',
+    interpretation.search_terms.length ? `Searched for: ${interpretation.search_terms.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return (
+    <div
+      className="mb-2.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 rounded-lg bg-[#F8FAFC] px-2.5 py-1.5 text-[11.5px] text-[#64748B]"
+      title={details || undefined}
+    >
+      <Wand2 className="h-3 w-3 shrink-0 self-center text-[#F97316]" />
+      <span>Interpreted as</span>
+      <span className="font-medium text-[#0F2A43]">“{understood}”</span>
+      <span className="text-[10.5px] text-[#94A3B8]">· {interpretationMethodLabel(interpretation)}</span>
+    </div>
+  );
+}
 
 function AssistantAvatar() {
   return (
@@ -117,6 +146,8 @@ function AnswerCard({
             </span>
           )}
         </div>
+
+        <InterpretedAs result={result} />
 
         {result.outcome === 'needs_review' && (
           <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -268,6 +299,7 @@ function PortfolioCard({
           </span>
         </div>
 
+        <InterpretedAs result={result} />
         <p className="text-[13.5px] leading-relaxed text-[#1E293B]">{result.answer}</p>
 
         {policies.length > 0 && (

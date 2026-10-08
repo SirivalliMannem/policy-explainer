@@ -185,8 +185,16 @@ export async function resolvePolicyContext(policyId: string): Promise<PolicyCont
 }
 
 /** Ask the backend which policy, if any, a free-text question refers to. */
-export async function resolvePolicyFromQuestion(question: string): Promise<QuestionResolution> {
-  return apiClient.post<QuestionResolution>('/api/policy-resolution/from-question', { question });
+export async function resolvePolicyFromQuestion(
+  question: string,
+  conversationId?: string | null
+): Promise<QuestionResolution> {
+  return apiClient.post<QuestionResolution>(
+    '/api/policy-resolution/from-question',
+    { question, conversation_id: conversationId ?? undefined },
+    // Includes one language-model call to understand the question.
+    { timeoutMs: 30_000 }
+  );
 }
 
 // ==========================================

@@ -148,6 +148,23 @@ export interface PolicyContextCandidate {
 
 export type ResolutionStatus = 'resolved' | 'ambiguous' | 'not_found' | 'no_reference';
 
+/** How a loosely written question was understood before retrieval. */
+export interface Interpretation {
+  original: string;
+  corrected: string;
+  normalized: string;
+  /** llm: rewritten by the language model; rules: spelling/names/synonyms only (no model call). */
+  method: 'llm' | 'rules' | string;
+  intent?: string | null;
+  policyholders: string[];
+  policy_numbers: string[];
+  line_of_business?: string | null;
+  search_terms: string[];
+  corrections: { from: string; to: string }[];
+  fallback_reason?: string | null;
+  latency_ms: number;
+}
+
 export interface QuestionResolution {
   status: ResolutionStatus;
   /** "portfolio": counts or lists policies/customers; answered from policy records, no single-policy context needed. */
@@ -157,6 +174,7 @@ export interface QuestionResolution {
   policy?: PolicyContextCandidate | null;
   candidates: PolicyContextCandidate[];
   message: string;
+  interpretation?: Interpretation | null;
 }
 
 export interface CitationItem {
@@ -207,6 +225,7 @@ export interface RetrievalSummary {
   candidates_scored?: number;
   duplicates_removed?: number;
   used_previous_question?: boolean;
+  interpretation?: Interpretation | null;
 }
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
@@ -258,6 +277,7 @@ export interface QuestionAnswerResponse {
   timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
   latency_ms?: number | null;
   ledger_id?: string | null;
+  interpretation?: Interpretation | null;
 }
 
 export interface ConversationResponse {

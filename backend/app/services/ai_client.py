@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Upper bound for one explain call: retrieval + an LLM call (provider timeout 20s) + validation.
 AI_SERVICE_TIMEOUT_SECONDS = 45.0
+# Interpretation is one short model call (12s provider timeout) with a rules fallback.
+INTERPRET_TIMEOUT_SECONDS = 20.0
 
 
 class AIServiceClient:
@@ -30,6 +32,7 @@ class AIServiceClient:
         conversation_id: Optional[str] = None,
         policy_context: Optional[PolicyContextSummary] = None,
         previous_question: Optional[str] = None,
+        interpretation: Optional[dict] = None,
     ) -> AIServiceResponse:
         """Send question and policy context to AI Service and return structured explanation."""
         payload = {
@@ -38,6 +41,7 @@ class AIServiceClient:
             "conversation_id": conversation_id,
             "policy_context": policy_context.model_dump() if policy_context else None,
             "previous_question": previous_question,
+            "interpretation": interpretation,
         }
 
         url = f"{self.base_url}/api/explain"
@@ -69,6 +73,25 @@ class AIServiceClient:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"AI service returned status {resp.status_code}: {resp.text[:300]}",
         )
+
+    def interpret(self, question: str, previous_question: Optional[str] = None) -> Optional[dict]:
+        """Ask the AI service how a question should be understood.
+
+        Never raises: when the AI service cannot be reached, callers continue with the raw question
+        exactly as before, and the failure surfaces at answer time.
+        """
+        try:
+            with httpx.Client(timeout=INTERPRET_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{self.base_url}/api/explain/interpret",
+                    json={"question": question, "previous_question": previous_question},
+                )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning("AI service interpret returned HTTP %s", resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("AI service interpret unavailable: %s", type(exc).__name__)
+        return None
 
 
 # Global singleton client instance

@@ -232,3 +232,38 @@ def test_portfolio_answer_is_recorded_and_restorable():
     assert restored["answer_type"] == "portfolio" and restored["portfolio"]["policies"][0]["policy_number"] == "HO-3310-8821"
     policy_src = client.get(f"/api/sources/policy/{d['evidence'][0]['source_id']}").json()
     assert policy_src["policy_number"] == "HO-3310-8821"
+
+
+# ---- Loosely written questions (spelling, names, slang) --------------------------------------
+# These hold whether the AI service understands the question with the language model or with its
+# rules fallback, because the rules layer alone handles misspelled names and words.
+
+def test_misspelled_policyholder_resolves():
+    d = resolve("does margret chen have water backup")
+    assert d["status"] == "resolved" and d["policy"]["policy_number"] == "HO-2847-1193"
+    assert "Margaret Chen" in d["interpretation"]["policyholders"]
+
+
+def test_spaced_policy_number_resolves():
+    d = resolve("whats the deductable for ho 2847 1193")
+    assert d["status"] == "resolved" and d["policy"]["policy_number"] == "HO-2847-1193"
+
+
+def test_misspelled_portfolio_questions_are_recognised():
+    assert resolve("hw many polcies does margret chen have")["intent"] == "portfolio"
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    d = ask(conv, "what r all the policys we got")
+    assert d["answer_type"] == "portfolio" and len(d["portfolio"]["policies"]) == 9
+    count = ask(conv, "hw many polcies does margret chen have")
+    assert {p["policy_number"] for p in count["portfolio"]["policies"]} == {"HO-2847-1193", "PA-6120-7742"}
+
+
+def test_interpretation_is_returned_and_recorded():
+    res = resolve("does margret chen have water backup")
+    conv = client.post("/api/conversations", json={"policy_id": res["policy"]["policy_id"]}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    d = ask(conv, f"whats the deductable {marker}")
+    assert d["interpretation"] and d["interpretation"]["original"] == f"whats the deductable {marker}"
+    assert "deductible" in d["interpretation"]["normalized"].lower()
+    detail = client.get(f"/api/ledger/{d['ledger_id']}").json()
+    assert detail["retrieval"]["interpretation"]["original"] == d["interpretation"]["original"]

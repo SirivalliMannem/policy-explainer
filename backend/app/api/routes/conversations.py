@@ -23,9 +23,14 @@ from app.schemas.conversation import (
 from app.schemas.explainer import ConversationMessage, QuestionAnswerResponse
 from app.services.ai_client import ai_client
 from app.services.ledger.ledger_service import LedgerService, answer_outcome
+from app.services.interpretation import (
+    asks_about_portfolio,
+    interpret as interpret_question,
+    previous_question,
+    understood_text,
+)
 from app.services.portfolio import (
     answer_portfolio_question,
-    is_portfolio_question,
     portfolio_evidence,
     portfolio_payload,
     portfolio_suggestions,
@@ -191,11 +196,17 @@ def submit_question(
         )
 
     conv = _get_conversation_or_404(conversation_id, db)
+    started = time.perf_counter()
+
+    # Understand the question first (spelling, names, paraphrase). Reuses the interpretation made
+    # when the frontend resolved the policy, so the language model is consulted once per question.
+    prior_question = previous_question(conv.id, conv.policy_id, db)
+    interpretation = interpret_question(conv.id, question_text, prior_question)
 
     # Customer and portfolio questions ("how many policies does X have?") are answered from
     # policy records and do not need, or change, the conversation's single-policy context.
-    if is_portfolio_question(question_text):
-        return _answer_portfolio_question(conv, question_text, db)
+    if asks_about_portfolio(question_text, interpretation):
+        return _answer_portfolio_question(conv, question_text, db, interpretation, started)
 
     if not conv.policy_id:
         raise HTTPException(
@@ -209,19 +220,6 @@ def submit_question(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Resolved policy associated with conversation no longer exists",
         )
-
-    # The most recent answered question on the same policy lets the AI service resolve follow-ups
-    # such as "what endorsement provides that coverage?".
-    previous = (
-        db.query(ConversationQuestion)
-        .filter(
-            ConversationQuestion.conversation_id == conv.id,
-            ConversationQuestion.policy_id == conv.policy_id,
-            ConversationQuestion.status == "answered",
-        )
-        .order_by(ConversationQuestion.created_at.desc())
-        .first()
-    )
 
     # 1. Record incoming question
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -237,15 +235,16 @@ def submit_question(
     db.commit()
     db.refresh(question_record)
 
-    # 2. Invoke AI Service microservice boundary
-    started = time.perf_counter()
+    # 2. Invoke AI Service microservice boundary. The most recent answered question on the same
+    # policy lets it resolve follow-ups such as "what endorsement provides that coverage?".
     try:
         ai_resp = ai_client.explain(
             question=question_text,
             policy_id=conv.policy_id,
             conversation_id=conv.id,
             policy_context=policy_context,
-            previous_question=previous.question if previous else None,
+            previous_question=prior_question,
+            interpretation=interpretation,
         )
     except HTTPException:
         # Never leave the question stuck in "processing" when the AI service fails.
@@ -279,7 +278,7 @@ def submit_question(
         fallback_reason=ai_resp.fallback_reason,
         latency_ms=latency_ms,
         timings_ms=ai_resp.timings_ms,
-        retrieval=ai_resp.retrieval,
+        retrieval={**ai_resp.retrieval, "interpretation": ai_resp.interpretation or interpretation},
     )
 
     # 4. Update question status
@@ -309,15 +308,23 @@ def submit_question(
         timings_ms=ai_resp.timings_ms,
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
+        interpretation=ai_resp.interpretation or interpretation,
     )
 
 
-def _answer_portfolio_question(conv: Conversation, question_text: str, db: Session) -> QuestionAnswerResponse:
+def _answer_portfolio_question(
+    conv: Conversation,
+    question_text: str,
+    db: Session,
+    interpretation: Optional[dict],
+    started: float,
+) -> QuestionAnswerResponse:
     """Answer a customer/portfolio question from policy records and record it in the ledger."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    started = time.perf_counter()
-    result = answer_portfolio_question(question_text, db)
-    lookup_ms = int(round((time.perf_counter() - started) * 1000))
+    lookup_started = time.perf_counter()
+    # The canonical wording carries corrected spelling and exact policyholder names.
+    result = answer_portfolio_question(understood_text(question_text, interpretation), db)
+    lookup_ms = int(round((time.perf_counter() - lookup_started) * 1000))
 
     payload = portfolio_payload(result)
     evidence, citations = portfolio_evidence(result)
@@ -327,6 +334,7 @@ def _answer_portfolio_question(conv: Conversation, question_text: str, db: Sessi
         "answer_type": "portfolio",
         "portfolio": payload,
         "policies_matched": len(result.policies),
+        "interpretation": interpretation,
     }
 
     question_record = ConversationQuestion(
@@ -392,6 +400,7 @@ def _answer_portfolio_question(conv: Conversation, question_text: str, db: Sessi
         timings_ms={"retrieval": lookup_ms},
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
+        interpretation=interpretation,
     )
 
 
@@ -443,6 +452,7 @@ def get_conversation_messages(
                     is_fallback=bool(entry.is_fallback),
                     fallback_reason=entry.fallback_reason,
                     retrieval=retrieval,
+                    interpretation=retrieval.get("interpretation"),
                     timings_ms=entry.timings_ms or {},
                     latency_ms=entry.latency_ms,
                     ledger_id=entry.id,

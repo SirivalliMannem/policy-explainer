@@ -1,5 +1,5 @@
 import { ApiError } from '../services/api';
-import type { CitationItem, EvidenceItem, QuestionAnswerResponse } from '../types';
+import type { CitationItem, EvidenceItem, Interpretation, QuestionAnswerResponse } from '../types';
 
 // ==========================================
 // Labels & formatting
@@ -79,6 +79,26 @@ export function citationLine(c: CitationItem | EvidenceItem): string {
 
 export function evidenceByIndex(evidence: EvidenceItem[], index: number): EvidenceItem | undefined {
   return evidence.find((e) => e.evidence_index === index) ?? evidence[index - 1];
+}
+
+// ==========================================
+// Question understanding
+// ==========================================
+
+function comparable(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** The understood wording, when it differs from what was typed in a way worth showing. */
+export function interpretedText(interpretation?: Interpretation | null): string | null {
+  if (!interpretation) return null;
+  const understood = interpretation.method === 'llm' ? interpretation.corrected : interpretation.normalized;
+  if (!understood || comparable(understood) === comparable(interpretation.original)) return null;
+  return understood;
+}
+
+export function interpretationMethodLabel(interpretation: Interpretation): string {
+  return interpretation.method === 'llm' ? 'AI-normalised' : 'Spelling & names corrected';
 }
 
 // ==========================================
