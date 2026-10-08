@@ -1,0 +1,228 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ==================================================
+     NEW SOURCE OF TRUTH DESIGN SYSTEM (NAVY & ORANGE)
+     Source: "Policy Explainer – Animated Login.html"
+     ================================================== */
+  --bg: #F8FAFC;
+  --background: #F8FAFC;
+  --card: #FFFFFF;
+  --card-foreground: #0F2A43;
+  --ink: #0F2A43;
+  --foreground: #0F2A43;
+
+  --navy: #0F2A43;
+  --navy-dark: #0A1E30;
+  --navy-light: #16385A;
+
+  --accent: #F97316;
+  --accent-foreground: #FFFFFF;
+  --gold: #FDBA74;
+  --btn-orange: #EA580C;
+
+  --primary: #0F2A43;
+  --primary-foreground: #FFFFFF;
+  --primary-hover: #16385A;
+
+  --surface: #FFFFFF;
+  --surface-subtle: #F1F5F9;
+
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+
+  --border: #E2E8F0;
+
+  --destructive: #DC2626;
+  --destructive-foreground: #FFFFFF;
+
+  --success: #16A34A;
+  --success-foreground: #FFFFFF;
+
+  --ring: #F97316;
+  --radius: 0.625rem;
+
+  /* Backward compatibility aliases for existing views */
+  --dark-espresso: #0F2A43;
+  --dark-espresso-foreground: #FFFFFF;
+  --medium-brown: #16385A;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    color: var(--foreground);
+    background-color: var(--background);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply tracking-tight;
+    color: var(--foreground);
+  }
+}
+
+/* ==================================================
+   ANIMATIONS FROM SOURCE OF TRUTH HTML
+   ================================================== */
+@keyframes gridDrift {
+  to {
+    transform: translate(26px, 26px);
+  }
+}
+
+@keyframes glowFloat {
+  50% {
+    transform: translate(-90px, -60px);
+  }
+}
+
+@keyframes logoPulse {
+  50% {
+    box-shadow: 0 0 0 10px rgba(249, 115, 22, 0.13);
+  }
+}
+
+@keyframes slideUpLine {
+  to {
+    transform: none;
+  }
+}
+
+@keyframes textShimmer {
+  to {
+    background-position: -250%;
+  }
+}
+
+@keyframes fadeInOpacity {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes caretBlink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes pillGlow {
+  50% {
+    box-shadow: 0 0 24px rgba(249, 115, 22, 0.35);
+  }
+}
+
+@keyframes cardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Sequence Classes */
+.animate-grid-drift {
+  animation: gridDrift 20s linear infinite;
+}
+
+.animate-glow-drift {
+  animation: glowFloat 16s ease-in-out infinite;
+}
+
+.animate-logo-pulse {
+  animation: logoPulse 3.2s ease-in-out infinite;
+}
+
+.animate-hero-slide-up {
+  animation: slideUpLine 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.animate-shimmer {
+  animation: textShimmer 6s linear 1.4s infinite;
+}
+
+.animate-shimmer-hot {
+  animation: textShimmer 5s linear infinite;
+}
+
+.animate-fade-in {
+  animation: fadeInOpacity 1s forwards;
+}
+
+.animate-caret-blink {
+  animation: caretBlink 0.8s infinite;
+}
+
+.animate-pill-glow {
+  animation: pillGlow 3s ease-in-out infinite;
+}
+
+.animate-card-enter {
+  animation: cardEnter 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Continuous Animated Orange Gradient for "One conversation, connected." */
+@keyframes continuousGradient {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animated-orange-text {
+  background: linear-gradient(
+    90deg,
+    #F97316 0%,
+    #FDBA74 25%,
+    #EA580C 50%,
+    #FDBA74 75%,
+    #F97316 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  display: inline-block;
+  animation: continuousGradient 6.5s ease-in-out infinite;
+}
+
+/* Accessibility: Respect Reduced Motion Preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+  }
+  .animate-hero-slide-up {
+    transform: none !important;
+  }
+  .animate-fade-in {
+    opacity: 1 !important;
+  }
+  .animate-card-enter {
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .animated-orange-text {
+    animation: none !important;
+    background: none !important;
+    -webkit-text-fill-color: #F97316 !important;
+    color: #F97316 !important;
+  }
+}
