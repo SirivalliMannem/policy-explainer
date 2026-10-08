@@ -98,3 +98,90 @@ export async function getDashboardStats(
     params: { range: timeRange },
   });
 }
+
+// ==========================================
+// Policy Features API Endpoints
+// ==========================================
+
+export async function getPolicy(policyId: string): Promise<import('../types').PolicyDetail> {
+  return apiClient.get<import('../types').PolicyDetail>(`/api/policies/${encodeURIComponent(policyId)}`);
+}
+
+export async function getPolicyCoverages(policyId: string): Promise<import('../types').CoverageItem[]> {
+  return apiClient.get<import('../types').CoverageItem[]>(`/api/policies/${encodeURIComponent(policyId)}/coverages`);
+}
+
+export async function getPolicyForms(policyId: string): Promise<import('../types').FormItem[]> {
+  return apiClient.get<import('../types').FormItem[]>(`/api/policies/${encodeURIComponent(policyId)}/forms`);
+}
+
+export async function getPolicyClaims(policyId: string): Promise<import('../types').ClaimItem[]> {
+  return apiClient.get<import('../types').ClaimItem[]>(`/api/policies/${encodeURIComponent(policyId)}/claims`);
+}
+
+export async function getPolicyBilling(policyId: string): Promise<import('../types').BillingItem[]> {
+  return apiClient.get<import('../types').BillingItem[]>(`/api/policies/${encodeURIComponent(policyId)}/billing`);
+}
+
+// ==========================================
+// Policy Resolution API Endpoints
+// ==========================================
+
+export async function searchPolicyContext(query: string): Promise<import('../types').PolicyContextCandidate[]> {
+  return apiClient.get<import('../types').PolicyContextCandidate[]>('/api/policy-resolution/search', {
+    params: { q: query },
+  });
+}
+
+export async function resolvePolicyContext(policyId: string): Promise<import('../types').PolicyContextCandidate> {
+  return apiClient.post<import('../types').PolicyContextCandidate>('/api/policy-resolution/resolve', {
+    policy_id: policyId,
+  });
+}
+
+// ==========================================
+// Conversation & Question Endpoints
+// ==========================================
+
+export async function createConversation(policyId?: string): Promise<import('../types').ConversationResponse> {
+  return apiClient.post<import('../types').ConversationResponse>('/api/conversations', {
+    policy_id: policyId || undefined,
+  });
+}
+
+export async function getConversation(conversationId: string): Promise<import('../types').ConversationResponse> {
+  return apiClient.get<import('../types').ConversationResponse>(`/api/conversations/${encodeURIComponent(conversationId)}`);
+}
+
+export async function setConversationContext(
+  conversationId: string,
+  policyId: string
+): Promise<import('../types').ConversationResponse> {
+  return apiClient.post<import('../types').ConversationResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/context`,
+    { policy_id: policyId }
+  );
+}
+
+export async function clearConversationContext(
+  conversationId: string
+): Promise<import('../types').ConversationResponse> {
+  return apiClient.delete<import('../types').ConversationResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/context`
+  );
+}
+
+export async function submitQuestion(
+  conversationId: string,
+  question: string
+): Promise<import('../types').QuestionAnswerResponse> {
+  return apiClient.post<import('../types').QuestionAnswerResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
+    { question }
+  );
+}
+
+export async function getQuestionHistory(conversationId: string): Promise<unknown[]> {
+  return apiClient.get<unknown[]>(`/api/conversations/${encodeURIComponent(conversationId)}/questions`);
+}
+

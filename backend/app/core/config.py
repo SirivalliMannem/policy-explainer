@@ -24,8 +24,15 @@ class Settings:
     )
 
     # LLM Provider Configuration (AI Service)
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+    # Legacy compatibility aliases
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "")
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
 
     # AI Microservice Boundary

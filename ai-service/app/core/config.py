@@ -26,8 +26,21 @@ class Settings:
     )
 
     # LLM Provider Configuration
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")
+
+    # Groq Configuration (Current Provider)
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+
+    # Gemini Configuration (Second Provider - for later use)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_BASE_URL: str = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
+
+    # Legacy compatibility aliases
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "")
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
 
 
