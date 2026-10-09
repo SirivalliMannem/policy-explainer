@@ -1,5 +1,6 @@
 """Pydantic schemas for Policy Explainer dashboard analytics."""
 
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -60,3 +61,46 @@ class TopicsResponse(BaseModel):
     answers_considered: int
     forms_cited: int = 0
     topics: List[TopicItem]
+
+
+class AttentionSources(BaseModel):
+    """What was searched (no-evidence answers) or cited (answers that were flagged)."""
+    query_terms: List[str] = []
+    coverages_searched: int = 0
+    forms_searched: int = 0
+    clauses_searched: int = 0
+    citations: List[str] = []
+
+
+class AttentionItem(BaseModel):
+    """One flagged question, grouped across every time it was asked in the range."""
+    question: str
+    reason: str
+    reason_label: str
+    detail: str
+    policy_number: Optional[str] = None
+    insured: Optional[str] = None
+    line_of_business: Optional[str] = None
+    times_asked: int
+    first_asked_at: datetime
+    last_asked_at: datetime
+    latest_entry_id: str
+    sources: AttentionSources
+
+
+class AttentionCause(BaseModel):
+    reason: str
+    label: str
+    description: str
+    count: int
+    share_pct: float
+    examples: List[str] = []
+
+
+class AttentionResponse(BaseModel):
+    range: str
+    answers_total: int
+    flagged_total: int
+    questions_flagged: int
+    items: List[AttentionItem]
+    causes: List[AttentionCause]

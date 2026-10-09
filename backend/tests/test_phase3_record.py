@@ -304,3 +304,22 @@ def test_dashboard_topics_endpoint():
         assert 0 < topic["count"] <= body["answers_considered"]
         assert topic["share_pct"] == round(topic["count"] / body["answers_considered"] * 100, 1)
     assert client.get("/api/dashboard/topics", params={"range": "1y"}).status_code == 422
+
+
+def test_needs_attention_endpoint():
+    """Unanswered questions are queued, grouped by question, with their causes adding up."""
+    res = resolve("Does Margaret Chen have water backup coverage?")
+    conv = client.post("/api/conversations", json={"policy_id": res["policy"]["policy_id"]}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    question = f"Does this policy cover damage from zorblax meteors {marker}?"
+    for _ in range(2):
+        ask(conv, question)
+    res = client.get("/api/dashboard/attention", params={"range": "today"})
+    assert res.status_code == 200
+    body = res.json()
+    item = next(i for i in body["items"] if marker in i["question"])
+    assert item["reason"] == "no_evidence" and item["times_asked"] == 2
+    assert item["policy_number"] == "HO-2847-1193" and item["sources"]["clauses_searched"] > 0
+    assert sum(c["count"] for c in body["causes"]) == body["flagged_total"]
+    assert body["questions_flagged"] >= len(body["items"])
+    assert client.get("/api/dashboard/attention", params={"range": "1y"}).status_code == 422

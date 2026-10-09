@@ -1,5 +1,6 @@
 import { APP_CONFIG } from '../config';
 import type {
+  AttentionResponse,
   BillingItem,
   ClaimItem,
   ConversationMessageRecord,
@@ -19,7 +20,6 @@ import type {
   QuestionResolution,
   RecentQuestionItem,
   SourceDocument,
-  TopicsResponse,
 } from '../types';
 
 /** status 0 = the backend could not be reached; 408 = the browser gave up waiting. */
@@ -146,11 +146,11 @@ export async function getDashboardStats(
   });
 }
 
-/** Forms most often cited in recorded answers over the range, most-cited first. */
-export async function getDashboardTopics(
+/** Flagged and unanswered questions in the range, grouped by question, with their causes. */
+export async function getNeedsAttention(
   timeRange: 'today' | '7d' | '30d' = '7d'
-): Promise<TopicsResponse> {
-  return apiClient.get<TopicsResponse>('/api/dashboard/topics', {
+): Promise<AttentionResponse> {
+  return apiClient.get<AttentionResponse>('/api/dashboard/attention', {
     params: { range: timeRange },
   });
 }

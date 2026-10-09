@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.services.recent_questions import recent_questions
+from app.services.attention import needs_attention
 from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CoreForm, CorePolicy
 from app.schemas.dashboard import (
     ActivityDataPoint,
+    AttentionResponse,
     DashboardMetrics,
     DashboardResponse,
     EvidenceQualityBreakdown,
@@ -250,3 +252,13 @@ def get_most_asked_topics(
             for number, count in ranked
         ],
     )
+
+
+@router.get("/attention", response_model=AttentionResponse)
+def get_needs_attention(
+    time_range: str = Query("7d", alias="range", pattern="^(today|7d|30d)$"),
+    db: Session = Depends(get_db),
+):
+    """Flagged and unanswered questions in the range, grouped by question, plus their causes."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return needs_attention(db, _window_start(time_range, now), time_range)

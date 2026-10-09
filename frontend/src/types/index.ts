@@ -348,20 +348,48 @@ export interface SourceTarget {
 // Evidence Ledger ("The Record")
 // ==========================================
 
-export interface TopicItem {
-  form_number: string;
-  title: string;
+export type AttentionReason = 'guardrail_flagged' | 'no_evidence' | 'customer_not_found' | 'low_confidence';
+
+export interface AttentionItem {
+  question: string;
+  reason: AttentionReason;
+  reason_label: string;
+  detail: string;
+  policy_number?: string | null;
+  insured?: string | null;
   line_of_business?: string | null;
-  count: number;
-  share_pct: number;
+  times_asked: number;
+  first_asked_at: string;
+  last_asked_at: string;
+  latest_entry_id: string;
+  sources: {
+    query_terms: string[];
+    coverages_searched: number;
+    forms_searched: number;
+    clauses_searched: number;
+    citations: string[];
+  };
 }
 
-export interface TopicsResponse {
+export interface AttentionCause {
+  reason: AttentionReason;
+  label: string;
+  description: string;
+  count: number;
+  share_pct: number;
+  examples: string[];
+}
+
+export interface AttentionResponse {
   range: 'today' | '7d' | '30d';
-  answers_considered: number;
-  /** Distinct forms cited in the range, including those beyond the listed top few. */
-  forms_cited: number;
-  topics: TopicItem[];
+  /** Ledger entries in the range. */
+  answers_total: number;
+  /** Ledger entries that need a person. */
+  flagged_total: number;
+  /** Distinct flagged questions; items may be capped below this. */
+  questions_flagged: number;
+  items: AttentionItem[];
+  causes: AttentionCause[];
 }
 
 export interface LedgerSummary {

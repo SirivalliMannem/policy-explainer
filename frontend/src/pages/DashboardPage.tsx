@@ -16,7 +16,7 @@ import { DashboardResponse } from '../types';
 import { TheRecord } from '../components/dashboard/TheRecord';
 import { MetricIllustration } from '../components/dashboard/MetricIllustration';
 import { EvidenceQualityPanel } from '../components/dashboard/EvidenceQualityPanel';
-import { MostAskedTopics } from '../components/dashboard/MostAskedTopics';
+import { NeedsAttention } from '../components/dashboard/NeedsAttention';
 
 interface ActivityTooltipProps {
   active?: boolean;
@@ -461,8 +461,8 @@ export function DashboardPage() {
         <EvidenceQualityPanel quality={data?.evidence_quality} isLoading={isInitialLoading} />
       </div>
 
-      {/* 5. MOST-ASKED TOPICS */}
-      <MostAskedTopics timeRange={timeRange} refreshKey={refreshCount} />
+      {/* 5. NEEDS ATTENTION */}
+      <NeedsAttention timeRange={timeRange} refreshKey={refreshCount} />
 
       {/* 7. EVIDENCE LEDGER — THE RECORD */}
       <TheRecord />
