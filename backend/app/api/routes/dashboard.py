@@ -238,6 +238,7 @@ def get_most_asked_topics(
     return TopicsResponse(
         range=time_range,
         answers_considered=considered,
+        forms_cited=len(counts),
         topics=[
             TopicItem(
                 form_number=number,

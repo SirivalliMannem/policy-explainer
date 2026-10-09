@@ -296,6 +296,7 @@ def test_dashboard_topics_endpoint():
     assert res.status_code == 200
     body = res.json()
     assert body["range"] == "30d"
+    assert body["forms_cited"] >= len(body["topics"])
     counts = [t["count"] for t in body["topics"]]
     assert counts == sorted(counts, reverse=True)
     for topic in body["topics"]:

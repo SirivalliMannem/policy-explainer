@@ -58,4 +58,5 @@ class TopicItem(BaseModel):
 class TopicsResponse(BaseModel):
     range: str
     answers_considered: int
+    forms_cited: int = 0
     topics: List[TopicItem]

@@ -202,6 +202,54 @@
   animation: continuousGradient 6.5s ease-in-out infinite;
 }
 
+/* Same moving gradient in white, for "Clarity." and "Evidence." */
+.animated-white-text {
+  background: linear-gradient(
+    90deg,
+    #FFFFFF 0%,
+    #CBD5E1 25%,
+    #FFFFFF 50%,
+    #E2E8F0 75%,
+    #FFFFFF 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  display: inline-block;
+  animation: continuousGradient 6.5s ease-in-out infinite;
+}
+
+/* "Clarity. Evidence. Confidence.": each word rises in, holds, lifts out; staggered by delay.
+   8s loop: in by 10%, out from 70% to 80%, then hidden until the next cycle. */
+@keyframes heroValueCycle {
+  0% {
+    transform: translateY(110%);
+    opacity: 0;
+  }
+  10% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  70% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  80% {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+}
+
+.hero-value {
+  animation: heroValueCycle 8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite both;
+}
+
 /* Accessibility: Respect Reduced Motion Preference */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -218,6 +266,15 @@
   .animate-card-enter {
     transform: none !important;
     opacity: 1 !important;
+  }
+  .hero-value {
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .animated-white-text {
+    background: none !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    color: #FFFFFF !important;
   }
   .animated-orange-text {
     animation: none !important;

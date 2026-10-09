@@ -1,6 +1,7 @@
 import { Brand } from './Brand';
 import { HeroStatement } from './HeroStatement';
 import { AnimatedQuestion } from './AnimatedQuestion';
+import { HeroValues } from './HeroValues';
 import { HeroFooter } from './HeroFooter';
 
 export function LoginHero() {
@@ -35,6 +36,7 @@ export function LoginHero() {
       {/* BOTTOM: Animated Question Pill & Version Footer */}
       <div className="relative z-10 shrink-0 pt-3 space-y-4">
         <AnimatedQuestion />
+        <HeroValues />
         <HeroFooter />
       </div>
     </section>

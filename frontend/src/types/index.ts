@@ -359,6 +359,8 @@ export interface TopicItem {
 export interface TopicsResponse {
   range: 'today' | '7d' | '30d';
   answers_considered: number;
+  /** Distinct forms cited in the range, including those beyond the listed top few. */
+  forms_cited: number;
   topics: TopicItem[];
 }
 
