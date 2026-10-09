@@ -13,13 +13,10 @@ from app.api.routes.policies import router as policies_router
 from app.api.routes.policy_resolution import router as policy_resolution_router
 from app.api.routes.sources import router as sources_router
 from app.core.config import settings
-from app.db.database import Base, engine, get_db
-from app.db.migrations import ensure_ledger_columns
+from app.db.database import get_db
+from app.db.migrate import run_migrations
 
-# Ensure new conversation application tables and evidence ledger exist
-from app.models import Conversation, ConversationQuestion, EvidenceLedger  # noqa: F401
-Base.metadata.create_all(bind=engine)
-ensure_ledger_columns(engine)
+run_migrations()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
