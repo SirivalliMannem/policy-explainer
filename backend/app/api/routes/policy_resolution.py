@@ -13,8 +13,10 @@ from app.schemas.policy_resolution import (
     QuestionResolution,
     QuestionResolveRequest,
 )
+from app.models.conversation import Conversation
+from app.services.ai_client import ai_client
+from app.services.interpretation import asks_about_portfolio, previous_question, remember, understood_text
 from app.services.policy_resolver import resolve_policy_from_question
-from app.services.portfolio import is_portfolio_question
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
 
@@ -99,10 +101,27 @@ def resolve_policy_from_question_text(
     ``portfolio`` for questions that count or list policies or customers; those are answered from
     policy records and need no single-policy context.
     """
-    result = resolve_policy_from_question(payload.question, db)
+    question = payload.question.strip()
+    conversation = (
+        db.query(Conversation).filter(Conversation.id == payload.conversation_id).first()
+        if payload.conversation_id
+        else None
+    )
+    prior = previous_question(conversation.id, conversation.policy_id, db) if conversation else None
+
+    # Understand the question first: "margret chen" becomes "Margaret Chen", "ho 2847 1193" becomes
+    # "HO-2847-1193", "polcies" becomes "policies". Without the AI service it falls back to the raw text.
+    interpretation = ai_client.interpret(question, prior)
+    remember(payload.conversation_id, question, interpretation)
+    understood = understood_text(question, interpretation)
+
+    result = resolve_policy_from_question(understood, db)
+    if result.status == "no_reference" and understood != question:
+        result = resolve_policy_from_question(question, db)
     return QuestionResolution(
         status=result.status,
-        intent="portfolio" if is_portfolio_question(payload.question) else "policy",
+        intent="portfolio" if asks_about_portfolio(question, interpretation) else "policy",
+        interpretation=interpretation,
         matched_on=result.matched_on,
         reference=result.reference,
         policy=_to_candidate(result.policy) if result.policy else None,

@@ -33,7 +33,8 @@ export function AppLayout() {
   };
 
   return (
-    <div className="flex min-h-screen bg-background">
+    // Viewport-height shell: the sidebar and header stay fixed and only the page content scrolls.
+    <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar
         isCollapsed={isCollapsed}
         onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
@@ -41,7 +42,7 @@ export function AppLayout() {
         onCloseMobile={() => setIsMobileOpen(false)}
       />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header
           onOpenMobileMenu={() => setIsMobileOpen(true)}
           title={getPageTitle(location.pathname)}

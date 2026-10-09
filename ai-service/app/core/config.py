@@ -38,6 +38,10 @@ class Settings:
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GEMINI_BASE_URL: str = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
 
+    # Question understanding before retrieval: "auto" (language model with rules fallback),
+    # "rules" (deterministic only, no extra model call) or "off".
+    QUERY_INTERPRETER: str = os.getenv("QUERY_INTERPRETER", "auto")
+
     # Legacy compatibility aliases
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "")

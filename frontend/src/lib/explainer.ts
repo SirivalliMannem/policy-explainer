@@ -1,5 +1,5 @@
 import { ApiError } from '../services/api';
-import type { CitationItem, EvidenceItem, QuestionAnswerResponse } from '../types';
+import type { CitationItem, EvidenceItem, Interpretation, QuestionAnswerResponse } from '../types';
 
 // ==========================================
 // Labels & formatting
@@ -44,6 +44,19 @@ export function formatDateTime(value?: string | null): string {
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+/** "Just now", "12m ago", "3h ago", "Yesterday", or a short date. Accepts the backend's naive UTC timestamps. */
+export function relativeTime(value: string): string {
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`);
+  if (isNaN(d.getTime())) return value;
+  const minutes = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  if (hours < 48) return 'Yesterday';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 export function formatMs(ms?: number | null): string {
   if (ms === null || ms === undefined) return '—';
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
@@ -77,8 +90,86 @@ export function citationLine(c: CitationItem | EvidenceItem): string {
   return parts.filter(Boolean).join(' · ');
 }
 
+export interface CitedSource {
+  key: string;
+  citation: CitationItem;
+  evidence: EvidenceItem;
+}
+
+/**
+ * Every source an answer cites, once each. Clauses are the same source when they are the same
+ * place in the same form; schedule, form, claim, billing and policy records by their record id.
+ */
+export function distinctSources(citations: CitationItem[], evidence: EvidenceItem[]): CitedSource[] {
+  const seen = new Set<string>();
+  const sources: CitedSource[] = [];
+  for (const citation of citations) {
+    const item = citation.evidence_index
+      ? evidenceByIndex(evidence, citation.evidence_index)
+      : evidence.find((e) => e.source_id === citation.source_id);
+    if (!item) continue;
+    const key =
+      item.source_type === 'clause'
+        ? `clause|${item.form_number}|${item.edition}|${item.page}|${item.heading}`
+        : `${item.source_type}|${item.source_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push({ key, citation, evidence: item });
+  }
+  return sources;
+}
+
+/** What kind of source a citation points at. */
+export function sourceKindLabel(sourceType: string): string {
+  switch (sourceType) {
+    case 'clause':
+      return 'Policy wording';
+    case 'coverage':
+      return 'Declarations schedule';
+    case 'form':
+      return 'Attached form';
+    case 'claim':
+      return 'Claim record';
+    case 'billing':
+      return 'Billing record';
+    case 'policy':
+      return 'Policy record';
+    default:
+      return sourceType;
+  }
+}
+
+/** The human name of a cited source: clause heading, coverage name or form title. */
+export function sourceTitle(item: EvidenceItem): string {
+  if (item.source_type === 'clause' && item.heading) return item.heading;
+  return (item.title || item.heading || item.source_type)
+    .replace(/^Coverage:\s*/, '')
+    .replace(/^Form:\s*[A-Z]{2} \d{2} \d{2}\s*-\s*/, '')
+    .replace(/^Clause:\s*/, '');
+}
+
 export function evidenceByIndex(evidence: EvidenceItem[], index: number): EvidenceItem | undefined {
   return evidence.find((e) => e.evidence_index === index) ?? evidence[index - 1];
+}
+
+// ==========================================
+// Question understanding
+// ==========================================
+
+function comparable(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** The understood wording, when it differs from what was typed in a way worth showing. */
+export function interpretedText(interpretation?: Interpretation | null): string | null {
+  if (!interpretation) return null;
+  const understood = interpretation.method === 'llm' ? interpretation.corrected : interpretation.normalized;
+  if (!understood || comparable(understood) === comparable(interpretation.original)) return null;
+  return understood;
+}
+
+export function interpretationMethodLabel(interpretation: Interpretation): string {
+  return interpretation.method === 'llm' ? 'AI-normalised' : 'Spelling & names corrected';
 }
 
 // ==========================================

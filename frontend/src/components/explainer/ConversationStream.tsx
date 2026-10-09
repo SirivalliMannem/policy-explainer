@@ -5,24 +5,31 @@ import {
   ChevronRight,
   Compass,
   Database,
+  Wand2,
   ExternalLink,
   FileSearch,
+  FileText,
   Link2,
   Shield,
   ShieldCheck,
   User,
 } from 'lucide-react';
 import type { EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
-import { AnswerText, SourceChip } from './AnswerText';
+import { AnswerText } from './AnswerText';
 import { QuickPolicyActions } from './QuickPolicyActions';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
 import {
   checkLabel,
-  citationLine,
+  distinctSources,
   evidenceByIndex,
+  evidenceChipLabel,
   formatDate,
+  interpretationMethodLabel,
+  interpretedText,
   lineLabel,
   modelLabel,
+  sourceKindLabel,
+  sourceTitle,
   statusLabel,
 } from '../../lib/explainer';
 
@@ -57,6 +64,32 @@ const MATCH_LABEL: Record<string, string> = {
   surname: 'matched on surname',
 };
 
+/** "Interpreted as …" — shown only when the understood wording differs from what was typed. */
+function InterpretedAs({ result }: { result: QuestionAnswerResponse }) {
+  const interpretation = result.interpretation;
+  const understood = interpretedText(interpretation);
+  if (!interpretation || !understood) return null;
+  const details = [
+    interpretation.corrections.length
+      ? `Corrected: ${interpretation.corrections.map((c) => `${c.from} → ${c.to}`).join(', ')}`
+      : '',
+    interpretation.search_terms.length ? `Searched for: ${interpretation.search_terms.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return (
+    <div
+      className="mb-2.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 rounded-lg bg-[#F8FAFC] px-2.5 py-1.5 text-[11.5px] text-[#64748B]"
+      title={details || undefined}
+    >
+      <Wand2 className="h-3 w-3 shrink-0 self-center text-[#F97316]" />
+      <span>Interpreted as</span>
+      <span className="font-medium text-[#0F2A43]">“{understood}”</span>
+      <span className="text-[10.5px] text-[#94A3B8]">· {interpretationMethodLabel(interpretation)}</span>
+    </div>
+  );
+}
+
 function AssistantAvatar() {
   return (
     <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#0F2A43] shadow-sm">
@@ -79,8 +112,7 @@ function AnswerCard({
   onOpenTab: ConversationStreamProps['onOpenTab'];
 }) {
   const insufficient = result.status === 'insufficient_evidence';
-  const primary = result.citations[0];
-  const primaryEvidence = primary?.evidence_index ? evidenceByIndex(result.evidence, primary.evidence_index) : undefined;
+  const sources = distinctSources(result.citations, result.evidence);
   const citedCoverage = result.citations
     .map((c) => (c.evidence_index ? evidenceByIndex(result.evidence, c.evidence_index) : undefined))
     .find((e) => e?.source_type === 'coverage');
@@ -117,6 +149,8 @@ function AnswerCard({
             </span>
           )}
         </div>
+
+        <InterpretedAs result={result} />
 
         {result.outcome === 'needs_review' && (
           <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -160,25 +194,36 @@ function AnswerCard({
           <AnswerText text={result.answer} evidence={result.evidence} onOpenSource={onOpenSource} />
         )}
 
-        {!insufficient && primary && (
-          <div className="mt-3.5 space-y-2.5 border-t border-slate-100 pt-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {primaryEvidence && <SourceChip item={primaryEvidence} onOpen={onOpenSource} size="md" />}
-              <span className="text-[11.5px] text-[#64748B]">{citationLine(primary)}</span>
-              {result.citations.length > 1 && (
-                <span className="text-[11px] text-[#94A3B8]">+{result.citations.length - 1} more verified</span>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {primaryEvidence && (
-                <button
-                  type="button"
-                  onClick={() => onOpenSource(primaryEvidence)}
-                  className="inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] px-2.5 py-1 text-[11.5px] font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] cursor-pointer"
-                >
-                  View source <ExternalLink className="h-3 w-3" />
-                </button>
-              )}
+        {!insufficient && sources.length > 0 && (
+          <div className="mt-3.5 border-t border-slate-100 pt-3">
+            <span className="mb-1.5 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">
+              {sources.length === 1 ? 'Source' : `Sources (${sources.length})`}
+            </span>
+            <ul className="space-y-1">
+              {sources.map(({ key, evidence }) => (
+                <li key={key}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenSource(evidence)}
+                    title="Open this source"
+                    className="group flex w-full items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1 text-left transition-colors hover:border-[#FDBA74] hover:bg-[#FFF7ED] cursor-pointer"
+                  >
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#FDBA74] bg-[#FFF7ED] px-1.5 py-px font-mono text-[10.5px] font-semibold text-[#C2410C] group-hover:bg-[#F97316] group-hover:text-white">
+                      <FileText className="h-2.5 w-2.5" />
+                      {evidenceChipLabel(evidence)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#0F2A43]">
+                      {sourceTitle(evidence)}
+                    </span>
+                    <span className="shrink-0 text-[10.5px] text-[#94A3B8]">
+                      {sourceKindLabel(evidence.source_type)}
+                      {evidence.edition ? ` · Ed. ${evidence.edition}` : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               {citedCoverage && (
                 <button
                   type="button"
@@ -268,6 +313,7 @@ function PortfolioCard({
           </span>
         </div>
 
+        <InterpretedAs result={result} />
         <p className="text-[13.5px] leading-relaxed text-[#1E293B]">{result.answer}</p>
 
         {policies.length > 0 && (

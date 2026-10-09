@@ -7,15 +7,18 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.services.recent_questions import recent_questions
 from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
-from app.models.policy import CoreAccount, CorePolicy
+from app.models.policy import CoreAccount, CoreForm, CorePolicy
 from app.schemas.dashboard import (
     ActivityDataPoint,
     DashboardMetrics,
     DashboardResponse,
     EvidenceQualityBreakdown,
     RecentQuestionItem,
+    TopicItem,
+    TopicsResponse,
 )
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -178,51 +181,71 @@ def get_dashboard_stats(
     )
 
     # 4. Recent Policy Questions (Most recent 10)
-    raw_recent = (
-        db.query(
-            ConversationQuestion,
-            CorePolicy,
-            CoreAccount,
-            EvidenceLedger.confidence,
-            EvidenceLedger.retrieval,
-        )
-        .outerjoin(CorePolicy, CorePolicy.id == ConversationQuestion.policy_id)
-        .outerjoin(CoreAccount, CoreAccount.id == CorePolicy.account_id)
-        .outerjoin(EvidenceLedger, EvidenceLedger.question_id == ConversationQuestion.id)
-        .order_by(ConversationQuestion.created_at.desc())
-        .limit(10)
-        .all()
-    )
-
-    recent_items: list[RecentQuestionItem] = []
-    for cq, policy, account, conf, retrieval in raw_recent:
-        cust_name = account.name if (account and account.name) else "Context pending"
-        pol_num = policy.policy_number if (policy and policy.policy_number) else "Context pending"
-        if (retrieval or {}).get("answer_type") == "portfolio":
-            # Customer / portfolio answers are about many policies, not a pending context.
-            customers = ((retrieval or {}).get("portfolio") or {}).get("customers") or []
-            cust_name = ", ".join(customers) or "All policyholders"
-            pol_num = "Portfolio"
-        final_conf = conf if conf else ("none" if cq.status == "insufficient_evidence" else None)
-        
-        recent_items.append(
-            RecentQuestionItem(
-                question_id=cq.id,
-                conversation_id=cq.conversation_id,
-                question=cq.question,
-                status=cq.status,
-                confidence=final_conf,
-                customer_name=cust_name,
-                customer_id=account.id if account else None,
-                policy_number=pol_num,
-                policy_id=policy.id if policy else None,
-                created_at=cq.created_at.isoformat(),
-            )
-        )
+    recent_items = recent_questions(db, limit=10)
 
     return DashboardResponse(
         metrics=metrics,
         activity=activity_points,
         evidence_quality=evidence_quality,
         recent_questions=recent_items,
+    )
+
+
+def _window_start(time_range: str, now: datetime) -> datetime:
+    """Same windows as the activity chart: the last 24 hours, or N whole days including today."""
+    if time_range == "today":
+        return now - timedelta(hours=24)
+    days = 7 if time_range == "7d" else 30
+    return (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+@router.get("/topics", response_model=TopicsResponse)
+def get_most_asked_topics(
+    time_range: str = Query("7d", alias="range", pattern="^(today|7d|30d)$"),
+    limit: int = Query(6, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """The policy forms most often cited in answers, each answer counted once per form.
+
+    Portfolio answers (policy-record lookups) cite no form and are not counted.
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    entries = (
+        db.query(EvidenceLedger.citations, EvidenceLedger.retrieval)
+        .filter(EvidenceLedger.created_at >= _window_start(time_range, now))
+        .all()
+    )
+
+    counts: dict[str, int] = {}
+    considered = 0
+    for citations, retrieval in entries:
+        if (retrieval or {}).get("answer_type") == "portfolio":
+            continue
+        forms = {c.get("form_number") for c in (citations or []) if c.get("form_number")}
+        if not forms:
+            continue
+        considered += 1
+        for form in forms:
+            counts[form] = counts.get(form, 0) + 1
+
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+    titles = {
+        number: (title, line)
+        for number, title, line in db.query(CoreForm.form_number, CoreForm.title, CoreForm.line_of_business)
+        .filter(CoreForm.form_number.in_([n for n, _ in ranked]))
+        .all()
+    }
+    return TopicsResponse(
+        range=time_range,
+        answers_considered=considered,
+        topics=[
+            TopicItem(
+                form_number=number,
+                title=titles.get(number, (number, None))[0],
+                line_of_business=titles.get(number, (None, None))[1],
+                count=count,
+                share_pct=round(count / considered * 100, 1) if considered else 0.0,
+            )
+            for number, count in ranked
+        ],
     )

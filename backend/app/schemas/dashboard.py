@@ -45,3 +45,17 @@ class DashboardResponse(BaseModel):
     activity: List[ActivityDataPoint]
     evidence_quality: EvidenceQualityBreakdown
     recent_questions: List[RecentQuestionItem]
+
+
+class TopicItem(BaseModel):
+    form_number: str
+    title: str
+    line_of_business: Optional[str] = None
+    count: int
+    share_pct: float
+
+
+class TopicsResponse(BaseModel):
+    range: str
+    answers_considered: int
+    topics: List[TopicItem]

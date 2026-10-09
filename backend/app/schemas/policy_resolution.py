@@ -1,7 +1,7 @@
 """Schemas for policy resolution candidate search and resolution."""
 
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -31,6 +31,9 @@ class QuestionResolveRequest(BaseModel):
     """Request payload to resolve the policy a free-text question refers to."""
 
     question: str
+    # When given, the question's understanding is cached for that conversation's next submission,
+    # and the conversation's previous question helps resolve follow-ups.
+    conversation_id: Optional[str] = None
 
 
 class QuestionResolution(BaseModel):
@@ -44,3 +47,5 @@ class QuestionResolution(BaseModel):
     policy: Optional[PolicyContextCandidate] = None
     candidates: list[PolicyContextCandidate] = []
     message: str = ""
+    # How the question was understood (corrected wording, names, policy numbers, search terms).
+    interpretation: Optional[dict[str, Any]] = None

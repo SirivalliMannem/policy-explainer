@@ -1,12 +1,13 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ChevronDown, ChevronUp, Cpu, RefreshCw, Send } from 'lucide-react';
-import type { EvidenceItem, PolicyContextCandidate, QuestionResolution, SourceTarget } from '../types';
+import type { EvidenceItem, PolicyContextCandidate, QuestionResolution, RecentQuestionItem, SourceTarget } from '../types';
 import {
   clearConversationContext,
   createConversation,
   getConversation,
   getConversationMessages,
+  getRecentQuestions,
   resolvePolicyContext,
   resolvePolicyFromQuestion,
   setConversationContext,
@@ -15,7 +16,8 @@ import {
 import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner';
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
 import { ChatMessage, ConversationStream } from '../components/explainer/ConversationStream';
-import { AIProcessSidebar } from '../components/explainer/AIProcessSidebar';
+import { ExplainerRail, RailTab } from '../components/explainer/ExplainerRail';
+import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
 import {
   FriendlyError,
@@ -24,6 +26,7 @@ import {
   StageKey,
   describeError,
   freshStages,
+  interpretedText,
   stagesFromResult,
 } from '../lib/explainer';
 
@@ -31,6 +34,7 @@ const MATCH_LABEL: Record<string, string> = {
   policy_number: 'policy number',
   customer_name: 'policyholder name',
   surname: 'surname',
+  first_name: 'first name',
 };
 
 // Visual pacing for stages 2–4 while the single synchronous request runs. The real response
@@ -87,6 +91,22 @@ export function ExplainerPage() {
   const [highlight, setHighlight] = useState<{ type: 'coverage' | 'form'; id: string } | null>(null);
   const [sourceTarget, setSourceTarget] = useState<SourceTarget | null>(null);
   const [showMobileProcess, setShowMobileProcess] = useState(false);
+  const [railTab, setRailTab] = useState<RailTab>('process');
+  const [recent, setRecent] = useState<RecentQuestionItem[] | null>(null);
+  const [recentError, setRecentError] = useState<string | null>(null);
+  const [recentLoading, setRecentLoading] = useState(false);
+
+  const loadRecent = useCallback(async () => {
+    setRecentLoading(true);
+    try {
+      setRecent(await getRecentQuestions());
+      setRecentError(null);
+    } catch (err) {
+      setRecentError(describeError(err).message);
+    } finally {
+      setRecentLoading(false);
+    }
+  }, []);
 
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
@@ -170,6 +190,45 @@ export function ExplainerPage() {
       failProcess(friendly.title);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
     }
+    loadRecent();
+  };
+
+  /** Clear the conversation view before reopening another conversation or starting a new one. */
+  const resetView = () => {
+    clearTimers();
+    setMessages([]);
+    setActivePolicy(null);
+    pendingQuestionRef.current = null;
+    setFeatureTab(null);
+    setHighlight(null);
+    setSourceTarget(null);
+    setProcess(IDLE_PROCESS);
+  };
+
+  const openConversation = async (convId: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    resetView();
+    try {
+      await loadConversation(convId);
+    } catch (err) {
+      const friendly = describeError(err);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const newConversation = async () => {
+    if (busyRef.current) return;
+    resetView();
+    setConversationId(null);
+    try {
+      await ensureConversation();
+    } catch (err) {
+      setInitError(describeError(err));
+    }
+    setRailTab('process');
   };
 
   const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string) => {
@@ -188,6 +247,7 @@ export function ExplainerPage() {
     setIsWorking(true);
     setInput('');
     push({ kind: 'user', id: nextId('user'), time: nowTime(), text });
+    setRailTab('process');
     setProcess({ phase: 'running', result: null, stages: { ...freshStages(), context: { status: 'processing' } } });
 
     try {
@@ -209,7 +269,10 @@ export function ExplainerPage() {
         // A reply to a clarification is resolved together with the question it answers, so the
         // question's wording ("water backup", "my car") can narrow a policyholder's policies.
         const pending = pendingQuestionRef.current;
-        resolution = await resolvePolicyFromQuestion(pending && looksLikeReply(text) ? `${text} — ${pending}` : text);
+        resolution = await resolvePolicyFromQuestion(
+          pending && looksLikeReply(text) ? `${text} — ${pending}` : text,
+          convId
+        );
       } catch (err) {
         const friendly = describeError(err);
         failProcess(friendly.title);
@@ -219,11 +282,14 @@ export function ExplainerPage() {
         setIsResolving(false);
       }
 
+      const understood = interpretedText(resolution.interpretation);
+      const understoodNote = understood ? ` · understood as “${understood}”` : '';
+
       // Customer / portfolio questions are answered from policy records. They need no single-policy
       // context, and they neither change the active context nor ask which policy to check.
       if (resolution.intent === 'portfolio') {
         const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
-        await runPipeline(text, convId, `${subject} — answered from policy records`, true);
+        await runPipeline(text, convId, `${subject} — answered from policy records${understoodNote}`, true);
         return;
       }
 
@@ -261,10 +327,10 @@ export function ExplainerPage() {
         }
         contextDetail = `${resolved.customer_name} · ${resolved.policy_number} — matched on ${
           MATCH_LABEL[resolution.matched_on || ''] || 'reference'
-        }`;
+        }${understoodNote}`;
       } else if (resolution.status === 'ambiguous') {
         if (current && resolution.candidates.some((c) => c.policy_id === current.policy_id)) {
-          contextDetail = `Using active context · ${current.policy_number}`;
+          contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
         } else {
           pendingQuestionRef.current = pendingQuestionRef.current ?? text;
           askForPolicy(
@@ -283,7 +349,7 @@ export function ExplainerPage() {
         );
         return;
       } else if (current) {
-        contextDetail = `Using active context · ${current.policy_number}`;
+        contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
       } else {
         pendingQuestionRef.current = text;
         askForPolicy('Which policy or policyholder should I check?', [], 'No policy named and no active context');
@@ -420,6 +486,7 @@ export function ExplainerPage() {
     if (initRef.current) return; // StrictMode mounts twice in development; start one session.
     initRef.current = true;
     startSession();
+    loadRecent();
     return clearTimers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -516,21 +583,31 @@ export function ExplainerPage() {
             </button>
             {showMobileProcess && (
               <div className="max-h-[45vh] overflow-y-auto px-3 pb-3">
-                <AIProcessSidebar process={process} policyNumber={activePolicy?.policy_number} />
+                <ExplainerRail
+                  tab={railTab}
+                  onTabChange={setRailTab}
+                  process={process}
+                  policyNumber={activePolicy?.policy_number}
+                  recent={recent}
+                  recentError={recentError}
+                  recentLoading={recentLoading}
+                  conversationId={conversationId}
+                  busy={isWorking}
+                  onOpenConversation={openConversation}
+                  onNewConversation={newConversation}
+                  onRefreshRecent={loadRecent}
+                />
               </div>
             )}
           </div>
 
           <form onSubmit={onSubmit} className="flex items-center gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] p-3 sm:p-4">
-            <input
-              ref={inputRef}
-              type="text"
+            <QuestionInput
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
+              onChange={setInput}
               disabled={isWorking}
-              aria-label="Policy question"
-              className="min-w-0 flex-1 rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[13.5px] text-[#0F2A43] placeholder-[#94A3B8] transition-all focus:border-[#F97316] focus:outline-none focus:ring-2 focus:ring-[#F97316]/20 disabled:opacity-60"
+              placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
+              inputRef={inputRef}
             />
             <button
               type="submit"
@@ -544,7 +621,20 @@ export function ExplainerPage() {
         </section>
 
         <div className="hidden shrink-0 overflow-y-auto lg:block">
-          <AIProcessSidebar process={process} policyNumber={activePolicy?.policy_number} />
+          <ExplainerRail
+                  tab={railTab}
+                  onTabChange={setRailTab}
+                  process={process}
+                  policyNumber={activePolicy?.policy_number}
+                  recent={recent}
+                  recentError={recentError}
+                  recentLoading={recentLoading}
+                  conversationId={conversationId}
+                  busy={isWorking}
+                  onOpenConversation={openConversation}
+                  onNewConversation={newConversation}
+                  onRefreshRecent={loadRecent}
+                />
         </div>
       </div>
 

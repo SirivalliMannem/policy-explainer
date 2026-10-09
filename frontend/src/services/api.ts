@@ -17,7 +17,9 @@ import type {
   PolicyDetail,
   QuestionAnswerResponse,
   QuestionResolution,
+  RecentQuestionItem,
   SourceDocument,
+  TopicsResponse,
 } from '../types';
 
 /** status 0 = the backend could not be reached; 408 = the browser gave up waiting. */
@@ -144,6 +146,15 @@ export async function getDashboardStats(
   });
 }
 
+/** Forms most often cited in recorded answers over the range, most-cited first. */
+export async function getDashboardTopics(
+  timeRange: 'today' | '7d' | '30d' = '7d'
+): Promise<TopicsResponse> {
+  return apiClient.get<TopicsResponse>('/api/dashboard/topics', {
+    params: { range: timeRange },
+  });
+}
+
 // ==========================================
 // Policy Features API Endpoints
 // ==========================================
@@ -185,8 +196,16 @@ export async function resolvePolicyContext(policyId: string): Promise<PolicyCont
 }
 
 /** Ask the backend which policy, if any, a free-text question refers to. */
-export async function resolvePolicyFromQuestion(question: string): Promise<QuestionResolution> {
-  return apiClient.post<QuestionResolution>('/api/policy-resolution/from-question', { question });
+export async function resolvePolicyFromQuestion(
+  question: string,
+  conversationId?: string | null
+): Promise<QuestionResolution> {
+  return apiClient.post<QuestionResolution>(
+    '/api/policy-resolution/from-question',
+    { question, conversation_id: conversationId ?? undefined },
+    // Includes one language-model call to understand the question.
+    { timeoutMs: 30_000 }
+  );
 }
 
 // ==========================================
@@ -230,6 +249,11 @@ export async function submitQuestion(
     { question },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
+}
+
+/** Most recently asked questions across conversations, newest first. */
+export async function getRecentQuestions(limit = 30): Promise<RecentQuestionItem[]> {
+  return apiClient.get<RecentQuestionItem[]>('/api/conversations/recent', { params: { limit } });
 }
 
 export async function getConversationMessages(conversationId: string): Promise<ConversationMessageRecord[]> {

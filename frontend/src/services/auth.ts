@@ -18,6 +18,39 @@ export interface AuthResult {
   error?: string;
 }
 
+const SESSION_KEY = 'policy-explainer.session';
+
+export interface Session {
+  user: AuthUser;
+  token: string;
+}
+
+/** Remember the signed-in employee for this browser tab. */
+export function saveSession(session: Session): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Storage can be unavailable (private mode, blocked site data); the app still works for this page view.
+  }
+}
+
+export function getSession(): Session | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as Session) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearSession(): void {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Nothing stored, nothing to clear.
+  }
+}
+
 /**
  * Authentication service boundary.
  * Currently provides an isolated development simulation.

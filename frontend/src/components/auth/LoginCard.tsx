@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, AlertCircle } from 'lucide-react';
-import { authenticateEmployee } from '../../services/auth';
+import { authenticateEmployee, saveSession } from '../../services/auth';
 
 export function LoginCard() {
   const navigate = useNavigate();
@@ -33,8 +33,9 @@ export function LoginCard() {
         password,
       });
 
-      if (result.success) {
-        navigate('/app/dashboard');
+      if (result.success && result.user) {
+        saveSession({ user: result.user, token: result.token ?? '' });
+        navigate('/app/dashboard', { replace: true });
       } else {
         setError(result.error || 'Unable to sign in. Please verify your credentials.');
       }

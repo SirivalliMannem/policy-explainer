@@ -17,7 +17,8 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 from app.db.database import engine
-from app.db.migrations import ensure_ledger_columns
+from app.db.migrate import run_migrations
+from sqlalchemy import inspect, text
 from app.main import app
 from app.services.ai_client import ai_client
 
@@ -156,8 +157,14 @@ def test_ai_service_down_marks_question_failed(monkeypatch):
     assert history[-1]["status"] == "failed"  # never left stuck in "processing"
 
 
-def test_ledger_migration_is_idempotent():
-    assert ensure_ledger_columns(engine) == []
+def test_database_is_at_latest_migration_and_upgrade_is_idempotent():
+    """Alembic has the database at head, the ledger has its audit columns, and re-running is a no-op."""
+    run_migrations()  # already applied at app start; must be safe to run again
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001_baseline"
+    columns = {c["name"]: c for c in inspect(engine).get_columns("evidence_ledger")}
+    assert {"outcome", "guardrail_checks", "model_used", "latency_ms", "retrieval"} <= set(columns)
+    assert columns["policy_id"]["nullable"]  # portfolio answers have no single policy
 
 
 # ---- Customer / portfolio questions (answered from policy records) ---------------------------
@@ -232,3 +239,67 @@ def test_portfolio_answer_is_recorded_and_restorable():
     assert restored["answer_type"] == "portfolio" and restored["portfolio"]["policies"][0]["policy_number"] == "HO-3310-8821"
     policy_src = client.get(f"/api/sources/policy/{d['evidence'][0]['source_id']}").json()
     assert policy_src["policy_number"] == "HO-3310-8821"
+
+
+# ---- Loosely written questions (spelling, names, slang) --------------------------------------
+# These hold whether the AI service understands the question with the language model or with its
+# rules fallback, because the rules layer alone handles misspelled names and words.
+
+def test_misspelled_policyholder_resolves():
+    d = resolve("does margret chen have water backup")
+    assert d["status"] == "resolved" and d["policy"]["policy_number"] == "HO-2847-1193"
+    assert "Margaret Chen" in d["interpretation"]["policyholders"]
+
+
+def test_spaced_policy_number_resolves():
+    d = resolve("whats the deductable for ho 2847 1193")
+    assert d["status"] == "resolved" and d["policy"]["policy_number"] == "HO-2847-1193"
+
+
+def test_misspelled_portfolio_questions_are_recognised():
+    assert resolve("hw many polcies does margret chen have")["intent"] == "portfolio"
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    d = ask(conv, "what r all the policys we got")
+    assert d["answer_type"] == "portfolio" and len(d["portfolio"]["policies"]) == 9
+    count = ask(conv, "hw many polcies does margret chen have")
+    assert {p["policy_number"] for p in count["portfolio"]["policies"]} == {"HO-2847-1193", "PA-6120-7742"}
+
+
+def test_interpretation_is_returned_and_recorded():
+    res = resolve("does margret chen have water backup")
+    conv = client.post("/api/conversations", json={"policy_id": res["policy"]["policy_id"]}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    d = ask(conv, f"whats the deductable {marker}")
+    assert d["interpretation"] and d["interpretation"]["original"] == f"whats the deductable {marker}"
+    assert "deductible" in d["interpretation"]["normalized"].lower()
+    detail = client.get(f"/api/ledger/{d['ledger_id']}").json()
+    assert detail["retrieval"]["interpretation"]["original"] == d["interpretation"]["original"]
+
+
+def test_recent_questions_endpoint():
+    """Newest first, grouped data the Explainer's Recent tab needs; 'recent' is not read as a conversation id."""
+    conv = client.post("/api/conversations", json={}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    ask(conv, f"How many policies does Priya Raghavan have? {marker}")
+    recent = client.get("/api/conversations/recent", params={"limit": 5})
+    assert recent.status_code == 200
+    newest = recent.json()[0]
+    assert newest["conversation_id"] == conv and marker in newest["question"]
+    assert newest["customer_name"] == "Priya Raghavan" and newest["policy_number"] == "Portfolio"
+    assert client.get(f"/api/conversations/{conv}").status_code == 200
+    assert client.get("/api/conversations/recent", params={"limit": 0}).status_code == 422
+
+
+def test_dashboard_topics_endpoint():
+    """Most-cited forms, most first; each answer counts once per form; portfolio answers excluded."""
+    res = client.get("/api/dashboard/topics", params={"range": "30d"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["range"] == "30d"
+    counts = [t["count"] for t in body["topics"]]
+    assert counts == sorted(counts, reverse=True)
+    for topic in body["topics"]:
+        assert topic["form_number"] and topic["title"]
+        assert 0 < topic["count"] <= body["answers_considered"]
+        assert topic["share_pct"] == round(topic["count"] / body["answers_considered"] * 100, 1)
+    assert client.get("/api/dashboard/topics", params={"range": "1y"}).status_code == 422

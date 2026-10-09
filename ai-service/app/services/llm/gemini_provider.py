@@ -45,6 +45,28 @@ class GeminiProvider(BaseLLMProvider):
         evidence: list[EvidenceItem],
     ) -> Optional[LLMGenerationResult]:
         """Invoke Gemini generateContent endpoint with grounded prompt."""
+        user_content = f"{grounding_context}\n\n{USER_INSTRUCTION.format(question=question)}"
+        content = self.complete(SYSTEM_PROMPT, user_content, max_tokens=600)
+        return LLMGenerationResult(
+            answer=content,
+            raw_response=content,
+            citations=extract_citations_from_evidence(evidence),
+            confidence="high",
+            model_used=self.model,
+            is_fallback=False,
+            provider=self.name,
+        )
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 600,
+        json_mode: bool = False,
+        timeout_seconds: Optional[float] = None,
+        retry_rate_limit: bool = True,  # Gemini calls are never retried; accepted for interface parity
+    ) -> str:
+        """Run one generateContent call and return the text. Raises LLMProviderError on failure."""
         self.validate_configuration()
 
         # Endpoint uses query parameter key - never log the full URL
@@ -52,54 +74,28 @@ class GeminiProvider(BaseLLMProvider):
         headers = {
             "Content-Type": "application/json",
         }
-
-        user_content = f"{grounding_context}\n\n{USER_INSTRUCTION.format(question=question)}"
-
+        generation_config = {"temperature": 0.1, "maxOutputTokens": max_tokens}
+        if json_mode:
+            generation_config["responseMimeType"] = "application/json"
         payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": f"{SYSTEM_PROMPT}\n\n{user_content}"}],
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 600,
-            },
+            "contents": [{"role": "user", "parts": [{"text": f"{system}\n\n{user}"}]}],
+            "generationConfig": generation_config,
         }
 
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(timeout=timeout_seconds or self.timeout_seconds) as client:
                 resp = client.post(url, headers=headers, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts and "text" in parts[0]:
-                            content = parts[0]["text"].strip()
-                            if content:
-                                citations = extract_citations_from_evidence(evidence)
-                                return LLMGenerationResult(
-                                    answer=content,
-                                    raw_response=content,
-                                    citations=citations,
-                                    confidence="high",
-                                    model_used=self.model,
-                                    is_fallback=False,
-                                    provider=self.name,
-                                )
-                    raise LLMProviderError("Gemini returned an empty answer")
-                else:
+                if resp.status_code != 200:
                     # Log failure without leaking the API key in the URL
-                    logger.warning(
-                        "Gemini API returned HTTP %s (model=%s)",
-                        resp.status_code,
-                        self.model,
-                    )
+                    logger.warning("Gemini API returned HTTP %s (model=%s)", resp.status_code, self.model)
                     raise LLMProviderError(f"Gemini API error: HTTP {resp.status_code}")
+                candidates = resp.json().get("candidates", [])
+                parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+                content = (parts[0].get("text") if parts else "") or ""
+                content = content.strip()
+                if not content:
+                    raise LLMProviderError("Gemini returned an empty answer")
+                return content
         except httpx.RequestError as exc:
             logger.warning("Gemini network request failed: %s", type(exc).__name__)
             raise LLMProviderError(f"Gemini network error: {type(exc).__name__}") from exc
-
-        return None

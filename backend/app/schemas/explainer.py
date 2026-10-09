@@ -106,6 +106,8 @@ class QuestionAnswerResponse(BaseModel):
     timings_ms: dict[str, int] = {}
     latency_ms: Optional[int] = None
     ledger_id: Optional[str] = None
+    # How the question was understood: corrected wording, names, policy numbers, search terms.
+    interpretation: Optional[dict[str, Any]] = None
 
 
 class ConversationMessage(BaseModel):
@@ -141,3 +143,4 @@ class AIServiceResponse(BaseModel):
     fallback_reason: Optional[str] = None
     retrieval: dict[str, Any] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
+    interpretation: Optional[dict[str, Any]] = None

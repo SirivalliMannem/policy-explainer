@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { authenticateEmployee } from '../../services/auth';
+import { authenticateEmployee, saveSession } from '../../services/auth';
 
 export function LoginForm() {
   const navigate = useNavigate();
@@ -52,9 +52,9 @@ export function LoginForm() {
         rememberMe,
       });
 
-      if (result.success) {
-        // Temporary development navigation to application dashboard
-        navigate('/app/dashboard');
+      if (result.success && result.user) {
+        saveSession({ user: result.user, token: result.token ?? '' });
+        navigate('/app/dashboard', { replace: true });
       } else {
         setErrors({
           general: result.error || 'Unable to sign in. Please check your credentials and try again.',
