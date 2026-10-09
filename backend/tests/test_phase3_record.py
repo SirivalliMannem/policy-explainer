@@ -17,7 +17,8 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 from app.db.database import engine
-from app.db.migrations import ensure_ledger_columns
+from app.db.migrate import run_migrations
+from sqlalchemy import inspect, text
 from app.main import app
 from app.services.ai_client import ai_client
 
@@ -156,8 +157,14 @@ def test_ai_service_down_marks_question_failed(monkeypatch):
     assert history[-1]["status"] == "failed"  # never left stuck in "processing"
 
 
-def test_ledger_migration_is_idempotent():
-    assert ensure_ledger_columns(engine) == []
+def test_database_is_at_latest_migration_and_upgrade_is_idempotent():
+    """Alembic has the database at head, the ledger has its audit columns, and re-running is a no-op."""
+    run_migrations()  # already applied at app start; must be safe to run again
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001_baseline"
+    columns = {c["name"]: c for c in inspect(engine).get_columns("evidence_ledger")}
+    assert {"outcome", "guardrail_checks", "model_used", "latency_ms", "retrieval"} <= set(columns)
+    assert columns["policy_id"]["nullable"]  # portfolio answers have no single policy
 
 
 # ---- Customer / portfolio questions (answered from policy records) ---------------------------

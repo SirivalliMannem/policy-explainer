@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Upper bound for one explain call: retrieval + an LLM call (provider timeout 20s) + validation.
 AI_SERVICE_TIMEOUT_SECONDS = 45.0
-# Interpretation is one short model call (12s provider timeout) with a rules fallback.
-INTERPRET_TIMEOUT_SECONDS = 20.0
+# Interpretation is one short model call (8s provider timeout, no rate-limit retry) with a rules fallback.
+INTERPRET_TIMEOUT_SECONDS = 15.0
 
 
 class AIServiceClient:

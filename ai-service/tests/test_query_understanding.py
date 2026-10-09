@@ -166,3 +166,14 @@ def test_previous_question_only_given_to_model_for_references(monkeypatch, db):
         QueryInterpreter.interpret("which endorsement provides that", db, previous_question="Does she have water backup?", mode="auto")
         sent = post.call_args.kwargs["json"]["messages"][1]["content"]
         assert "Previous question: Does she have water backup?" in sent
+
+
+def test_interpretation_does_not_wait_out_rate_limits(monkeypatch, db):
+    """A rate-limited model must not delay the employee: one call, then the rules answer."""
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_mock")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    limited = MagicMock(status_code=429, headers={"retry-after": "2"})
+    with patch("httpx.Client.post", return_value=limited) as post, patch("time.sleep") as slept:
+        r = QueryInterpreter.interpret("whats the deductable", db, mode="auto")
+    assert post.call_count == 1 and not slept.called
+    assert r.method == "rules" and r.normalized == "what is the deductible"

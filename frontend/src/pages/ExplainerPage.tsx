@@ -17,6 +17,7 @@ import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
 import { ChatMessage, ConversationStream } from '../components/explainer/ConversationStream';
 import { ExplainerRail, RailTab } from '../components/explainer/ExplainerRail';
+import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
 import {
   FriendlyError,
@@ -601,15 +602,12 @@ export function ExplainerPage() {
           </div>
 
           <form onSubmit={onSubmit} className="flex items-center gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] p-3 sm:p-4">
-            <input
-              ref={inputRef}
-              type="text"
+            <QuestionInput
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
+              onChange={setInput}
               disabled={isWorking}
-              aria-label="Policy question"
-              className="min-w-0 flex-1 rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[13.5px] text-[#0F2A43] placeholder-[#94A3B8] transition-all focus:border-[#F97316] focus:outline-none focus:ring-2 focus:ring-[#F97316]/20 disabled:opacity-60"
+              placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
+              inputRef={inputRef}
             />
             <button
               type="submit"

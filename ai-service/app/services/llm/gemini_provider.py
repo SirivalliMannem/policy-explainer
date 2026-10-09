@@ -64,6 +64,7 @@ class GeminiProvider(BaseLLMProvider):
         max_tokens: int = 600,
         json_mode: bool = False,
         timeout_seconds: Optional[float] = None,
+        retry_rate_limit: bool = True,  # Gemini calls are never retried; accepted for interface parity
     ) -> str:
         """Run one generateContent call and return the text. Raises LLMProviderError on failure."""
         self.validate_configuration()

@@ -68,8 +68,13 @@ class GroqProvider(BaseLLMProvider):
         max_tokens: int = 1500,
         json_mode: bool = False,
         timeout_seconds: Optional[float] = None,
+        retry_rate_limit: bool = True,
     ) -> str:
-        """Run one chat completion and return the visible text. Raises LLMProviderError on failure."""
+        """Run one chat completion and return the visible text. Raises LLMProviderError on failure.
+
+        ``retry_rate_limit=False`` fails fast on HTTP 429 for callers that have their own fallback
+        and must answer quickly (question understanding).
+        """
         self.validate_configuration()
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
@@ -97,7 +102,7 @@ class GroqProvider(BaseLLMProvider):
             with httpx.Client(timeout=timeout_seconds or self.timeout_seconds) as client:
                 resp = client.post(url, headers=headers, json=payload)
                 # A short rate-limit window is worth one wait; anything longer falls back.
-                if resp.status_code == 429:
+                if resp.status_code == 429 and retry_rate_limit:
                     try:
                         wait = float(resp.headers.get("retry-after", ""))
                     except ValueError:

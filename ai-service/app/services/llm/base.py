@@ -198,6 +198,7 @@ class BaseLLMProvider(ABC):
         max_tokens: int = 1500,
         json_mode: bool = False,
         timeout_seconds: Optional[float] = None,
+        retry_rate_limit: bool = True,
     ) -> str:
         """Run one completion and return its text; raise LLMProviderError on any failure."""
         raise NotImplementedError
