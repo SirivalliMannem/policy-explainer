@@ -1,5 +1,4 @@
-import { useState, useEffect, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -8,30 +7,16 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip as RechartsTooltip,
-  PieChart,
-  Pie,
-  Cell,
 } from 'recharts';
-import {
-  CheckCircle2,
-  TrendingUp,
-  ShieldCheck,
-  AlertTriangle,
-  ArrowRight,
-  Sparkles,
-  RefreshCw,
-  Search,
-  Clock,
-  AlertCircle,
-  Loader2,
-} from 'lucide-react';
+import { RefreshCw, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
-import { Card } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
 import { Skeleton } from '../components/ui/Skeleton';
 import { getDashboardStats } from '../services/api';
 import { DashboardResponse } from '../types';
 import { TheRecord } from '../components/dashboard/TheRecord';
+import { MetricIllustration } from '../components/dashboard/MetricIllustration';
+import { EvidenceQualityPanel } from '../components/dashboard/EvidenceQualityPanel';
+import { MostAskedTopics } from '../components/dashboard/MostAskedTopics';
 
 interface ActivityTooltipProps {
   active?: boolean;
@@ -120,13 +105,12 @@ function CustomActivityTooltip({ active, payload, label, timeRange }: ActivityTo
 }
 
 export function DashboardPage() {
-  const navigate = useNavigate();
   const [timeRange, setTimeRange] = useState<'today' | '7d' | '30d'>('7d');
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRangeLoading, setIsRangeLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [quickQuestion, setQuickQuestion] = useState('');
+  const [refreshCount, setRefreshCount] = useState(0);
 
   const loadData = async (range: 'today' | '7d' | '30d', isRangeChange = false) => {
     if (isRangeChange) {
@@ -156,13 +140,6 @@ export function DashboardPage() {
     loadData(newRange, true);
   };
 
-  const handleAskSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    const query = quickQuestion.trim();
-    if (!query) return;
-    navigate('/app/explainer', { state: { initialQuestion: query } });
-  };
-
   const hasActivityData = Boolean(
     data?.activity &&
       data.activity.length > 0 &&
@@ -180,7 +157,7 @@ export function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border pb-5">
         <div>
           <h1 className="text-2xl sm:text-3xl font-display font-normal text-espresso tracking-tight">
-            Good morning
+            Welcome!
           </h1>
           <p className="text-sm font-sans text-muted-foreground mt-0.5">
             Policy intelligence at a glance.
@@ -190,7 +167,10 @@ export function DashboardPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => loadData(timeRange, false)}
+            onClick={() => {
+              loadData(timeRange, false);
+              setRefreshCount((n) => n + 1);
+            }}
             disabled={isInitialLoading || isRangeLoading}
             className="gap-2 text-xs"
           >
@@ -220,7 +200,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 items-stretch">
         {/* Card 1: Questions Answered */}
         <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
-          <div className="flex items-start justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
                 Questions Answered
@@ -233,9 +213,7 @@ export function DashboardPage() {
                 </div>
               )}
             </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-subtle border border-primary/20 text-primary shrink-0">
-              <CheckCircle2 className="h-5 w-5" />
-            </div>
+            <MetricIllustration kind="answered" />
           </div>
           <div className="mt-4 pt-3 border-t border-border/50 text-xs text-muted-foreground">
             {isInitialLoading ? (
@@ -248,7 +226,7 @@ export function DashboardPage() {
 
         {/* Card 2: Resolution Rate */}
         <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
-          <div className="flex items-start justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
                 Resolution Rate
@@ -261,9 +239,7 @@ export function DashboardPage() {
                 </div>
               )}
             </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-subtle border border-primary/20 text-caramel shrink-0">
-              <TrendingUp className="h-5 w-5" />
-            </div>
+            <MetricIllustration kind="resolution" value={data?.metrics.resolution_rate ?? 0} />
           </div>
           <div className="mt-4 pt-3 border-t border-border/50 text-xs text-muted-foreground">
             {isInitialLoading ? (
@@ -276,7 +252,7 @@ export function DashboardPage() {
 
         {/* Card 3: Evidence Coverage */}
         <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
-          <div className="flex items-start justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
                 Evidence Coverage
@@ -289,9 +265,7 @@ export function DashboardPage() {
                 </div>
               )}
             </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-subtle border border-primary/20 text-primary shrink-0">
-              <ShieldCheck className="h-5 w-5" />
-            </div>
+            <MetricIllustration kind="coverage" value={data?.metrics.evidence_coverage ?? 0} />
           </div>
           <div className="mt-4 pt-3 border-t border-border/50 text-xs text-muted-foreground">
             {isInitialLoading ? (
@@ -304,7 +278,7 @@ export function DashboardPage() {
 
         {/* Card 4: Low Confidence */}
         <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
-          <div className="flex items-start justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
                 Low Confidence
@@ -317,9 +291,7 @@ export function DashboardPage() {
                 </div>
               )}
             </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-subtle border border-primary/20 text-accent-foreground shrink-0">
-              <AlertTriangle className="h-5 w-5" />
-            </div>
+            <MetricIllustration kind="lowConfidence" />
           </div>
           <div className="mt-4 pt-3 border-t border-border/50 text-xs text-muted-foreground">
             {isInitialLoading ? (
@@ -485,160 +457,12 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Right: Evidence Quality Card (4 cols, EQUAL HEIGHT) */}
-        <div className="lg:col-span-4 min-w-0 h-full flex flex-col justify-between rounded-xl border border-border bg-card p-6 shadow-card">
-          <div className="flex flex-col justify-center pb-4 border-b border-border/50 min-h-[58px]">
-            <h3 className="text-lg font-display font-normal text-espresso">
-              Evidence Quality
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Confidence score breakdown
-            </p>
-          </div>
-
-          <div className="flex-1 min-h-[260px] h-[260px] flex flex-col justify-center py-2 relative">
-            {isInitialLoading ? (
-              <div className="flex items-center justify-center h-[180px]">
-                <Skeleton className="h-32 w-32 rounded-full" />
-              </div>
-            ) : data?.evidence_quality && data.evidence_quality.total > 0 ? (
-              <div className="space-y-4">
-                {/* Donut Chart representation */}
-                <div className="h-36 flex items-center justify-center relative">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={[
-                          { name: 'High', value: data.evidence_quality.high },
-                          { name: 'Medium', value: data.evidence_quality.medium },
-                          { name: 'Low/None', value: data.evidence_quality.low },
-                        ].filter((item) => item.value > 0)}
-                        innerRadius={38}
-                        outerRadius={56}
-                        paddingAngle={3}
-                        dataKey="value"
-                      >
-                        <Cell fill="#5A3825" />
-                        <Cell fill="#A67C52" />
-                        <Cell fill="#C25E5E" />
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                    <span className="text-xl font-display font-bold text-espresso leading-none">
-                      {data.evidence_quality.total}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                      Audited
-                    </span>
-                  </div>
-                </div>
-
-                {/* Categorical Breakdown Bars */}
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-espresso font-medium">
-                      <span className="h-2 w-2 rounded-full bg-primary" /> High Confidence
-                    </span>
-                    <span className="font-semibold text-espresso">
-                      {data.evidence_quality.high} (
-                      {Math.round((data.evidence_quality.high / data.evidence_quality.total) * 100)}%)
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
-                      <span className="h-2 w-2 rounded-full bg-caramel" /> Medium
-                    </span>
-                    <span className="font-semibold text-muted-foreground">
-                      {data.evidence_quality.medium} (
-                      {Math.round((data.evidence_quality.medium / data.evidence_quality.total) * 100)}%)
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
-                      <span className="h-2 w-2 rounded-full bg-[#C25E5E]" /> Low / Unverified
-                    </span>
-                    <span className="font-semibold text-muted-foreground">
-                      {data.evidence_quality.low} (
-                      {Math.round((data.evidence_quality.low / data.evidence_quality.total) * 100)}%)
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="h-[200px] flex flex-col items-center justify-center text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
-                <ShieldCheck className="h-6 w-6 text-caramel mb-2 opacity-60" />
-                <span>No evidence audits recorded yet.</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-center pt-3 border-t border-border/40 text-[11px] text-muted-foreground text-center min-h-[40px]">
-            Stored evidence ledger validation metrics
-          </div>
-        </div>
+        {/* Right: Evidence Quality (4 cols, EQUAL HEIGHT) */}
+        <EvidenceQualityPanel quality={data?.evidence_quality} isLoading={isInitialLoading} />
       </div>
 
-      {/* 5. DIRECT "ASK ABOUT A POLICY" SECTION */}
-      <Card className="border-border bg-card shadow-card p-6 sm:p-7">
-        <div className="space-y-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-subtle text-caramel border border-primary/20">
-              <Sparkles className="h-4 w-4" />
-            </div>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-display font-normal text-espresso leading-none">
-                Ask about a policy
-              </h2>
-              <p className="text-xs sm:text-sm font-sans text-muted-foreground mt-1">
-                Ask a question in plain language. Policy context will be resolved automatically when possible.
-              </p>
-            </div>
-          </div>
-
-          <form onSubmit={handleAskSubmit} className="space-y-3">
-            <div className="relative flex items-center">
-              <Search className="absolute left-3.5 h-4 w-4 text-caramel/70 pointer-events-none" />
-              <input
-                type="text"
-                value={quickQuestion}
-                onChange={(e) => setQuickQuestion(e.target.value)}
-                placeholder="Does Margaret Chen have water backup coverage?"
-                className="w-full h-12 pl-10 pr-24 rounded-lg border border-border bg-card text-foreground text-sm shadow-subtle placeholder:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              />
-              <Button
-                type="submit"
-                variant="primary"
-                size="md"
-                className="absolute right-1.5 h-9 px-4 text-xs font-semibold gap-1.5"
-              >
-                Ask <ArrowRight className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-
-            {/* Quick Prompt Chips */}
-            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
-              <span className="font-medium text-espresso">Suggested:</span>
-              {[
-                'Does Margaret Chen have water backup coverage?',
-                'What is the deductible for HO-2847-1193?',
-                'What does the water backup endorsement cover?',
-              ].map((suggestion, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setQuickQuestion(suggestion)}
-                  className="rounded-full bg-surface-subtle border border-primary/15 px-3 py-1 text-xs text-espresso hover:bg-muted transition-colors text-left"
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-          </form>
-        </div>
-      </Card>
+      {/* 5. MOST-ASKED TOPICS */}
+      <MostAskedTopics timeRange={timeRange} refreshKey={refreshCount} />
 
       {/* 7. EVIDENCE LEDGER — THE RECORD */}
       <TheRecord />

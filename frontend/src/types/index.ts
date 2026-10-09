@@ -348,6 +348,20 @@ export interface SourceTarget {
 // Evidence Ledger ("The Record")
 // ==========================================
 
+export interface TopicItem {
+  form_number: string;
+  title: string;
+  line_of_business?: string | null;
+  count: number;
+  share_pct: number;
+}
+
+export interface TopicsResponse {
+  range: 'today' | '7d' | '30d';
+  answers_considered: number;
+  topics: TopicItem[];
+}
+
 export interface LedgerSummary {
   answers_recorded: number;
   carrier_source_count: number;

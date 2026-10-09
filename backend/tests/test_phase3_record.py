@@ -288,3 +288,18 @@ def test_recent_questions_endpoint():
     assert newest["customer_name"] == "Priya Raghavan" and newest["policy_number"] == "Portfolio"
     assert client.get(f"/api/conversations/{conv}").status_code == 200
     assert client.get("/api/conversations/recent", params={"limit": 0}).status_code == 422
+
+
+def test_dashboard_topics_endpoint():
+    """Most-cited forms, most first; each answer counts once per form; portfolio answers excluded."""
+    res = client.get("/api/dashboard/topics", params={"range": "30d"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["range"] == "30d"
+    counts = [t["count"] for t in body["topics"]]
+    assert counts == sorted(counts, reverse=True)
+    for topic in body["topics"]:
+        assert topic["form_number"] and topic["title"]
+        assert 0 < topic["count"] <= body["answers_considered"]
+        assert topic["share_pct"] == round(topic["count"] / body["answers_considered"] * 100, 1)
+    assert client.get("/api/dashboard/topics", params={"range": "1y"}).status_code == 422

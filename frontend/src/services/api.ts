@@ -19,6 +19,7 @@ import type {
   QuestionResolution,
   RecentQuestionItem,
   SourceDocument,
+  TopicsResponse,
 } from '../types';
 
 /** status 0 = the backend could not be reached; 408 = the browser gave up waiting. */
@@ -141,6 +142,15 @@ export async function getDashboardStats(
   timeRange: 'today' | '7d' | '30d' = '7d'
 ): Promise<DashboardResponse> {
   return apiClient.get<DashboardResponse>('/api/dashboard/stats', {
+    params: { range: timeRange },
+  });
+}
+
+/** Forms most often cited in recorded answers over the range, most-cited first. */
+export async function getDashboardTopics(
+  timeRange: 'today' | '7d' | '30d' = '7d'
+): Promise<TopicsResponse> {
+  return apiClient.get<TopicsResponse>('/api/dashboard/topics', {
     params: { range: timeRange },
   });
 }
