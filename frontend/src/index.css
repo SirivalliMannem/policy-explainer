@@ -54,7 +54,7 @@
   * {
     @apply border-border;
   }
-  
+
   body {
     @apply bg-background text-foreground font-sans;
     font-feature-settings: "rlig" 1, "calt" 1;
@@ -62,7 +62,12 @@
     background-color: var(--background);
   }
 
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     @apply tracking-tight;
     color: var(--foreground);
   }
@@ -124,6 +129,7 @@
     opacity: 0;
     transform: translateY(16px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -176,23 +182,23 @@
   0% {
     background-position: 0% 50%;
   }
+
   50% {
     background-position: 100% 50%;
   }
+
   100% {
     background-position: 0% 50%;
   }
 }
 
 .animated-orange-text {
-  background: linear-gradient(
-    90deg,
-    #F97316 0%,
-    #FDBA74 25%,
-    #EA580C 50%,
-    #FDBA74 75%,
-    #F97316 100%
-  );
+  background: linear-gradient(90deg,
+      #F97316 0%,
+      #FDBA74 25%,
+      #EA580C 50%,
+      #FDBA74 75%,
+      #F97316 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
@@ -204,14 +210,12 @@
 
 /* Same moving gradient in white, for "Clarity." and "Evidence." */
 .animated-white-text {
-  background: linear-gradient(
-    90deg,
-    #FFFFFF 0%,
-    #CBD5E1 25%,
-    #FFFFFF 50%,
-    #E2E8F0 75%,
-    #FFFFFF 100%
-  );
+  background: linear-gradient(90deg,
+      #FFFFFF 0%,
+      #CBD5E1 25%,
+      #FFFFFF 50%,
+      #E2E8F0 75%,
+      #FFFFFF 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
@@ -228,18 +232,22 @@
     transform: translateY(110%);
     opacity: 0;
   }
+
   10% {
     transform: translateY(0);
     opacity: 1;
   }
+
   70% {
     transform: translateY(0);
     opacity: 1;
   }
+
   80% {
     transform: translateY(-110%);
     opacity: 0;
   }
+
   100% {
     transform: translateY(-110%);
     opacity: 0;
@@ -252,30 +260,37 @@
 
 /* Accessibility: Respect Reduced Motion Preference */
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
     animation: none !important;
   }
+
   .animate-hero-slide-up {
     transform: none !important;
   }
+
   .animate-fade-in {
     opacity: 1 !important;
   }
+
   .animate-card-enter {
     transform: none !important;
     opacity: 1 !important;
   }
+
   .hero-value {
     transform: none !important;
     opacity: 1 !important;
   }
+
   .animated-white-text {
     background: none !important;
     -webkit-text-fill-color: #FFFFFF !important;
     color: #FFFFFF !important;
   }
+
   .animated-orange-text {
     animation: none !important;
     background: none !important;
@@ -289,29 +304,67 @@
    Restrained, state-driven motion: a stage only animates when its real status changes.
    ================================================== */
 @keyframes stagePop {
-  0% { transform: scale(0.55); opacity: 0; }
-  70% { transform: scale(1.08); opacity: 1; }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(0.55);
+    opacity: 0;
+  }
+
+  70% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(1);
+  }
 }
 
 @keyframes stageRing {
-  0% { transform: scale(1); opacity: 0.55; }
-  100% { transform: scale(1.9); opacity: 0; }
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
 }
 
 @keyframes messageIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @keyframes drawerIn {
-  from { transform: translateX(24px); opacity: 0; }
-  to { transform: none; opacity: 1; }
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 
 @keyframes modalIn {
-  from { transform: translateY(8px) scale(0.99); opacity: 0; }
-  to { transform: none; opacity: 1; }
+  from {
+    transform: translateY(8px) scale(0.99);
+    opacity: 0;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 
 .stage-pop {
@@ -335,6 +388,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .stage-pop,
   .stage-ring,
   .message-in,
