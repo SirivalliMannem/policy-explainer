@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, ChevronDown, Loader2 } from 'lucide-react';
 import { Skeleton } from '../ui/Skeleton';
 import { LedgerDetailDrawer } from './LedgerDetailDrawer';
-import { getNeedsAttention } from '../../services/api';
+import { ApiError, getNeedsAttention } from '../../services/api';
 import { relativeTime } from '../../lib/explainer';
 import type { AttentionCause, AttentionItem, AttentionReason, AttentionResponse } from '../../types';
 
@@ -218,7 +218,7 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
   const navigate = useNavigate();
   const [data, setData] = useState<AttentionResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('queue');
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -228,14 +228,22 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setFailed(false);
+    setFailed(null);
     getNeedsAttention(timeRange)
       .then((res) => {
         if (cancelled) return;
         setData(res);
         setOpenKey((key) => key ?? res.items[0]?.latest_entry_id ?? null);
       })
-      .catch(() => !cancelled && setFailed(true))
+      .catch((err) => {
+        if (cancelled) return;
+        // 404: the backend predates this panel's endpoint and needs a restart (or image rebuild).
+        setFailed(
+          err instanceof ApiError && err.status === 404
+            ? 'The backend is running an older version without this panel. Restart the backend (or rebuild its Docker image) to load it.'
+            : 'This list could not be loaded. Try Refresh Data.'
+        );
+      })
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
@@ -303,7 +311,7 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
         </div>
       ) : failed ? (
         <p className="mt-5 border-t border-border py-8 text-center text-xs text-muted-foreground">
-          This list could not be loaded. Try Refresh Data.
+          {failed}
         </p>
       ) : !data || data.flagged_total === 0 ? (
         <div className="mt-5 flex flex-col items-center border-t border-border py-10 text-center">
