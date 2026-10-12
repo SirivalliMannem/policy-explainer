@@ -22,7 +22,6 @@ import type { ProcessState } from '../../lib/explainer';
 import { askerName, fullWhen } from '../../lib/conversations';
 import type { AuditTarget } from './AIProcessPanel';
 import { AnswerText } from './AnswerText';
-import { QuickPolicyActions } from './QuickPolicyActions';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
 import {
   checkLabel,
@@ -50,7 +49,17 @@ export type ChatMessage =
       switched: boolean;
       answering?: string;
     }
-  | { kind: 'clarify'; id: string; time: string; text: string; candidates: PolicyContextCandidate[] }
+  | {
+      kind: 'clarify';
+      id: string;
+      time: string;
+      text: string;
+      candidates: PolicyContextCandidate[];
+      /** Heading over the candidates, e.g. "Your recent policies". */
+      candidatesLabel?: string;
+    }
+  /** A conversational reply (greeting, thanks, help, off-topic) with example questions to continue. */
+  | { kind: 'assistant'; id: string; time: string; text: string; suggestions: string[] }
   | { kind: 'answer'; id: string; time: string; question: string; result: QuestionAnswerResponse }
   | { kind: 'error'; id: string; time: string; title: string; text: string };
 
@@ -62,6 +71,10 @@ interface ConversationStreamProps {
   onShowAudit: (target: AuditTarget, opener: HTMLElement) => void;
   /** Reopen the AI process panel for the question being answered. */
   onShowProcess: (opener: HTMLElement) => void;
+  /** Put a starter question in the composer (empty conversation). */
+  onPrefill: (text: string) => void;
+  /** First name for the greeting on an empty conversation. */
+  firstName?: string | null;
   activePolicy: PolicyContextCandidate | null;
   onAsk: (question: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
@@ -97,6 +110,40 @@ function InterpretedAs({ result }: { result: QuestionAnswerResponse }) {
       <span>Interpreted as</span>
       <span className="font-medium text-[#0F2A43]">“{understood}”</span>
       <span className="text-[10.5px] text-[#94A3B8]">· {interpretationMethodLabel(interpretation)}</span>
+    </div>
+  );
+}
+
+/** Starter prompts for an empty conversation; the employee completes them with a policy. */
+const STARTERS = [
+  { label: 'Coverages, limits and deductibles', prompt: 'What are the coverages, limits and deductibles on policy ', icon: ShieldCheck },
+  { label: 'Forms and endorsements', prompt: 'Which forms and endorsements are attached to policy ', icon: FileText },
+  { label: 'Claims on a policy', prompt: 'What claims are on policy ', icon: AlertTriangle },
+  { label: "A customer's policies", prompt: 'How many policies does ', icon: User },
+];
+
+function timeGreeting(now = new Date()): string {
+  const hour = now.getHours();
+  return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+/** Example questions under an assistant message; choosing one asks it. */
+function SuggestionChips({ suggestions, onAsk, disabled }: { suggestions: string[]; onAsk: (q: string) => void; disabled: boolean }) {
+  if (!suggestions.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {suggestions.map((q) => (
+        <button
+          key={q}
+          type="button"
+          onClick={() => onAsk(q)}
+          disabled={disabled}
+          className="inline-flex items-center gap-1 rounded-full border border-[#E2E8F0] bg-white px-3 py-1.5 text-left text-[12px] font-medium text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] disabled:opacity-50 cursor-pointer"
+        >
+          {q}
+          <ChevronRight className="h-3 w-3 shrink-0 text-[#F97316]" aria-hidden="true" />
+        </button>
+      ))}
     </div>
   );
 }
@@ -482,6 +529,8 @@ export function ConversationStream({
   process,
   onShowAudit,
   onShowProcess,
+  onPrefill,
+  firstName,
   activePolicy,
   onAsk,
   onChooseCandidate,
@@ -496,17 +545,34 @@ export function ConversationStream({
 
   if (messages.length === 0 && !isWorking) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-5 py-8 sm:px-10">
-        <div className="mb-8 max-w-xl text-center">
-          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#0F2A43] shadow-md">
-            <Shield className="h-6 w-6 text-[#F97316]" />
+      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-5 py-10 sm:px-10">
+        <div className="w-full max-w-[640px] text-center">
+          <span className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0F2A43] shadow-sm">
+            <Shield className="h-5 w-5 text-[#F97316]" />
           </span>
-          <h2 className="text-2xl font-bold tracking-tight text-[#0F2A43] sm:text-[28px]">Policy Explainer</h2>
-          <p className="mt-2 text-[14px] leading-relaxed text-[#64748B]">
-            Understand coverage, terms, exclusions, forms, and policy details using grounded evidence and verified citations.
+          <h2 className="font-display text-[28px] leading-tight text-[#0F2A43]">
+            {timeGreeting()}
+            {firstName ? `, ${firstName}` : ''}
+          </h2>
+          <p className="mx-auto mt-2 max-w-md text-[14px] leading-relaxed text-[#64748B]">
+            Ask about any policy's coverage, limits, forms, claims or billing. Name a policy number or a policyholder and
+            I'll answer from the policy wording, with citations.
           </p>
+          <div className="mt-7 grid gap-2 text-left sm:grid-cols-2">
+            {STARTERS.map(({ label, prompt, icon: Icon }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => onPrefill(prompt)}
+                className="group flex items-center gap-3 rounded-xl border border-[#E2E8F0] bg-white px-3.5 py-3 text-[13px] text-[#0F2A43] transition-colors hover:border-[#F97316] hover:bg-[#FFF7ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+              >
+                <Icon className="h-4 w-4 shrink-0 text-[#EA580C]" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-[#CBD5E1] group-hover:text-[#EA580C]" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
         </div>
-        <QuickPolicyActions policy={activePolicy} onOpen={(tab) => onOpenTab(tab)} />
       </div>
     );
   }
@@ -564,10 +630,13 @@ export function ConversationStream({
             return (
               <div key={msg.id} className="message-in flex items-start gap-3">
                 <AssistantAvatar />
-                <div className="max-w-[40rem] rounded-2xl rounded-tl-md border border-[#FDBA74] bg-[#FFF7ED] px-4 py-3 shadow-sm">
-                  <p className="text-[13.5px] font-medium leading-relaxed text-[#0F2A43]">{msg.text}</p>
+                <div className="max-w-[40rem] rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
+                  <p className="text-[13.5px] leading-relaxed text-[#0F2A43]">{msg.text}</p>
                   {msg.candidates.length > 0 ? (
-                    <div className="mt-2.5 space-y-1.5">
+                    <div className="mt-3 space-y-1.5">
+                      {msg.candidatesLabel && (
+                        <p className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-[#64748B]">{msg.candidatesLabel}</p>
+                      )}
                       {msg.candidates.map((c) => (
                         <button
                           key={c.policy_id}
@@ -588,9 +657,20 @@ export function ConversationStream({
                     </div>
                   ) : (
                     <p className="mt-1 text-[12px] text-[#64748B]">
-                      Reply with the policyholder's full name or the policy number, and I'll answer your question.
+                      For example a policy number such as HO-2847-1193, or the policyholder's full name.
                     </p>
                   )}
+                </div>
+              </div>
+            );
+
+          case 'assistant':
+            return (
+              <div key={msg.id} className="message-in flex items-start gap-3">
+                <AssistantAvatar />
+                <div className="max-w-[40rem] rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
+                  <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-[#0F2A43]">{msg.text}</p>
+                  <SuggestionChips suggestions={msg.suggestions} onAsk={onAsk} disabled={isWorking} />
                 </div>
               </div>
             );
@@ -640,7 +720,18 @@ export function ConversationStream({
         }
       })}
 
-      {isWorking && process.phase === 'running' && (
+      {isWorking && process.phase === 'running' && process.stages.context.status === 'processing' && (
+        <div className="message-in flex items-center gap-3" role="status" aria-label="Reading your question">
+          <AssistantAvatar />
+          <div className="flex items-center gap-1 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3.5 shadow-sm">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#94A3B8] [animation-delay:-0.3s] motion-reduce:animate-none" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#94A3B8] [animation-delay:-0.15s] motion-reduce:animate-none" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#94A3B8] motion-reduce:animate-none" />
+          </div>
+        </div>
+      )}
+
+      {isWorking && process.phase === 'running' && process.stages.context.status !== 'processing' && (
         <div className="message-in flex items-center gap-3">
           <AssistantAvatar />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-2.5 text-[12.5px] text-[#475569] shadow-sm">

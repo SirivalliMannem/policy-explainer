@@ -90,9 +90,10 @@ export function Sidebar({
 
         <Separator />
 
-        {/* Primary Navigation */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-          <nav className="space-y-1">
+        {/* Navigation stays fixed; only the employee's conversation list scrolls. On a very short
+            screen, where even the list's minimum height does not fit, the whole section scrolls. */}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-4">
+          <nav className="flex flex-1 flex-col gap-1">
             {!isCollapsed && (
               <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Workspace
@@ -129,7 +130,7 @@ export function Sidebar({
               }
               // Policy Explainer carries the employee's own conversation history beneath it.
               return item.href === '/app/explainer' ? (
-                <div key={item.href}>
+                <div key={item.href} className="flex flex-1 flex-col">
                   {linkContent}
                   <ExplainerHistoryNav onNavigate={onCloseMobile} />
                 </div>
@@ -139,10 +140,10 @@ export function Sidebar({
             })}
           </nav>
 
-          <Separator />
+          <Separator className="shrink-0" />
 
           {/* Secondary Navigation */}
-          <nav className="space-y-1">
+          <nav className="shrink-0 space-y-1">
             {!isCollapsed && (
               <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Support

@@ -1,12 +1,13 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, ChevronRight, MessageSquarePlus, RefreshCw, Send, Shield } from 'lucide-react';
+import { AlertTriangle, ArrowUp, CheckCircle2, ChevronRight, RefreshCw, ShieldCheck } from 'lucide-react';
 import { QuestionInput } from '../components/explainer/QuestionInput';
 import { QUICK_ACTIONS } from '../components/explainer/QuickPolicyActions';
 import type { PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
 import { Skeleton } from '../components/ui/Skeleton';
 import type { ConversationSummary } from '../types';
 import { askerName, initials, outcomeBadge, shortWhen, useMyConversations } from '../lib/conversations';
+import { currentEmployee } from '../services/auth';
 
 const RECENT_COUNT = 5;
 const ALL_PAGE = 20;
@@ -35,44 +36,49 @@ function OutcomeBadge({ outcome }: { outcome?: string | null }) {
   );
 }
 
-function ConversationCard({ conversation }: { conversation: ConversationSummary }) {
+function timeGreeting(now = new Date()): string {
+  const hour = now.getHours();
+  return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+function ConversationRow({ conversation }: { conversation: ConversationSummary }) {
   const c = conversation;
   return (
     <li>
       <Link
         to={`/app/explainer/c/${c.conversation_id}`}
-        className="group flex flex-col gap-3 rounded-xl border border-[#E2E8F0] bg-white p-4 transition-all hover:border-[#F97316] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] sm:flex-row sm:items-center"
+        className="group flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:bg-[#F8FAFC] focus-visible:bg-[#FFF7ED] focus-visible:outline-none sm:px-5"
       >
+        <span
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#0F2A43] text-[11px] font-bold text-white"
+          aria-hidden="true"
+        >
+          {initials(c.asked_by.name, '··')}
+        </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-semibold text-[#0F2A43]" title={c.title}>
+          <p className="truncate text-[13.5px] font-semibold text-[#0F2A43]" title={c.title}>
             {c.title}
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-[#64748B]">
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-[#0F2A43] text-[10px] font-bold text-white"
-                aria-hidden="true"
-              >
-                {initials(c.asked_by.name, '··')}
-              </span>
-              <span className="font-medium text-[#0F2A43]">{askerName(c.asked_by)}</span>
-              <span className="font-mono text-[11px]">{c.asked_by.employee_id}</span>
-            </span>
-            <span>{shortWhen(c.last_activity_at)}</span>
-            <span>
-              {c.policy_number ? (
-                <span className="font-mono text-[#0F2A43]">{c.policy_number}</span>
-              ) : (
-                c.customer_name || 'No policy'
-              )}
-            </span>
-            {c.question_count > 1 && <span>{c.question_count} questions</span>}
-          </div>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12px] text-[#64748B]">
+            <span className="font-medium text-[#475569]">{askerName(c.asked_by)}</span>
+            <span className="font-mono text-[11px]">{c.asked_by.employee_id}</span>
+            <span aria-hidden="true">·</span>
+            {c.policy_number ? (
+              <span className="font-mono text-[11.5px] text-[#0F2A43]">{c.policy_number}</span>
+            ) : (
+              <span>{c.customer_name || 'No policy'}</span>
+            )}
+            {c.question_count > 1 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{c.question_count} questions</span>
+              </>
+            )}
+          </p>
         </div>
-        <div className="flex items-center justify-between gap-3 sm:justify-end">
-          <OutcomeBadge outcome={c.latest_outcome} />
-          <ChevronRight className="h-4 w-4 text-[#94A3B8] transition-colors group-hover:text-[#EA580C]" aria-hidden="true" />
-        </div>
+        <span className="hidden shrink-0 text-[12px] text-[#64748B] sm:block">{shortWhen(c.last_activity_at)}</span>
+        <OutcomeBadge outcome={c.latest_outcome} />
+        <ChevronRight className="h-4 w-4 shrink-0 text-[#CBD5E1] transition-colors group-hover:text-[#EA580C]" aria-hidden="true" />
       </Link>
     </li>
   );
@@ -124,64 +130,65 @@ export function ExplainerLandingPage() {
 
   const showingAll = limit > RECENT_COUNT;
 
+  const firstName = currentEmployee()?.name?.split(/\s+/)[0];
+
   return (
-    <div className="mx-auto max-w-[880px] space-y-8 pb-10">
-      <header className="flex items-start gap-4">
-        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#0F2A43] shadow-md">
-          <Shield className="h-6 w-6 text-[#F97316]" />
-        </span>
-        <div>
-          <h1 className="font-display text-3xl font-normal tracking-tight text-[#0F2A43]">Policy Explainer</h1>
-          <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-[#64748B]">
-            Ask about coverage, limits, forms, claims or billing. Every answer is grounded in the policy's own wording, cited,
-            checked by guardrails and recorded in the evidence ledger.
-          </p>
-        </div>
+    <div className="mx-auto max-w-[920px] space-y-8 pb-10 pt-2 sm:pt-6">
+      <header>
+        <h1 className="font-display text-[32px] leading-tight text-[#0F2A43]">
+          {timeGreeting()}
+          {firstName ? `, ${firstName}` : ''}
+        </h1>
+        <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-[#64748B]">
+          Ask about any policy's coverage, limits, forms, claims or billing. Answers come from the policy's own wording,
+          cite their sources, are checked by guardrails and are recorded in The Record.
+        </p>
       </header>
 
-      <section aria-labelledby="new-conversation-heading" className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-        <h2 id="new-conversation-heading" className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-[#0F2A43]">
-          <MessageSquarePlus className="h-4 w-4 text-[#EA580C]" /> New conversation
-        </h2>
-        <form onSubmit={start} className="flex items-center gap-2">
-          <QuestionInput
-            value={input}
-            onChange={setInput}
-            placeholder="Ask a policy question — name a policyholder or policy number"
-            inputRef={inputRef}
-          />
-          <button
-            type="submit"
-            disabled={!input.trim()}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#EA580C] px-4 py-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 cursor-pointer"
-          >
-            <span className="hidden sm:inline">Ask</span>
-            <Send className="h-4 w-4" />
-          </button>
+      <section aria-label="New conversation" className="space-y-4">
+        <form onSubmit={start}>
+          <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-2 pl-5 pr-2 shadow-[0_6px_24px_rgba(15,42,67,0.07)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
+            <QuestionInput
+              variant="bare"
+              value={input}
+              onChange={setInput}
+              placeholder="Ask a policy question, or just say hi — name a policyholder or policy number"
+              inputRef={inputRef}
+            />
+            <button
+              type="submit"
+              aria-label="Ask"
+              disabled={!input.trim()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EA580C] text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#E2E8F0] disabled:text-[#94A3B8] cursor-pointer"
+            >
+              <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+            </button>
+          </div>
         </form>
 
-        <div className="mt-5">
-          <h3 className="mb-2.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">Quick policy actions</h3>
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <div>
+          <h2 className="sr-only">Quick policy actions</h2>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
             {QUICK_ACTIONS.map(({ tab, title, description, icon: Icon }) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => startAction(tab)}
-                className="group flex items-start gap-3 rounded-xl border border-[#E2E8F0] bg-white p-3.5 text-left transition-all hover:border-[#F97316] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                className="group flex flex-col gap-2.5 rounded-xl border border-[#E2E8F0] bg-white p-3.5 text-left transition-all hover:border-[#F97316] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
               >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#0F2A43] text-[#F97316]">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#FFF7ED] text-[#EA580C]">
                   <Icon className="h-4 w-4" />
                 </span>
-                <span className="min-w-0">
+                <span>
                   <span className="block text-[13px] font-semibold text-[#0F2A43]">{title}</span>
                   <span className="mt-0.5 block text-[11.5px] leading-snug text-[#64748B]">{description}</span>
                 </span>
               </button>
             ))}
           </div>
-          <p className="mt-2 text-[11.5px] text-[#94A3B8]">
-            Choosing an action starts the question; add the policy number and the suggestions will complete it.
+          <p className="mt-2.5 flex items-center gap-1.5 text-[11.5px] text-[#94A3B8]">
+            <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+            An action starts the question; add a policy number and the suggestions complete it.
           </p>
         </div>
       </section>
@@ -206,10 +213,14 @@ export function ExplainerLandingPage() {
         </div>
 
         {loading && !items ? (
-          <ul className="space-y-2.5" aria-label="Loading conversations">
+          <ul className="divide-y divide-[#F1F5F9] overflow-hidden rounded-xl border border-[#E2E8F0] bg-white" aria-label="Loading conversations">
             {Array.from({ length: 3 }, (_, i) => (
-              <li key={i}>
-                <Skeleton className="h-[76px] w-full rounded-xl" />
+              <li key={i} className="flex items-center gap-3.5 px-5 py-3.5">
+                <Skeleton className="h-9 w-9 rounded-full" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-3.5 w-2/3" />
+                  <Skeleton className="h-3 w-1/3" />
+                </div>
               </li>
             ))}
           </ul>
@@ -225,14 +236,15 @@ export function ExplainerLandingPage() {
             </button>
           </div>
         ) : items && items.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-[#E2E8F0] bg-white px-6 py-10 text-center">
+          <div className="rounded-xl border border-dashed border-[#CBD5E1] bg-white px-6 py-10 text-center">
             <p className="text-[14px] font-medium text-[#0F2A43]">No conversations yet. Ask your first policy question.</p>
+            <p className="mt-1 text-[12.5px] text-[#64748B]">Your conversations will appear here.</p>
           </div>
         ) : (
           <>
-            <ul className="space-y-2.5">
+            <ul className="divide-y divide-[#F1F5F9] overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
               {(items ?? []).map((c) => (
-                <ConversationCard key={c.conversation_id} conversation={c} />
+                <ConversationRow key={c.conversation_id} conversation={c} />
               ))}
             </ul>
             {showingAll && items && total > items.length && (

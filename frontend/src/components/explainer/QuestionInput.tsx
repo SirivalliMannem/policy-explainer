@@ -10,6 +10,8 @@ interface QuestionInputProps {
   disabled?: boolean;
   placeholder: string;
   inputRef: MutableRefObject<HTMLInputElement | null>;
+  /** "bare": no border of its own, for use inside a composer box that draws one. */
+  variant?: 'default' | 'bare';
 }
 
 // The policy-number fragment being typed at the caret: "HO-28", "ho 28", "pa6120-77", or bare digits "2847".
@@ -61,7 +63,7 @@ function currentTerms(candidates: PolicyContextCandidate[], compact: string): Po
  * The question box. While a policy number is being typed, a list of matching policies opens above it;
  * choosing one replaces the partial number with the full one. The question is not sent.
  */
-export function QuestionInput({ value, onChange, disabled, placeholder, inputRef }: QuestionInputProps) {
+export function QuestionInput({ value, onChange, disabled, placeholder, inputRef, variant = 'default' }: QuestionInputProps) {
   const listId = useId();
   const [fragment, setFragment] = useState<Fragment | null>(null);
   const [matches, setMatches] = useState<PolicyContextCandidate[]>([]);
@@ -208,7 +210,11 @@ export function QuestionInput({ value, onChange, disabled, placeholder, inputRef
         aria-autocomplete="list"
         aria-activedescendant={open && matches.length ? `${listId}-${active}` : undefined}
         autoComplete="off"
-        className="w-full rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[13.5px] text-[#0F2A43] placeholder-[#94A3B8] transition-all focus:border-[#F97316] focus:outline-none focus:ring-2 focus:ring-[#F97316]/20 disabled:opacity-60"
+        className={
+          variant === 'bare'
+            ? 'w-full bg-transparent py-2.5 text-[14px] text-[#0F2A43] placeholder-[#94A3B8] focus:outline-none disabled:opacity-60'
+            : 'w-full rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[13.5px] text-[#0F2A43] placeholder-[#94A3B8] transition-all focus:border-[#F97316] focus:outline-none focus:ring-2 focus:ring-[#F97316]/20 disabled:opacity-60'
+        }
       />
     </div>
   );

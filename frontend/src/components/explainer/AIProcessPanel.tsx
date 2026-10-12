@@ -359,10 +359,10 @@ export function AIProcessPanel({
         role="complementary"
         aria-labelledby="ai-process-title"
         className="h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-out motion-reduce:transition-none"
-        style={{ width: shown ? PANEL_WIDTH + 12 : 0 }}
+        style={{ width: shown ? PANEL_WIDTH : 0 }}
       >
-        <div className="h-full pl-3" style={{ width: PANEL_WIDTH + 12 }}>
-          <div className="flex h-full flex-col overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">{body}</div>
+        <div className="flex h-full flex-col border-l border-[#E2E8F0] bg-white" style={{ width: PANEL_WIDTH }}>
+          {body}
         </div>
       </aside>
     );

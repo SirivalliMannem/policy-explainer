@@ -167,14 +167,22 @@ export interface Interpretation {
 
 export interface QuestionResolution {
   status: ResolutionStatus;
-  /** "portfolio": counts or lists policies/customers; answered from policy records, no single-policy context needed. */
-  intent: 'policy' | 'portfolio';
+  /**
+   * "portfolio": counts or lists policies/customers; answered from policy records, no single-policy context needed.
+   * "conversation": greeting, thanks or a question about the assistant; "off_topic": not about policies.
+   * Both are answered by `reply`; nothing is retrieved or recorded.
+   */
+  intent: 'policy' | 'portfolio' | 'conversation' | 'off_topic';
   matched_on?: 'policy_number' | 'customer_name' | 'surname' | 'first_name' | null;
   reference?: string | null;
   policy?: PolicyContextCandidate | null;
   candidates: PolicyContextCandidate[];
   message: string;
   interpretation?: Interpretation | null;
+  reply?: string | null;
+  suggestions?: string[];
+  /** The employee's recently checked policies, offered when the question names no policy. */
+  suggested_policies?: PolicyContextCandidate[];
 }
 
 export interface CitationItem {

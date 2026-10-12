@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, Send } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp } from 'lucide-react';
 import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionResolution, SourceTarget } from '../types';
 import {
   ApiError,
@@ -178,6 +178,8 @@ export function ExplainerPage() {
   // The backend answers in one request, so stages 2–6 are reported together when it returns: step 2
   // shows as in progress until then, and every value shown afterwards is the one the pipeline measured.
   const runPipeline = async (question: string, convId: string, contextDetail: string) => {
+    // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
+    openPanel({ mode: 'live' }, null);
     setProcess((prev) => ({
       ...prev,
       phase: 'running',
@@ -221,8 +223,8 @@ export function ExplainerPage() {
     setProcess(IDLE_PROCESS);
   };
 
-  const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string) => {
-    push({ kind: 'clarify', id: nextId('clarify'), time: nowTime(), text, candidates });
+  const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string, candidatesLabel?: string) => {
+    push({ kind: 'clarify', id: nextId('clarify'), time: nowTime(), text, candidates, candidatesLabel });
     setProcess((prev) => ({
       phase: 'needs_input',
       result: null,
@@ -247,9 +249,6 @@ export function ExplainerPage() {
       contextDetail: null,
       stages: { ...freshStages(), context: { status: 'processing' } },
     });
-    // A new question opens the AI process panel without taking focus from the composer.
-    openPanel({ mode: 'live' }, null);
-
     try {
       let convId: string;
       try {
@@ -280,6 +279,20 @@ export function ExplainerPage() {
         return;
       } finally {
         setIsResolving(false);
+      }
+
+      // Greetings, thanks, "what can you do?" and off-topic messages get a conversational reply;
+      // nothing is retrieved or recorded for them.
+      if ((resolution.intent === 'conversation' || resolution.intent === 'off_topic') && resolution.reply) {
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: resolution.reply,
+          suggestions: resolution.suggestions ?? [],
+        });
+        setProcess(IDLE_PROCESS);
+        return;
       }
 
       const understood = interpretedText(resolution.interpretation);
@@ -352,7 +365,15 @@ export function ExplainerPage() {
         contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
       } else {
         pendingQuestionRef.current = text;
-        askForPolicy('Which policy or policyholder should I check?', [], 'No policy named and no active context');
+        const recent = resolution.suggested_policies ?? [];
+        askForPolicy(
+          recent.length
+            ? 'Happy to help with that. Which policy should I check? Pick one you looked at recently, or give me a policy number or policyholder name.'
+            : 'Happy to help with that. Which policy should I check? Give me a policy number or the policyholder’s name.',
+          recent,
+          'No policy named and no active context',
+          recent.length ? 'Your recent policies' : undefined
+        );
         return;
       }
 
@@ -440,6 +461,32 @@ export function ExplainerPage() {
     setPanel({ mode: 'live' });
   }, []);
 
+  // The header's "AI process" button: the question in progress (or just answered), else the latest answer.
+  const lastAnswer = [...messages].reverse().find((m): m is Extract<ChatMessage, { kind: 'answer' }> => m.kind === 'answer');
+  const liveAvailable = process.phase !== 'idle' && Boolean(process.question);
+  const toggleProcess = (opener: HTMLElement) => {
+    if (panel) {
+      closePanel();
+    } else if (liveAvailable) {
+      showProcess(opener);
+    } else if (lastAnswer) {
+      showAudit(
+        { question: lastAnswer.question, result: lastAnswer.result, askedBy: lastAnswer.result.asked_by, askedAt: lastAnswer.result.asked_at },
+        opener
+      );
+    }
+  };
+
+  const prefill = (text: string) => {
+    setInput(text);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
   /** Reopen a recorded conversation from stored answers; nothing is asked again. */
   const loadConversation = async (convId: string) => {
     const conv = await getConversation(convId);
@@ -523,33 +570,38 @@ export function ExplainerPage() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-6rem)] w-full sm:h-[calc(100vh-7rem)] lg:h-[calc(100vh-8rem)]">
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="mx-auto flex w-full max-w-[780px] flex-col gap-3">
-          <PolicyContextBanner
-            policy={activePolicy}
-            isResolving={isResolving}
-            openTab={featureTab}
-            onOpenTab={(tab) => openTab(tab)}
-            onClear={handleClearContext}
-          />
+    <div className="flex min-h-0 w-full flex-1 bg-white">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <PolicyContextBanner
+          policy={activePolicy}
+          isResolving={isResolving}
+          openTab={featureTab}
+          onOpenTab={(tab) => openTab(tab)}
+          onClear={handleClearContext}
+          processAvailable={liveAvailable || Boolean(lastAnswer)}
+          processOpen={Boolean(panel)}
+          onToggleProcess={toggleProcess}
+        />
 
-          {activePolicy && featureTab && (
-            <PolicyFeaturesPanel
-              policyId={activePolicy.policy_id}
-              activeTab={featureTab}
-              onTabChange={(tab) => {
-                setHighlight(null);
-                setFeatureTab(tab);
-              }}
-              targetHighlight={highlight}
-              isOpen
-              onToggleOpen={() => setFeatureTab(null)}
-            />
-          )}
-        </div>
+        {activePolicy && featureTab && (
+          <div className="max-h-[45%] shrink-0 overflow-y-auto border-b border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 sm:px-6">
+            <div className="mx-auto w-full max-w-[780px]">
+              <PolicyFeaturesPanel
+                policyId={activePolicy.policy_id}
+                activeTab={featureTab}
+                onTabChange={(tab) => {
+                  setHighlight(null);
+                  setFeatureTab(tab);
+                }}
+                targetHighlight={highlight}
+                isOpen
+                onToggleOpen={() => setFeatureTab(null)}
+              />
+            </div>
+          </div>
+        )}
 
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
+        <section aria-label="Conversation" className="flex min-h-0 flex-1 flex-col bg-[#FBFCFD]">
           {isLoadingHistory ? (
             <div className="mx-auto w-full max-w-[780px] flex-1 space-y-5 px-4 py-6" aria-label="Loading conversation">
               <Skeleton className="ml-auto h-12 w-2/3 rounded-2xl" />
@@ -575,6 +627,8 @@ export function ExplainerPage() {
               process={process}
               onShowAudit={showAudit}
               onShowProcess={showProcess}
+              onPrefill={prefill}
+              firstName={me()?.name?.split(/\s+/)[0]}
               activePolicy={activePolicy}
               onAsk={handleAsk}
               onChooseCandidate={handleChooseCandidate}
@@ -583,23 +637,31 @@ export function ExplainerPage() {
             />
           )}
 
-          <div className="border-t border-[#E2E8F0] bg-[#F8FAFC] p-3 sm:p-4">
-            <form onSubmit={onSubmit} className="mx-auto flex w-full max-w-[780px] items-center gap-2">
-              <QuestionInput
-                value={input}
-                onChange={setInput}
-                disabled={isWorking || isLoadingHistory || Boolean(loadError)}
-                placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
-                inputRef={inputRef}
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || isWorking || Boolean(loadError)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#EA580C] px-4 py-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 cursor-pointer"
-              >
-                <span className="hidden sm:inline">Send</span>
-                <Send className="h-4 w-4" />
-              </button>
+          <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
+            <form onSubmit={onSubmit} className="mx-auto w-full max-w-[780px]">
+              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-4 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
+                <QuestionInput
+                  variant="bare"
+                  value={input}
+                  onChange={setInput}
+                  disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                  placeholder={
+                    activePolicy ? `Ask about ${activePolicy.customer_name}'s policy, or another one…` : 'Message Policy Explainer…'
+                  }
+                  inputRef={inputRef}
+                />
+                <button
+                  type="submit"
+                  aria-label="Send"
+                  disabled={!input.trim() || isWorking || Boolean(loadError)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EA580C] text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#E2E8F0] disabled:text-[#94A3B8] cursor-pointer"
+                >
+                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                </button>
+              </div>
+              <p className="mt-2 text-center text-[11px] text-[#94A3B8]">
+                Answers come from the policy wording, cite their sources and are recorded in The Record.
+              </p>
             </form>
           </div>
         </section>

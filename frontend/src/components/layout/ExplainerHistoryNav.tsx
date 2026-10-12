@@ -36,7 +36,7 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
   };
 
   return (
-    <div className="ml-5 mt-1.5 space-y-2 border-l border-border pl-2.5" aria-label="Your conversations">
+    <div className="ml-4 mt-1.5 flex flex-1 flex-col gap-2 pl-2.5" aria-label="Your conversations">
       <button
         type="button"
         onClick={() => {
@@ -44,7 +44,7 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
           // The landing page focuses its composer on every visit.
           navigate('/app/explainer', { state: { focusComposer: true } });
         }}
-        className="flex w-full items-center justify-center rounded-lg bg-[#EA580C] px-3 py-2 text-[12.5px] font-bold text-white shadow-sm transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 cursor-pointer"
+        className="flex w-full shrink-0 items-center justify-center rounded-lg bg-[#EA580C] px-3 py-2 text-[12.5px] font-bold text-white shadow-sm transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 cursor-pointer"
       >
         New conversation
       </button>
@@ -54,7 +54,7 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-controls={listId}
-        className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-[12px] font-semibold text-espresso transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn cursor-pointer"
+        className="flex w-full shrink-0 items-center gap-1.5 rounded-md px-1 py-1 text-left text-[12px] font-semibold text-espresso transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn cursor-pointer"
       >
         {open ? (
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
@@ -64,8 +64,8 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
         Recent conversations
       </button>
 
-      <div id={listId} hidden={!open} className="space-y-2">
-        <label className="relative block">
+      <div id={listId} hidden={!open} className={open ? 'flex flex-1 flex-col gap-2' : 'hidden'}>
+        <label className="relative block shrink-0">
           <span className="sr-only">Search your conversations</span>
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -77,7 +77,7 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
           />
         </label>
 
-        <div className="max-h-[42vh] space-y-2.5 overflow-y-auto pr-0.5">
+        <div className="min-h-[7.5rem] flex-1 basis-0 space-y-2.5 overflow-y-auto overscroll-contain pr-0.5">
           {loading && !items ? (
             <div className="space-y-1.5" aria-label="Loading conversations">
               {[0, 1, 2, 3].map((i) => (
@@ -142,7 +142,7 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
           <Link
             to="/app/explainer"
             onClick={onNavigate}
-            className="block px-1 text-[11.5px] font-semibold text-orange-btn hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn"
+            className="block shrink-0 px-1 text-[11.5px] font-semibold text-orange-btn hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn"
           >
             View all {total} →
           </Link>

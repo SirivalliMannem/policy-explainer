@@ -2,7 +2,7 @@
 
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.auth import EmployeeUser, get_current_employee
@@ -14,10 +14,11 @@ from app.schemas.policy_resolution import (
     QuestionResolution,
     QuestionResolveRequest,
 )
-from app.models.conversation import Conversation
+from app.models.conversation import Conversation, ConversationQuestion
 from app.services.ai_client import ai_client
 from app.services.interpretation import asks_about_portfolio, previous_question, remember, understood_text
 from app.services.policy_resolver import resolve_policy_from_question
+from app.services import small_talk
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
 
@@ -90,6 +91,41 @@ def resolve_policy_context(
     return _to_candidate(policy)
 
 
+def _recent_policies(db: Session, employee_id: str, limit: int = 3) -> list[CorePolicy]:
+    """The policies this employee asked about most recently, newest first."""
+    rows = (
+        db.query(ConversationQuestion.policy_id, func.max(ConversationQuestion.created_at).label("last_asked"))
+        .join(Conversation, Conversation.id == ConversationQuestion.conversation_id)
+        .filter(Conversation.employee_id == employee_id, ConversationQuestion.policy_id.isnot(None))
+        .group_by(ConversationQuestion.policy_id)
+        .order_by(desc("last_asked"))
+        .limit(limit)
+        .all()
+    )
+    policies = {p.id: p for p in db.query(CorePolicy).filter(CorePolicy.id.in_([r.policy_id for r in rows])).all()}
+    return [policies[r.policy_id] for r in rows if r.policy_id in policies]
+
+
+def _example_policies(db: Session, employee_id: str) -> list[CorePolicy]:
+    """Real policies for example questions: the employee's recent ones, else in-force policies on file."""
+    recent = _recent_policies(db, employee_id)
+    if recent:
+        return recent
+    return (
+        db.query(CorePolicy)
+        .filter(CorePolicy.status == "in_force")
+        .order_by(CorePolicy.policy_number, desc(CorePolicy.term_number))
+        .limit(2)
+        .all()
+    )
+
+
+def _ref(policy: Optional[CorePolicy]) -> Optional[small_talk.PolicyRef]:
+    if policy is None:
+        return None
+    return small_talk.PolicyRef(policy.policy_number, policy.account.name if policy.account else "")
+
+
 @router.post("/from-question", response_model=QuestionResolution)
 def resolve_policy_from_question_text(
     payload: QuestionResolveRequest,
@@ -113,6 +149,21 @@ def resolve_policy_from_question_text(
         else None
     )
     prior = previous_question(conversation.id, conversation.policy_id, db) if conversation else None
+    active = db.get(CorePolicy, conversation.policy_id) if conversation and conversation.policy_id else None
+
+    # Greetings, thanks and "what can you do?" get a conversational reply. No language model is
+    # called and nothing is recorded: they are not policy questions.
+    kind = small_talk.classify(question)
+    if kind:
+        has_history = bool(
+            conversation
+            and db.query(ConversationQuestion).filter(ConversationQuestion.conversation_id == conversation.id).count()
+        )
+        examples = [_ref(p) for p in _example_policies(db, employee.id)]
+        reply = small_talk.reply_for(kind, employee.first_name, _ref(active), examples, has_history)
+        return QuestionResolution(
+            status="no_reference", intent="conversation", reply=reply.text, suggestions=reply.suggestions
+        )
 
     # Understand the question first: "margret chen" becomes "Margaret Chen", "ho 2847 1193" becomes
     # "HO-2847-1193", "polcies" becomes "policies". Without the AI service it falls back to the raw text.
@@ -124,9 +175,22 @@ def resolve_policy_from_question_text(
     result = resolve_policy_from_question(understood, db)
     if result.status == "no_reference" and understood != question:
         result = resolve_policy_from_question(question, db)
+    intent = "portfolio" if asks_about_portfolio(question, interpretation) else "policy"
+    reply: Optional[small_talk.Reply] = None
+    suggested: list[CorePolicy] = []
+    if result.status == "no_reference":
+        if (interpretation or {}).get("intent") == "other":
+            # The interpreter judged it unrelated to insurance policies ("what's the weather?").
+            intent = "off_topic"
+            reply = small_talk.off_topic_reply(_ref(active), [_ref(p) for p in _example_policies(db, employee.id)])
+        elif not active:
+            suggested = _recent_policies(db, employee.id)
     return QuestionResolution(
         status=result.status,
-        intent="portfolio" if asks_about_portfolio(question, interpretation) else "policy",
+        intent=intent,
+        reply=reply.text if reply else None,
+        suggestions=reply.suggestions if reply else [],
+        suggested_policies=[_to_candidate(p) for p in suggested],
         interpretation=interpretation,
         matched_on=result.matched_on,
         reference=result.reference,

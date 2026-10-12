@@ -28,6 +28,13 @@ class EmployeeUser:
     # False when no identity was sent and the placeholder employee is used.
     identified: bool = False
 
+    @property
+    def first_name(self) -> Optional[str]:
+        """For addressing the employee; None for the placeholder employee."""
+        if not self.identified or not self.name:
+            return None
+        return self.name.split()[0]
+
 
 def _clean(value: Optional[str], limit: int) -> Optional[str]:
     if not value:
