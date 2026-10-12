@@ -159,9 +159,14 @@ def test_ai_service_down_marks_question_failed(monkeypatch):
 
 def test_database_is_at_latest_migration_and_upgrade_is_idempotent():
     """Alembic has the database at head, the ledger has its audit columns, and re-running is a no-op."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from app.db.migrate import BACKEND_DIR
+
     run_migrations()  # already applied at app start; must be safe to run again
+    head = ScriptDirectory.from_config(Config(str(BACKEND_DIR / "alembic.ini"))).get_current_head()
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001_baseline"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     columns = {c["name"]: c for c in inspect(engine).get_columns("evidence_ledger")}
     assert {"outcome", "guardrail_checks", "model_used", "latency_ms", "retrieval"} <= set(columns)
     assert columns["policy_id"]["nullable"]  # portfolio answers have no single policy

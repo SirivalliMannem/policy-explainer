@@ -1,8 +1,10 @@
 import { APP_CONFIG } from '../config';
+import { currentEmployee } from './auth';
 import type {
   AttentionResponse,
   BillingItem,
   ClaimItem,
+  ConversationListPage,
   ConversationMessageRecord,
   ConversationResponse,
   CoverageItem,
@@ -18,7 +20,6 @@ import type {
   PolicyDetail,
   QuestionAnswerResponse,
   QuestionResolution,
-  RecentQuestionItem,
   SourceDocument,
 } from '../types';
 
@@ -50,6 +51,17 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // The backend allows the AI service 45s; leave headroom for the backend's own work.
 const QUESTION_TIMEOUT_MS = 60_000;
 
+/** Who is asking, on every request. Names are URL-encoded so any characters survive HTTP headers. */
+function identityHeaders(): Record<string, string> {
+  const employee = currentEmployee();
+  if (!employee) return {};
+  return {
+    'X-Employee-Id': employee.employeeId,
+    'X-Employee-Name': encodeURIComponent(employee.name),
+    'X-Employee-Role': encodeURIComponent(employee.role),
+  };
+}
+
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
   const { params, headers, timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = options;
   const baseUrl = (APP_CONFIG.apiBaseUrl || '').replace(/\/$/, '');
@@ -75,6 +87,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     response = await fetch(url.toString(), {
       headers: {
         'Content-Type': 'application/json',
+        ...identityHeaders(),
         ...headers,
       },
       ...rest,
@@ -251,9 +264,16 @@ export async function submitQuestion(
   );
 }
 
-/** Most recently asked questions across conversations, newest first. */
-export async function getRecentQuestions(limit = 30): Promise<RecentQuestionItem[]> {
-  return apiClient.get<RecentQuestionItem[]>('/api/conversations/recent', { params: { limit } });
+/** The signed-in employee's conversations, newest activity first, archived ones excluded. */
+export async function listConversations(
+  query: { search?: string; limit?: number; offset?: number } = {}
+): Promise<ConversationListPage> {
+  return apiClient.get<ConversationListPage>('/api/conversations', { params: query });
+}
+
+/** Hide a conversation from the employee's lists. Nothing is deleted; The Record keeps every answer. */
+export async function archiveConversation(conversationId: string): Promise<{ conversation_id: string; is_archived: boolean }> {
+  return apiClient.post(`/api/conversations/${encodeURIComponent(conversationId)}/archive`, {});
 }
 
 export async function getConversationMessages(conversationId: string): Promise<ConversationMessageRecord[]> {

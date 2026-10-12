@@ -1,24 +1,26 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, ChevronDown, ChevronUp, Cpu, RefreshCw, Send } from 'lucide-react';
-import type { EvidenceItem, PolicyContextCandidate, QuestionResolution, RecentQuestionItem, SourceTarget } from '../types';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { AlertCircle, ArrowLeft, Send } from 'lucide-react';
+import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionResolution, SourceTarget } from '../types';
 import {
+  ApiError,
   clearConversationContext,
   createConversation,
   getConversation,
   getConversationMessages,
-  getRecentQuestions,
   resolvePolicyContext,
   resolvePolicyFromQuestion,
   setConversationContext,
   submitQuestion,
 } from '../services/api';
+import { currentEmployee } from '../services/auth';
 import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner';
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
 import { ChatMessage, ConversationStream } from '../components/explainer/ConversationStream';
-import { ExplainerRail, RailTab } from '../components/explainer/ExplainerRail';
 import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
+import { AnswerAuditPanel, AuditTarget } from '../components/explainer/AnswerAuditPanel';
+import { Skeleton } from '../components/ui/Skeleton';
 import {
   FriendlyError,
   IDLE_PROCESS,
@@ -29,6 +31,7 @@ import {
   interpretedText,
   stagesFromResult,
 } from '../lib/explainer';
+import { notifyConversationsChanged } from '../lib/conversations';
 
 const MATCH_LABEL: Record<string, string> = {
   policy_number: 'policy number',
@@ -58,6 +61,12 @@ function timeOf(iso: string): string {
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** The signed-in employee, as shown on questions asked in this session. */
+function me(): AskedBy | null {
+  const employee = currentEmployee();
+  return employee ? { employee_id: employee.employeeId, name: employee.name, role: employee.role } : null;
+}
+
 /** Clarification replies are short ("Margaret Chen", "HO-2847-1193"); a full question is a new question. */
 function looksLikeReply(text: string): boolean {
   return !text.includes('?') && (text.match(/\S+/g) || []).length <= 4;
@@ -74,39 +83,27 @@ function isBareReference(text: string, resolution: QuestionResolution): boolean 
   return words.length <= 1;
 }
 
+/**
+ * The conversation screen: `/app/explainer/new` for a new conversation, `/app/explainer/c/:id` for
+ * an existing one. History is read from stored answers only; nothing is re-run to display it.
+ */
 export function ExplainerPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
 
-  const [conversationId, setConversationIdState] = useState<string | null>(null);
   const [activePolicy, setActivePolicyState] = useState<PolicyContextCandidate | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [process, setProcess] = useState<ProcessState>(IDLE_PROCESS);
   const [isWorking, setIsWorking] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
-  const [initError, setInitError] = useState<FriendlyError | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [loadError, setLoadError] = useState<FriendlyError | null>(null);
   const [featureTab, setFeatureTab] = useState<PolicyFeatureTab | null>(null);
   const [highlight, setHighlight] = useState<{ type: 'coverage' | 'form'; id: string } | null>(null);
   const [sourceTarget, setSourceTarget] = useState<SourceTarget | null>(null);
-  const [showMobileProcess, setShowMobileProcess] = useState(false);
-  const [railTab, setRailTab] = useState<RailTab>('process');
-  const [recent, setRecent] = useState<RecentQuestionItem[] | null>(null);
-  const [recentError, setRecentError] = useState<string | null>(null);
-  const [recentLoading, setRecentLoading] = useState(false);
-
-  const loadRecent = useCallback(async () => {
-    setRecentLoading(true);
-    try {
-      setRecent(await getRecentQuestions());
-      setRecentError(null);
-    } catch (err) {
-      setRecentError(describeError(err).message);
-    } finally {
-      setRecentLoading(false);
-    }
-  }, []);
+  const [auditTarget, setAuditTarget] = useState<AuditTarget | null>(null);
 
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
@@ -115,13 +112,10 @@ export function ExplainerPage() {
   const busyRef = useRef(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const idRef = useRef(0);
-  const initRef = useRef(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const newVisitRef = useRef<string | null>(null);
+  const loadIdRef = useRef(0);
 
-  const setConversationId = (id: string | null) => {
-    conversationRef.current = id;
-    setConversationIdState(id);
-  };
   const setActivePolicy = (policy: PolicyContextCandidate | null) => {
     policyRef.current = policy;
     setActivePolicyState(policy);
@@ -153,11 +147,12 @@ export function ExplainerPage() {
       return { phase: 'failed', stages, result: null };
     });
 
+  /** A conversation is created only when the first question is asked, then gets its own URL. */
   const ensureConversation = async (): Promise<string> => {
     if (conversationRef.current) return conversationRef.current;
     const conv = await createConversation();
-    setConversationId(conv.conversation_id);
-    setInitError(null);
+    conversationRef.current = conv.conversation_id;
+    navigate(`/app/explainer/c/${conv.conversation_id}`, { replace: true });
     return conv.conversation_id;
   };
 
@@ -183,52 +178,30 @@ export function ExplainerPage() {
       const result = await submitQuestion(convId, question);
       clearTimers();
       setProcess({ phase: 'completed', stages: stagesFromResult(result, contextDetail), result });
-      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), result });
+      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result });
     } catch (err) {
       clearTimers();
       const friendly = describeError(err);
       failProcess(friendly.title);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
     }
-    loadRecent();
+    notifyConversationsChanged();
   };
 
-  /** Clear the conversation view before reopening another conversation or starting a new one. */
+  /** Clear the conversation view before opening another conversation or starting a new one. */
   const resetView = () => {
     clearTimers();
+    loadIdRef.current += 1;
+    setIsLoadingHistory(false);
     setMessages([]);
     setActivePolicy(null);
     pendingQuestionRef.current = null;
     setFeatureTab(null);
     setHighlight(null);
     setSourceTarget(null);
+    setAuditTarget(null);
+    setLoadError(null);
     setProcess(IDLE_PROCESS);
-  };
-
-  const openConversation = async (convId: string) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    resetView();
-    try {
-      await loadConversation(convId);
-    } catch (err) {
-      const friendly = describeError(err);
-      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
-    } finally {
-      busyRef.current = false;
-    }
-  };
-
-  const newConversation = async () => {
-    if (busyRef.current) return;
-    resetView();
-    setConversationId(null);
-    try {
-      await ensureConversation();
-    } catch (err) {
-      setInitError(describeError(err));
-    }
-    setRailTab('process');
   };
 
   const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string) => {
@@ -246,8 +219,7 @@ export function ExplainerPage() {
     busyRef.current = true;
     setIsWorking(true);
     setInput('');
-    push({ kind: 'user', id: nextId('user'), time: nowTime(), text });
-    setRailTab('process');
+    push({ kind: 'user', id: nextId('user'), time: nowTime(), text, askedBy: me(), askedAt: new Date().toISOString() });
     setProcess({ phase: 'running', result: null, stages: { ...freshStages(), context: { status: 'processing' } } });
 
     try {
@@ -428,21 +400,33 @@ export function ExplainerPage() {
     setSourceTarget({ sourceType: item.source_type, sourceId: item.source_id, evidence: item });
   }, []);
 
-  /** Reopen a recorded conversation from the dashboard without asking anything again. */
+  const closeAudit = useCallback(() => setAuditTarget(null), []);
+
+  /** Reopen a recorded conversation from stored answers; nothing is asked again. */
   const loadConversation = async (convId: string) => {
     const conv = await getConversation(convId);
-    setConversationId(conv.conversation_id);
-    if (conv.policy_context) {
+    if (conv.policy_context && conversationRef.current === convId) {
       setActivePolicy(await resolvePolicyContext(conv.policy_context.policy_id));
     }
     const records = await getConversationMessages(convId);
     const restored: ChatMessage[] = [];
-    let last = null;
     for (const record of records) {
-      restored.push({ kind: 'user', id: nextId('user'), time: timeOf(record.created_at), text: record.question });
+      restored.push({
+        kind: 'user',
+        id: nextId('user'),
+        time: timeOf(record.created_at),
+        text: record.question,
+        askedBy: record.asked_by,
+        askedAt: record.created_at,
+      });
       if (record.answer) {
-        restored.push({ kind: 'answer', id: nextId('answer'), time: timeOf(record.created_at), result: record.answer });
-        last = record.answer;
+        restored.push({
+          kind: 'answer',
+          id: nextId('answer'),
+          time: timeOf(record.created_at),
+          question: record.question,
+          result: record.answer,
+        });
       } else if (record.status === 'failed') {
         restored.push({
           kind: 'error',
@@ -453,193 +437,138 @@ export function ExplainerPage() {
         });
       }
     }
-    setMessages(restored);
-    if (last) {
-      setProcess({
-        phase: 'completed',
-        stages: stagesFromResult(last, `${last.policy_context?.policy_number ?? ''} — restored from the Evidence Ledger`),
-        result: last,
-      });
-    }
+    if (conversationRef.current === convId) setMessages(restored);
   };
 
-  const startSession = async () => {
-    const state = (location.state || {}) as { initialQuestion?: string; conversationId?: string };
-    const initialQuestion = state.initialQuestion || searchParams.get('q');
-    const passedConversation = state.conversationId || searchParams.get('conv');
-    if (location.state) navigate(location.pathname, { replace: true, state: null });
-
-    try {
-      if (passedConversation) {
-        await loadConversation(passedConversation);
-      } else {
-        await ensureConversation();
-      }
-      setInitError(null);
-    } catch (err) {
-      setInitError(describeError(err));
-    }
-    if (initialQuestion) handleAsk(initialQuestion);
-  };
-
+  // Follow the URL: a conversation id opens that conversation; /new starts an empty one.
+  // Written to be safe when React runs it twice for the same URL (StrictMode in development).
   useEffect(() => {
-    if (initRef.current) return; // StrictMode mounts twice in development; start one session.
-    initRef.current = true;
-    startSession();
-    loadRecent();
-    return clearTimers;
+    // Already showing this conversation (including one this page just created by asking).
+    if (routeConversationId && routeConversationId === conversationRef.current) return;
+    // Already started this visit to /new.
+    if (!routeConversationId && newVisitRef.current === location.key) return;
+
+    resetView();
+    conversationRef.current = routeConversationId ?? null;
+    if (!routeConversationId) {
+      newVisitRef.current = location.key;
+      const state = (location.state || {}) as { initialQuestion?: string };
+      if (state.initialQuestion) {
+        navigate(location.pathname, { replace: true, state: null });
+        handleAsk(state.initialQuestion);
+      } else {
+        inputRef.current?.focus();
+      }
+      return;
+    }
+
+    const convId = routeConversationId;
+    const load = ++loadIdRef.current;
+    setIsLoadingHistory(true);
+    loadConversation(convId)
+      .catch((err) => {
+        if (load !== loadIdRef.current) return; // the employee has moved on
+        conversationRef.current = null;
+        setLoadError(
+          err instanceof ApiError && err.status === 404
+            ? { title: 'Conversation not available', message: 'It does not exist or belongs to another employee.' }
+            : describeError(err)
+        );
+      })
+      .finally(() => load === loadIdRef.current && setIsLoadingHistory(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [routeConversationId]);
+
+  useEffect(() => clearTimers, []);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     handleAsk(input);
   };
 
-  const processLabel =
-    process.phase === 'completed'
-      ? process.result?.status === 'insufficient_evidence'
-        ? 'Insufficient evidence'
-        : `Completed · ${process.result?.confidence ?? ''} confidence`
-      : process.phase === 'running'
-      ? 'Processing'
-      : process.phase === 'needs_input'
-      ? 'Needs input'
-      : process.phase === 'failed'
-      ? 'Failed'
-      : 'Idle';
-
   return (
-    <div className="mx-auto flex h-[calc(100vh-6rem)] max-w-[88rem] flex-col gap-3 sm:h-[calc(100vh-7rem)] lg:h-[calc(100vh-8rem)]">
-      {initError && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[12.5px] text-red-700">
-          <span className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>
-              <strong>{initError.title}.</strong> {initError.message}
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setInitError(null);
-              ensureConversation().catch((err) => setInitError(describeError(err)));
-            }}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-red-700 hover:bg-red-100 cursor-pointer"
-          >
-            <RefreshCw className="h-3 w-3" /> Retry
-          </button>
-        </div>
-      )}
-
-      <PolicyContextBanner
-        policy={activePolicy}
-        isResolving={isResolving}
-        openTab={featureTab}
-        onOpenTab={(tab) => openTab(tab)}
-        onClear={handleClearContext}
-      />
-
-      {activePolicy && featureTab && (
-        <PolicyFeaturesPanel
-          policyId={activePolicy.policy_id}
-          activeTab={featureTab}
-          onTabChange={(tab) => {
-            setHighlight(null);
-            setFeatureTab(tab);
-          }}
-          targetHighlight={highlight}
-          isOpen
-          onToggleOpen={() => setFeatureTab(null)}
+    <div className="mx-auto flex h-[calc(100vh-6rem)] w-full flex-col gap-3 sm:h-[calc(100vh-7rem)] lg:h-[calc(100vh-8rem)]">
+      <div className="mx-auto flex w-full max-w-[780px] flex-col gap-3">
+        <PolicyContextBanner
+          policy={activePolicy}
+          isResolving={isResolving}
+          openTab={featureTab}
+          onOpenTab={(tab) => openTab(tab)}
+          onClear={handleClearContext}
         />
-      )}
 
-      <div className="flex min-h-0 flex-1 gap-3">
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
+        {activePolicy && featureTab && (
+          <PolicyFeaturesPanel
+            policyId={activePolicy.policy_id}
+            activeTab={featureTab}
+            onTabChange={(tab) => {
+              setHighlight(null);
+              setFeatureTab(tab);
+            }}
+            targetHighlight={highlight}
+            isOpen
+            onToggleOpen={() => setFeatureTab(null)}
+          />
+        )}
+      </div>
+
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
+        {isLoadingHistory ? (
+          <div className="mx-auto w-full max-w-[780px] flex-1 space-y-5 px-4 py-6" aria-label="Loading conversation">
+            <Skeleton className="ml-auto h-12 w-2/3 rounded-2xl" />
+            <Skeleton className="h-40 w-full rounded-2xl" />
+            <Skeleton className="ml-auto h-12 w-1/2 rounded-2xl" />
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+            <AlertCircle className="h-7 w-7 text-red-600" aria-hidden="true" />
+            <p className="text-[15px] font-semibold text-[#0F2A43]">{loadError.title}</p>
+            <p className="max-w-md text-[13px] text-[#64748B]">{loadError.message}</p>
+            <Link
+              to="/app/explainer"
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-[12.5px] font-semibold text-[#0F2A43] hover:border-[#EA580C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C]"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to Policy Explainer
+            </Link>
+          </div>
+        ) : (
           <ConversationStream
             messages={messages}
             isWorking={isWorking}
+            process={process}
+            onShowAudit={setAuditTarget}
             activePolicy={activePolicy}
             onAsk={handleAsk}
             onChooseCandidate={handleChooseCandidate}
             onOpenSource={openSource}
             onOpenTab={openTab}
           />
+        )}
 
-          {/* AI process on small screens: a status strip that expands in place */}
-          <div className="border-t border-[#E2E8F0] lg:hidden">
-            <button
-              type="button"
-              onClick={() => setShowMobileProcess(!showMobileProcess)}
-              className="flex w-full items-center justify-between px-4 py-2 text-[11.5px] text-[#64748B] cursor-pointer"
-              aria-expanded={showMobileProcess}
-            >
-              <span className="flex items-center gap-1.5">
-                <Cpu className="h-3.5 w-3.5 text-[#F97316]" />
-                <span className="font-semibold uppercase tracking-wider text-[#0F2A43]">AI process</span>
-                <span>· {processLabel}</span>
-              </span>
-              {showMobileProcess ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-            </button>
-            {showMobileProcess && (
-              <div className="max-h-[45vh] overflow-y-auto px-3 pb-3">
-                <ExplainerRail
-                  tab={railTab}
-                  onTabChange={setRailTab}
-                  process={process}
-                  policyNumber={activePolicy?.policy_number}
-                  recent={recent}
-                  recentError={recentError}
-                  recentLoading={recentLoading}
-                  conversationId={conversationId}
-                  busy={isWorking}
-                  onOpenConversation={openConversation}
-                  onNewConversation={newConversation}
-                  onRefreshRecent={loadRecent}
-                />
-              </div>
-            )}
-          </div>
-
-          <form onSubmit={onSubmit} className="flex items-center gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] p-3 sm:p-4">
+        <div className="border-t border-[#E2E8F0] bg-[#F8FAFC] p-3 sm:p-4">
+          <form onSubmit={onSubmit} className="mx-auto flex w-full max-w-[780px] items-center gap-2">
             <QuestionInput
               value={input}
               onChange={setInput}
-              disabled={isWorking}
+              disabled={isWorking || isLoadingHistory || Boolean(loadError)}
               placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
               inputRef={inputRef}
             />
             <button
               type="submit"
-              disabled={!input.trim() || isWorking}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#EA580C] px-4 py-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#C2410C] disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 cursor-pointer"
+              disabled={!input.trim() || isWorking || Boolean(loadError)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#EA580C] px-4 py-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 cursor-pointer"
             >
               <span className="hidden sm:inline">Send</span>
               <Send className="h-4 w-4" />
             </button>
           </form>
-        </section>
-
-        <div className="hidden shrink-0 overflow-y-auto lg:block">
-          <ExplainerRail
-                  tab={railTab}
-                  onTabChange={setRailTab}
-                  process={process}
-                  policyNumber={activePolicy?.policy_number}
-                  recent={recent}
-                  recentError={recentError}
-                  recentLoading={recentLoading}
-                  conversationId={conversationId}
-                  busy={isWorking}
-                  onOpenConversation={openConversation}
-                  onNewConversation={newConversation}
-                  onRefreshRecent={loadRecent}
-                />
         </div>
-      </div>
+      </section>
 
       <SourceViewer target={sourceTarget} onClose={() => setSourceTarget(null)} />
-      {conversationId && <span className="sr-only" data-conversation-id={conversationId} />}
+      <AnswerAuditPanel target={auditTarget} onClose={closeAudit} />
+      {routeConversationId && <span className="sr-only" data-conversation-id={routeConversationId} />}
     </div>
   );
 }

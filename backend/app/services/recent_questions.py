@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from sqlalchemy.orm import Session
 
-from app.models.conversation import ConversationQuestion
+from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.dashboard import RecentQuestionItem
 
 
-def recent_questions(db: Session, limit: int = 10) -> list[RecentQuestionItem]:
-    """Newest questions first, with the policyholder, policy and recorded confidence."""
-    rows = (
+def recent_questions(db: Session, limit: int = 10, employee_id: Optional[str] = None) -> list[RecentQuestionItem]:
+    """Newest questions first, with the policyholder, policy and recorded confidence.
+
+    With ``employee_id``, only that employee's questions in conversations they have not archived.
+    """
+    query = (
         db.query(
             ConversationQuestion,
             CorePolicy,
@@ -23,10 +28,12 @@ def recent_questions(db: Session, limit: int = 10) -> list[RecentQuestionItem]:
         .outerjoin(CorePolicy, CorePolicy.id == ConversationQuestion.policy_id)
         .outerjoin(CoreAccount, CoreAccount.id == CorePolicy.account_id)
         .outerjoin(EvidenceLedger, EvidenceLedger.question_id == ConversationQuestion.id)
-        .order_by(ConversationQuestion.created_at.desc())
-        .limit(limit)
-        .all()
     )
+    if employee_id is not None:
+        query = query.join(Conversation, Conversation.id == ConversationQuestion.conversation_id).filter(
+            Conversation.employee_id == employee_id, Conversation.is_archived.is_(False)
+        )
+    rows = query.order_by(ConversationQuestion.created_at.desc()).limit(limit).all()
 
     items: list[RecentQuestionItem] = []
     for cq, policy, account, conf, retrieval in rows:

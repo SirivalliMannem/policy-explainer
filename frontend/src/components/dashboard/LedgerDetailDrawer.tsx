@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ExternalLink, Loader2, MessageSquare, X } from 'lucide-react';
 import { getLedgerEntry } from '../../services/api';
+import { currentEmployee } from '../../services/auth';
+import { roleLabel } from '../../lib/conversations';
 import type { EvidenceItem, LedgerDetail, SourceTarget } from '../../types';
 import { AnswerText } from '../explainer/AnswerText';
 import { GuardrailCheckList, GuardrailStatusBadge } from '../explainer/GuardrailSummary';
@@ -180,7 +182,11 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
                   </Field>
                   <Field label="Line">{lineLabel(entry.line_of_business)}</Field>
                   <Field label="State">{entry.state ?? '—'}</Field>
-                  <Field label="Agent">{entry.agent ?? '—'}</Field>
+                  <Field label="Agent">
+                    {entry.agent_name ? `${entry.agent_name} · ` : ''}
+                    <span className="font-mono">{entry.agent ?? '—'}</span>
+                    {entry.agent_role ? ` · ${roleLabel(entry.agent_role)}` : ''}
+                  </Field>
                 </dl>
               </Section>
               )}
@@ -277,11 +283,11 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
           )}
         </div>
 
-        {entry && (
+        {entry && entry.agent && entry.agent === currentEmployee()?.employeeId && (
           <div className="border-t border-[#E2E8F0] px-5 py-3 sm:px-6">
             <button
               type="button"
-              onClick={() => navigate('/app/explainer', { state: { conversationId: entry.conversation_id } })}
+              onClick={() => navigate(`/app/explainer/c/${entry.conversation_id}`)}
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F2A43] px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-[#16385A] cursor-pointer"
             >
               <MessageSquare className="h-3.5 w-3.5" /> Open conversation <ExternalLink className="h-3 w-3" />

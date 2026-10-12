@@ -12,7 +12,9 @@ from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CorePolicy
 from app.schemas.conversation import (
+    ConversationArchiveResponse,
     ConversationContextUpdateRequest,
+    ConversationListPage,
     ConversationCreateRequest,
     ConversationResponse,
     PolicyContextSummary,
@@ -25,6 +27,7 @@ from app.schemas.explainer import ConversationMessage, QuestionAnswerResponse
 from app.services.ai_client import ai_client
 from app.services.ledger.ledger_service import LedgerService, answer_outcome
 from app.services.recent_questions import recent_questions
+from app.services.conversation_history import asked_by, list_conversations
 from app.services.interpretation import (
     asks_about_portfolio,
     interpret as interpret_question,
@@ -39,6 +42,13 @@ from app.services.portfolio import (
 )
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
+
+def _asker_fields(employee: EmployeeUser) -> dict:
+    """Name and role for the ledger, only when the request identified the employee."""
+    if not employee.identified:
+        return {"employee_name": None, "employee_role": None}
+    return {"employee_name": employee.name, "employee_role": employee.role}
 
 
 def _build_policy_context(policy_id: Optional[str], db: Session) -> Optional[PolicyContextSummary]:
@@ -59,9 +69,17 @@ def _build_policy_context(policy_id: Optional[str], db: Session) -> Optional[Pol
     )
 
 
-def _get_conversation_or_404(conversation_id: str, db: Session) -> Conversation:
-    """Helper to verify conversation existence or raise 404."""
-    conv = db.query(Conversation).filter(Conversation.id == conversation_id.strip()).first()
+def _get_conversation_or_404(conversation_id: str, db: Session, employee: EmployeeUser) -> Conversation:
+    """The conversation if it belongs to the current employee; otherwise 404.
+
+    Another employee's conversation answers exactly like a missing one, so its existence is not
+    revealed. Company-wide visibility is The Record's job, not the conversation API's.
+    """
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id.strip(), Conversation.employee_id == employee.id)
+        .first()
+    )
     if not conv:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -112,19 +130,54 @@ def create_conversation(
 @router.get("/recent", response_model=list[RecentQuestionItem])
 def list_recent_questions(
     limit: int = Query(15, ge=1, le=50),
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    """Most recently asked questions across conversations, newest first (declared before /{id})."""
-    return recent_questions(db, limit=limit)
+    """The current employee's most recently asked questions, newest first (declared before /{id})."""
+    return recent_questions(db, limit=limit, employee_id=employee.id)
+
+
+@router.get("", response_model=ConversationListPage)
+def list_my_conversations(
+    search: Optional[str] = Query(None, max_length=200, description="Matches the conversation title"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """The current employee's conversations, newest activity first, excluding archived ones.
+
+    Read from stored rows only; titles are the first question, never generated.
+    """
+    return list_conversations(db, employee.id, search=search, limit=limit, offset=offset)
+
+
+@router.post("/{conversation_id}/archive", response_model=ConversationArchiveResponse)
+def archive_conversation(
+    conversation_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Hide a conversation from its owner's lists. Nothing is deleted; ledger entries are untouched."""
+    conv = _get_conversation_or_404(conversation_id, db, employee)
+    if not conv.is_archived:
+        conv.is_archived = True
+        conv.archived_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+        db.refresh(conv)
+    return ConversationArchiveResponse(
+        conversation_id=conv.id, is_archived=conv.is_archived, archived_at=conv.archived_at
+    )
 
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 def get_conversation(
     conversation_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Retrieve conversation metadata and currently bound policy context."""
-    conv = _get_conversation_or_404(conversation_id, db)
+    conv = _get_conversation_or_404(conversation_id, db, employee)
     return ConversationResponse(
         conversation_id=conv.id,
         employee_id=conv.employee_id,
@@ -139,10 +192,11 @@ def get_conversation(
 def set_conversation_context(
     conversation_id: str,
     payload: ConversationContextUpdateRequest,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Update or bind a resolved policy context to the conversation."""
-    conv = _get_conversation_or_404(conversation_id, db)
+    conv = _get_conversation_or_404(conversation_id, db, employee)
     policy_id = payload.policy_id.strip()
     policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
     if not policy:
@@ -169,10 +223,11 @@ def set_conversation_context(
 @router.delete("/{conversation_id}/context", response_model=ConversationResponse)
 def clear_conversation_context(
     conversation_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Clear the currently bound policy context from the conversation."""
-    conv = _get_conversation_or_404(conversation_id, db)
+    conv = _get_conversation_or_404(conversation_id, db, employee)
     conv.policy_id = None
     conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
@@ -196,6 +251,7 @@ def clear_conversation_context(
 def submit_question(
     conversation_id: str,
     payload: QuestionSubmitRequest,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Submit a question in the conversation (Delegates to AI microservice and records Evidence Ledger)."""
@@ -206,7 +262,7 @@ def submit_question(
             detail="Question cannot be empty",
         )
 
-    conv = _get_conversation_or_404(conversation_id, db)
+    conv = _get_conversation_or_404(conversation_id, db, employee)
     started = time.perf_counter()
 
     # Understand the question first (spelling, names, paraphrase). Reuses the interpretation made
@@ -217,7 +273,7 @@ def submit_question(
     # Customer and portfolio questions ("how many policies does X have?") are answered from
     # policy records and do not need, or change, the conversation's single-policy context.
     if asks_about_portfolio(question_text, interpretation):
-        return _answer_portfolio_question(conv, question_text, db, interpretation, started)
+        return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee)
 
     if not conv.policy_id:
         raise HTTPException(
@@ -281,6 +337,7 @@ def submit_question(
         suggested_questions=ai_resp.suggested_questions,
         db=db,
         employee_id=conv.employee_id,
+        **_asker_fields(employee),
         outcome=outcome,
         guardrail_checks=[c.model_dump() for c in ai_resp.guardrail_checks],
         model_used=ai_resp.model_used,
@@ -320,6 +377,8 @@ def submit_question(
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
         interpretation=ai_resp.interpretation or interpretation,
+        asked_by=asked_by(conv.employee_id, ledger_entry),
+        asked_at=question_record.created_at,
     )
 
 
@@ -329,6 +388,7 @@ def _answer_portfolio_question(
     db: Session,
     interpretation: Optional[dict],
     started: float,
+    employee: EmployeeUser,
 ) -> QuestionAnswerResponse:
     """Answer a customer/portfolio question from policy records and record it in the ledger."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -378,6 +438,7 @@ def _answer_portfolio_question(
         suggested_questions=suggestions,
         db=db,
         employee_id=conv.employee_id,
+        **_asker_fields(employee),
         outcome=outcome,
         guardrail_checks=[],
         model_used="none",
@@ -412,16 +473,19 @@ def _answer_portfolio_question(
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
         interpretation=interpretation,
+        asked_by=asked_by(conv.employee_id, ledger_entry),
+        asked_at=question_record.created_at,
     )
 
 
 @router.get("/{conversation_id}/messages", response_model=list[ConversationMessage])
 def get_conversation_messages(
     conversation_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Retrieve questions with their recorded answers, so a conversation can be reopened read-only."""
-    conv = _get_conversation_or_404(conversation_id, db)
+    conv = _get_conversation_or_404(conversation_id, db, employee)
     questions = (
         db.query(ConversationQuestion)
         .filter(ConversationQuestion.conversation_id == conv.id)
@@ -467,6 +531,8 @@ def get_conversation_messages(
                     timings_ms=entry.timings_ms or {},
                     latency_ms=entry.latency_ms,
                     ledger_id=entry.id,
+                    asked_by=asked_by(conv.employee_id, entry),
+                    asked_at=q.created_at,
                 )
         messages.append(
             ConversationMessage(
@@ -475,6 +541,7 @@ def get_conversation_messages(
                 status=q.status,
                 policy_id=q.policy_id,
                 created_at=q.created_at,
+                asked_by=asked_by(conv.employee_id, entry),
                 answer=answer,
             )
         )
@@ -484,10 +551,11 @@ def get_conversation_messages(
 @router.get("/{conversation_id}/questions", response_model=list[QuestionHistoryItem])
 def get_question_history(
     conversation_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Retrieve chronological question history for the conversation."""
-    _get_conversation_or_404(conversation_id, db)
+    _get_conversation_or_404(conversation_id, db, employee)
     questions = (
         db.query(ConversationQuestion)
         .filter(ConversationQuestion.conversation_id == conversation_id)

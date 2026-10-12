@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AlertCircle, ChevronLeft, ChevronRight, RefreshCw, Search, X } from 'lucide-react';
 import { getLedger, getLedgerFilters, getLedgerSummary } from '../../services/api';
 import type { LedgerFilters, LedgerPage, LedgerQuery, LedgerSummary } from '../../types';
@@ -64,6 +65,24 @@ export function TheRecord() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sectionRef = useRef<HTMLElement | null>(null);
+
+  // "View in The Record" links here with ?entry=<ledger id>: open that entry and bring the Record into view.
+  const linkedEntry = searchParams.get('entry');
+  useEffect(() => {
+    if (!linkedEntry) return;
+    setSelected(linkedEntry);
+    sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [linkedEntry]);
+  const closeEntry = () => {
+    setSelected(null);
+    if (linkedEntry) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('entry');
+      setSearchParams(next, { replace: true });
+    }
+  };
 
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -140,7 +159,7 @@ export function TheRecord() {
   const to = Math.min(offset + PAGE_SIZE, total);
 
   return (
-    <section className="space-y-4" aria-labelledby="the-record-title">
+    <section ref={sectionRef} className="scroll-mt-4 space-y-4" aria-labelledby="the-record-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#F97316]">Evidence Ledger</span>
@@ -285,7 +304,10 @@ export function TheRecord() {
                   className="cursor-pointer align-top transition-colors hover:bg-[#FFF7ED]/60 focus:bg-[#FFF7ED] focus:outline-none"
                 >
                   <td className="whitespace-nowrap px-3 py-2.5 text-[#475569]">{formatDateTime(row.created_at)}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 font-mono text-[11px] text-[#475569]">{row.agent ?? '—'}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-[#475569]">
+                    {row.agent_name && <span className="block font-semibold text-[#0F2A43]">{row.agent_name}</span>}
+                    <span className="font-mono text-[11px]">{row.agent ?? '—'}</span>
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2.5">
                     <span className="font-semibold text-[#0F2A43]">{row.insured ?? '—'}</span>
                     {row.answer_type !== 'portfolio' && (
@@ -392,7 +414,7 @@ export function TheRecord() {
         </div>
       </div>
 
-      <LedgerDetailDrawer entryId={selected} onClose={() => setSelected(null)} />
+      <LedgerDetailDrawer entryId={selected} onClose={closeEntry} />
     </section>
   );
 }

@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
-from app.schemas.conversation import PolicyContextSummary
+from app.schemas.conversation import AskedBy, PolicyContextSummary
 
 
 class CitationItem(BaseModel):
@@ -108,6 +108,9 @@ class QuestionAnswerResponse(BaseModel):
     ledger_id: Optional[str] = None
     # How the question was understood: corrected wording, names, policy numbers, search terms.
     interpretation: Optional[dict[str, Any]] = None
+    # Who asked, for the audit record shown with the answer.
+    asked_by: Optional[AskedBy] = None
+    asked_at: Optional[datetime] = None
 
 
 class ConversationMessage(BaseModel):
@@ -118,6 +121,7 @@ class ConversationMessage(BaseModel):
     status: str
     policy_id: Optional[str] = None
     created_at: datetime
+    asked_by: Optional[AskedBy] = None
     answer: Optional[QuestionAnswerResponse] = None
 
 

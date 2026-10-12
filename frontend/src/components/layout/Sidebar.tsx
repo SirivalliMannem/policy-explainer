@@ -5,6 +5,7 @@ import { PRIMARY_NAV_ITEMS, SECONDARY_NAV_ITEMS } from '../../config';
 import { cn } from '../../lib/utils';
 import { Tooltip } from '../ui/Tooltip';
 import { Separator } from '../ui/Separator';
+import { ExplainerHistoryNav } from './ExplainerHistoryNav';
 import { clearSession, getSession } from '../../services/auth';
 
 export interface SidebarProps {
@@ -24,6 +25,7 @@ export function Sidebar({
   const session = getSession();
   const email = session?.user.email || 'Signed in';
   const displayName = session?.user.name || 'Insurance Specialist';
+  const employeeId = session?.user.employeeId || session?.user.id;
   const initials =
     displayName
       .split(/\s+/)
@@ -118,10 +120,19 @@ export function Sidebar({
                 </NavLink>
               );
 
-              return isCollapsed ? (
-                <Tooltip key={item.href} content={item.title} position="right" className="w-full">
+              if (isCollapsed) {
+                return (
+                  <Tooltip key={item.href} content={item.title} position="right" className="w-full">
+                    {linkContent}
+                  </Tooltip>
+                );
+              }
+              // Policy Explainer carries the employee's own conversation history beneath it.
+              return item.href === '/app/explainer' ? (
+                <div key={item.href}>
                   {linkContent}
-                </Tooltip>
+                  <ExplainerHistoryNav onNavigate={onCloseMobile} />
+                </div>
               ) : (
                 linkContent
               );
@@ -183,7 +194,9 @@ export function Sidebar({
             {!isCollapsed && (
               <div className="flex flex-col overflow-hidden">
                 <span className="truncate text-xs font-semibold text-navy">{displayName}</span>
-                <span className="truncate text-[11px] text-muted-foreground">{email}</span>
+                <span className="truncate text-[11px] text-muted-foreground">
+                  <span className="font-mono">{employeeId}</span> · {email}
+                </span>
               </div>
             )}
           </div>

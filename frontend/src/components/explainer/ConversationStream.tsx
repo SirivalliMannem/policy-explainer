@@ -13,8 +13,13 @@ import {
   Shield,
   ShieldCheck,
   User,
+  Info,
 } from 'lucide-react';
-import type { EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import type { ProcessState } from '../../lib/explainer';
+import { askerName, fullWhen } from '../../lib/conversations';
+import { StepTracker } from './StepTracker';
+import type { AuditTarget } from './AnswerAuditPanel';
 import { AnswerText } from './AnswerText';
 import { QuickPolicyActions } from './QuickPolicyActions';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
@@ -34,7 +39,7 @@ import {
 } from '../../lib/explainer';
 
 export type ChatMessage =
-  | { kind: 'user'; id: string; time: string; text: string }
+  | { kind: 'user'; id: string; time: string; text: string; askedBy?: AskedBy | null; askedAt?: string | null }
   | {
       kind: 'context';
       id: string;
@@ -45,12 +50,15 @@ export type ChatMessage =
       answering?: string;
     }
   | { kind: 'clarify'; id: string; time: string; text: string; candidates: PolicyContextCandidate[] }
-  | { kind: 'answer'; id: string; time: string; result: QuestionAnswerResponse }
+  | { kind: 'answer'; id: string; time: string; question: string; result: QuestionAnswerResponse }
   | { kind: 'error'; id: string; time: string; title: string; text: string };
 
 interface ConversationStreamProps {
   messages: ChatMessage[];
   isWorking: boolean;
+  /** Live pipeline state, shown as a step tracker while a question is being answered. */
+  process: ProcessState;
+  onShowAudit: (target: AuditTarget) => void;
   activePolicy: PolicyContextCandidate | null;
   onAsk: (question: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
@@ -98,13 +106,58 @@ function AssistantAvatar() {
   );
 }
 
+/** Under every answer: guardrail result, sources cited, and the way into the audit panel. */
+function AuditFooter({
+  question,
+  result,
+  onShowAudit,
+}: {
+  question: string;
+  result: QuestionAnswerResponse;
+  onShowAudit: ConversationStreamProps['onShowAudit'];
+}) {
+  const cited = distinctSources(result.citations, result.evidence).length;
+  const status = result.guardrail_status;
+  const guardrail =
+    status === 'passed'
+      ? { text: 'Guardrails passed', className: 'text-emerald-700', icon: <ShieldCheck className="h-3.5 w-3.5" /> }
+      : status === 'not_applicable'
+      ? { text: 'Guardrails not applicable', className: 'text-[#64748B]', icon: <Shield className="h-3.5 w-3.5" /> }
+      : status === 'no_evidence'
+      ? { text: 'No evidence to check', className: 'text-[#64748B]', icon: <Shield className="h-3.5 w-3.5" /> }
+      : { text: 'Guardrails flagged', className: 'text-amber-700', icon: <AlertTriangle className="h-3.5 w-3.5" /> };
+  return (
+    <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-3 text-[11.5px]">
+      <span className={`inline-flex items-center gap-1 font-semibold ${guardrail.className}`}>
+        {guardrail.icon}
+        {guardrail.text}
+      </span>
+      <span className="inline-flex items-center gap-1 text-[#64748B]">
+        <FileText className="h-3.5 w-3.5" />
+        {cited === 1 ? '1 source cited' : `${cited} sources cited`}
+      </span>
+      <button
+        type="button"
+        onClick={() => onShowAudit({ question, result, askedBy: result.asked_by, askedAt: result.asked_at })}
+        className="ml-auto inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] px-2.5 py-1 font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+      >
+        <Info className="h-3.5 w-3.5" /> How this was answered
+      </button>
+    </div>
+  );
+}
+
 function AnswerCard({
+  question,
   result,
   time,
   onAsk,
   onOpenSource,
   onOpenTab,
+  onShowAudit,
 }: {
+  question: string;
+  onShowAudit: ConversationStreamProps['onShowAudit'];
   result: QuestionAnswerResponse;
   time: string;
   onAsk: (q: string) => void;
@@ -273,12 +326,15 @@ function AnswerCard({
             </div>
           </div>
         )}
+
+        <AuditFooter question={question} result={result} onShowAudit={onShowAudit} />
       </div>
     </div>
   );
 }
 
 function PortfolioCard({
+  question,
   result,
   time,
   activePolicyId,
@@ -286,7 +342,10 @@ function PortfolioCard({
   onAsk,
   onChooseCandidate,
   onOpenSource,
+  onShowAudit,
 }: {
+  question: string;
+  onShowAudit: ConversationStreamProps['onShowAudit'];
   result: QuestionAnswerResponse;
   time: string;
   activePolicyId?: string | null;
@@ -407,6 +466,8 @@ function PortfolioCard({
             </div>
           </div>
         )}
+
+        <AuditFooter question={question} result={result} onShowAudit={onShowAudit} />
       </div>
     </div>
   );
@@ -415,6 +476,8 @@ function PortfolioCard({
 export function ConversationStream({
   messages,
   isWorking,
+  process,
+  onShowAudit,
   activePolicy,
   onAsk,
   onChooseCandidate,
@@ -445,15 +508,28 @@ export function ConversationStream({
   }
 
   return (
-    <div className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
+    <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+      <div className="mx-auto max-w-[780px] space-y-5">
       {messages.map((msg) => {
         switch (msg.kind) {
           case 'user':
             return (
               <div key={msg.id} className="message-in flex items-start justify-end gap-2.5">
-                <div className="max-w-[85%] rounded-2xl rounded-tr-md bg-[#0F2A43] px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-                  <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed">{msg.text}</p>
-                  <span className="mt-1 block text-right text-[10px] text-slate-300/80">{msg.time}</span>
+                <div className="flex max-w-[85%] flex-col items-end sm:max-w-[70%]">
+                  <div className="rounded-2xl rounded-tr-md bg-[#0F2A43] px-4 py-2.5 text-white shadow-sm">
+                    <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed">{msg.text}</p>
+                  </div>
+                  <span className="mt-1 text-right text-[10.5px] text-[#64748B]">
+                    Asked by <span className="font-semibold text-[#0F2A43]">{askerName(msg.askedBy)}</span>
+                    {msg.askedBy?.employee_id && (
+                      <>
+                        {' · '}
+                        <span className="font-mono">{msg.askedBy.employee_id}</span>
+                      </>
+                    )}
+                    {' · '}
+                    {fullWhen(msg.askedAt) || msg.time}
+                  </span>
                 </div>
                 <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#16385A]">
                   <User className="h-3.5 w-3.5 text-slate-200" />
@@ -533,6 +609,8 @@ export function ConversationStream({
               return (
                 <PortfolioCard
                   key={msg.id}
+                  question={msg.question}
+                  onShowAudit={onShowAudit}
                   result={msg.result}
                   time={msg.time}
                   activePolicyId={activePolicy?.policy_id}
@@ -546,6 +624,8 @@ export function ConversationStream({
             return (
               <AnswerCard
                 key={msg.id}
+                question={msg.question}
+                onShowAudit={onShowAudit}
                 result={msg.result}
                 time={msg.time}
                 onAsk={onAsk}
@@ -556,21 +636,20 @@ export function ConversationStream({
         }
       })}
 
-      {isWorking && (
-        <div className="message-in flex items-center gap-3">
+      {isWorking && process.phase === 'running' && (
+        <div className="message-in flex items-start gap-3" role="status" aria-live="polite">
           <AssistantAvatar />
-          <div className="flex items-center gap-2 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-2.5 text-[12.5px] text-[#64748B] shadow-sm">
-            <span className="flex gap-1">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#F97316] [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#F97316] [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#F97316]" />
+          <div className="w-full max-w-[22rem] rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
+            <span className="mb-2 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">
+              Answering from policy evidence
             </span>
-            Working through the grounded pipeline
+            <StepTracker stages={process.stages} compact label="Live AI process" />
           </div>
         </div>
       )}
 
       <div ref={bottomRef} />
+      </div>
     </div>
   );
 }

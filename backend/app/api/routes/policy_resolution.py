@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
 from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.policy_resolution import (
@@ -92,6 +93,7 @@ def resolve_policy_context(
 @router.post("/from-question", response_model=QuestionResolution)
 def resolve_policy_from_question_text(
     payload: QuestionResolveRequest,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Resolve the policy a free-text question refers to by policy number or policyholder name.
@@ -103,7 +105,10 @@ def resolve_policy_from_question_text(
     """
     question = payload.question.strip()
     conversation = (
-        db.query(Conversation).filter(Conversation.id == payload.conversation_id).first()
+        # Only the employee's own conversation lends its previous question as context.
+        db.query(Conversation)
+        .filter(Conversation.id == payload.conversation_id, Conversation.employee_id == employee.id)
+        .first()
         if payload.conversation_id
         else None
     )
@@ -112,7 +117,8 @@ def resolve_policy_from_question_text(
     # Understand the question first: "margret chen" becomes "Margaret Chen", "ho 2847 1193" becomes
     # "HO-2847-1193", "polcies" becomes "policies". Without the AI service it falls back to the raw text.
     interpretation = ai_client.interpret(question, prior)
-    remember(payload.conversation_id, question, interpretation)
+    if conversation:
+        remember(conversation.id, question, interpretation)
     understood = understood_text(question, interpretation)
 
     result = resolve_policy_from_question(understood, db)

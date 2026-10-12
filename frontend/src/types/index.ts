@@ -278,6 +278,38 @@ export interface QuestionAnswerResponse {
   latency_ms?: number | null;
   ledger_id?: string | null;
   interpretation?: Interpretation | null;
+  /** Who asked, from the evidence ledger. */
+  asked_by?: AskedBy | null;
+  asked_at?: string | null;
+}
+
+/** Who asked a question. name and role are null on entries recorded before they were stored. */
+export interface AskedBy {
+  employee_id: string;
+  name?: string | null;
+  role?: string | null;
+}
+
+export type ConversationOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
+
+export interface ConversationSummary {
+  conversation_id: string;
+  /** The first question, truncated. */
+  title: string;
+  created_at: string;
+  last_activity_at: string;
+  question_count: number;
+  asked_by: AskedBy;
+  policy_number?: string | null;
+  customer_name?: string | null;
+  latest_outcome?: ConversationOutcome | string | null;
+}
+
+export interface ConversationListPage {
+  items: ConversationSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ConversationResponse {
@@ -298,6 +330,7 @@ export interface ConversationMessageRecord {
   status: string;
   policy_id?: string | null;
   created_at: string;
+  asked_by?: AskedBy | null;
   answer?: QuestionAnswerResponse | null;
 }
 
@@ -410,6 +443,8 @@ export interface LedgerRow {
   conversation_id: string;
   question_id: string;
   agent?: string | null;
+  agent_name?: string | null;
+  agent_role?: string | null;
   insured?: string | null;
   customer_id?: string | null;
   policy_id?: string | null;

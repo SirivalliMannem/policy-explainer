@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -25,6 +25,10 @@ class Conversation(Base):
     status: Mapped[str] = mapped_column(String(30), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Archived conversations are hidden from their owner's lists, never deleted; their ledger
+    # entries are unaffected and remain in The Record.
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     questions: Mapped[list[ConversationQuestion]] = relationship(
         "ConversationQuestion",
