@@ -6,7 +6,7 @@ import { groupConversations, notifyConversationsChanged, shortWhen, useMyConvers
 import { describeError } from '../../lib/explainer';
 import { cn } from '../../lib/utils';
 
-const SIDEBAR_LIMIT = 30;
+const PAGE_SIZE = 30;
 
 /**
  * Sub-menu under "Policy Explainer": a New conversation button, then the signed-in employee's own
@@ -20,7 +20,8 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
   const [open, setOpen] = useState(true);
   const [search, setSearch] = useState('');
   const [archiveError, setArchiveError] = useState<string | null>(null);
-  const { items, total, error, loading, reload } = useMyConversations(search, SIDEBAR_LIMIT);
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const { items, total, error, loading, reload } = useMyConversations(search, limit);
   const activeId = location.pathname.match(/^\/app\/explainer\/c\/([^/]+)/)?.[1] ?? null;
 
   const archive = async (id: string, title: string) => {
@@ -139,13 +140,14 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
 
         {archiveError && <p className="px-1 text-[11px] text-red-700">{archiveError}</p>}
         {items && total > items.length && (
-          <Link
-            to="/app/explainer"
-            onClick={onNavigate}
-            className="block shrink-0 px-1 text-[11.5px] font-semibold text-orange-btn hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn"
+          <button
+            type="button"
+            onClick={() => setLimit((n) => n + PAGE_SIZE)}
+            disabled={loading}
+            className="block shrink-0 px-1 text-left text-[11.5px] font-semibold text-orange-btn hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn disabled:opacity-60 cursor-pointer"
           >
-            View all {total} →
-          </Link>
+            {loading ? 'Loading…' : `Show ${Math.min(PAGE_SIZE, total - items.length)} more`}
+          </button>
         )}
       </div>
     </div>

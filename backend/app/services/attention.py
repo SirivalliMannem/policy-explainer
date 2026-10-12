@@ -139,8 +139,8 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
                 ),
             )
         )
-    # Longest-waiting first, as a review queue reads.
-    items.sort(key=lambda i: i.first_asked_at)
+    # Newest first: the most recently asked question leads the list.
+    items.sort(key=lambda i: i.last_asked_at, reverse=True)
 
     flagged = sum(cause_counts.values())
     examples["no_evidence"] = unmatched_terms

@@ -101,9 +101,11 @@ function QueueRow({
         </span>
         <span
           className={`hidden md:block text-right text-xs ${old ? 'font-bold text-orange-btn' : 'text-muted-foreground'}`}
-          title={`First asked ${new Date(parseUtc(item.first_asked_at)).toLocaleString()}`}
+          title={`Last asked ${new Date(parseUtc(item.last_asked_at)).toLocaleString()} · first asked ${new Date(
+            parseUtc(item.first_asked_at)
+          ).toLocaleString()}`}
         >
-          {relativeTime(item.first_asked_at)}
+          {relativeTime(item.last_asked_at)}
         </span>
         <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
