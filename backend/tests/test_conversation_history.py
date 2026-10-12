@@ -188,6 +188,12 @@ def test_history_is_read_from_stored_data_without_the_ai_service(seeded, no_ai):
     assert answer["timings_ms"]["generation"] == 1100 and answer["citations"][0]["form_number"] == "HO 04 95"
     assert answer["asked_by"] == {"employee_id": seeded["emp_a"], "name": "Agent Alpha", "role": "csr"}
     assert answer["guardrail_status"] == "passed"
+    # Everything the "How this was answered" panel shows comes back from storage.
+    assert answer["evidence"][0]["form_number"] == "HO 04 95" and "relevance_score" in answer["evidence"][0]
+    assert answer["retrieval"]["clauses_searched"] == 47 and answer["retrieval"]["forms_searched"] == 4
+    assert answer["grounding_context_chars"] == len("ctx")
+    assert answer["model_used"] == "test-model"
+    assert answer["guardrail_checks"] == [{"name": "evidence_grounded", "status": "passed", "detail": "ok"}]
     assert client.get(f"/api/conversations/{conv}", headers=owner).status_code == 200
     assert listed(seeded["emp_a"])  # the list endpoint is also storage-only
 

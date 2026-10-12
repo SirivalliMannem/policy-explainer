@@ -274,9 +274,11 @@ export interface QuestionAnswerResponse {
   is_fallback: boolean;
   fallback_reason?: string | null;
   retrieval: RetrievalSummary;
-  timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
+  timings_ms: Partial<Record<'interpretation' | 'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
   latency_ms?: number | null;
   ledger_id?: string | null;
+  /** Characters in the grounding context sent to the model; null when nothing was grounded or not recorded. */
+  grounding_context_chars?: number | null;
   interpretation?: Interpretation | null;
   /** Who asked, from the evidence ledger. */
   asked_by?: AskedBy | null;

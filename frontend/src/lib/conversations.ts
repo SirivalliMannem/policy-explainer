@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { listConversations } from '../services/api';
 import type { AskedBy, ConversationSummary } from '../types';
 import { describeError } from './explainer';
+import { groupByActivity, historyGroup, parseUtc, type HistoryGroup } from './historyGroups';
 
 /** Fired after a question is asked or a conversation archived, so every history list refreshes. */
 const CHANGED_EVENT = 'policy-explainer:conversations-changed';
@@ -10,29 +11,11 @@ export function notifyConversationsChanged(): void {
   window.dispatchEvent(new Event(CHANGED_EVENT));
 }
 
-export function parseUtc(value: string): Date {
-  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`);
-}
-
-function startOfDay(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-export type HistoryGroup = 'Today' | 'Yesterday' | 'Earlier';
-
-export function historyGroup(iso: string, now = new Date()): HistoryGroup {
-  const day = startOfDay(parseUtc(iso));
-  const today = startOfDay(now);
-  if (day >= today) return 'Today';
-  if (day >= today - 86_400_000) return 'Yesterday';
-  return 'Earlier';
-}
+export { parseUtc, historyGroup } from './historyGroups';
+export type { HistoryGroup } from './historyGroups';
 
 export function groupConversations(items: ConversationSummary[]): { group: HistoryGroup; items: ConversationSummary[] }[] {
-  const order: HistoryGroup[] = ['Today', 'Yesterday', 'Earlier'];
-  return order
-    .map((group) => ({ group, items: items.filter((c) => historyGroup(c.last_activity_at) === group) }))
-    .filter((g) => g.items.length > 0);
+  return groupByActivity(items);
 }
 
 /** "14:05" today, "Yesterday 09:12", or "3 Oct" for older activity. */

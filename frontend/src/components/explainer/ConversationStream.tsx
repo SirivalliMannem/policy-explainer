@@ -14,12 +14,13 @@ import {
   ShieldCheck,
   User,
   Info,
+  ListChecks,
+  Loader2,
 } from 'lucide-react';
 import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
 import type { ProcessState } from '../../lib/explainer';
 import { askerName, fullWhen } from '../../lib/conversations';
-import { StepTracker } from './StepTracker';
-import type { AuditTarget } from './AnswerAuditPanel';
+import type { AuditTarget } from './AIProcessPanel';
 import { AnswerText } from './AnswerText';
 import { QuickPolicyActions } from './QuickPolicyActions';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
@@ -56,9 +57,11 @@ export type ChatMessage =
 interface ConversationStreamProps {
   messages: ChatMessage[];
   isWorking: boolean;
-  /** Live pipeline state, shown as a step tracker while a question is being answered. */
+  /** Live pipeline state; its steps are shown in the AI process panel. */
   process: ProcessState;
-  onShowAudit: (target: AuditTarget) => void;
+  onShowAudit: (target: AuditTarget, opener: HTMLElement) => void;
+  /** Reopen the AI process panel for the question being answered. */
+  onShowProcess: (opener: HTMLElement) => void;
   activePolicy: PolicyContextCandidate | null;
   onAsk: (question: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
@@ -138,7 +141,7 @@ function AuditFooter({
       </span>
       <button
         type="button"
-        onClick={() => onShowAudit({ question, result, askedBy: result.asked_by, askedAt: result.asked_at })}
+        onClick={(e) => onShowAudit({ question, result, askedBy: result.asked_by, askedAt: result.asked_at }, e.currentTarget)}
         className="ml-auto inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] px-2.5 py-1 font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
       >
         <Info className="h-3.5 w-3.5" /> How this was answered
@@ -478,6 +481,7 @@ export function ConversationStream({
   isWorking,
   process,
   onShowAudit,
+  onShowProcess,
   activePolicy,
   onAsk,
   onChooseCandidate,
@@ -637,13 +641,20 @@ export function ConversationStream({
       })}
 
       {isWorking && process.phase === 'running' && (
-        <div className="message-in flex items-start gap-3" role="status" aria-live="polite">
+        <div className="message-in flex items-center gap-3">
           <AssistantAvatar />
-          <div className="w-full max-w-[22rem] rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
-            <span className="mb-2 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">
-              Answering from policy evidence
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-2.5 text-[12.5px] text-[#475569] shadow-sm">
+            <span className="inline-flex items-center gap-2" role="status">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-[#EA580C] motion-reduce:animate-none" aria-hidden="true" />
+              Working on your answer. Follow each step in the AI process panel.
             </span>
-            <StepTracker stages={process.stages} compact label="Live AI process" />
+            <button
+              type="button"
+              onClick={(e) => onShowProcess(e.currentTarget)}
+              className="inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] px-2.5 py-1 text-[11.5px] font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+            >
+              <ListChecks className="h-3.5 w-3.5" aria-hidden="true" /> Show AI process
+            </button>
           </div>
         </div>
       )}

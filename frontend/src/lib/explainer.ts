@@ -1,5 +1,5 @@
 import { ApiError } from '../services/api';
-import type { CitationItem, EvidenceItem, Interpretation, QuestionAnswerResponse } from '../types';
+import type { AskedBy, CitationItem, EvidenceItem, Interpretation, QuestionAnswerResponse } from '../types';
 
 // ==========================================
 // Labels & formatting
@@ -229,21 +229,17 @@ export interface StageState {
   ms?: number | null;
 }
 
-export const STAGES: { key: StageKey; label: string }[] = [
-  { key: 'context', label: 'Identify policy context' },
-  { key: 'retrieve', label: 'Retrieve relevant evidence' },
-  { key: 'ground', label: 'Build grounding context' },
-  { key: 'generate', label: 'Generate grounded answer' },
-  { key: 'validate', label: 'Validate citations & guardrails' },
-  { key: 'deliver', label: 'Deliver cited answer' },
-];
-
 export type ProcessPhase = 'idle' | 'running' | 'completed' | 'needs_input' | 'failed';
 
 export interface ProcessState {
   phase: ProcessPhase;
   stages: Record<StageKey, StageState>;
   result: QuestionAnswerResponse | null;
+  /** The question being answered, who asked it, and how its policy was identified. */
+  question?: string;
+  askedBy?: AskedBy | null;
+  askedAt?: string | null;
+  contextDetail?: string | null;
 }
 
 export function freshStages(): Record<StageKey, StageState> {
@@ -258,60 +254,3 @@ export function freshStages(): Record<StageKey, StageState> {
 }
 
 export const IDLE_PROCESS: ProcessState = { phase: 'idle', stages: freshStages(), result: null };
-
-/** Final stage states derived from what the AI service actually returned and measured. */
-export function stagesFromResult(result: QuestionAnswerResponse, contextDetail: string): Record<StageKey, StageState> {
-  const t = result.timings_ms || {};
-  const r = result.retrieval || {};
-  const searched = `${r.clauses_searched ?? 0} clauses, ${r.coverages_searched ?? 0} coverages, ${r.forms_searched ?? 0} forms`;
-  const stages = freshStages();
-  stages.context = { status: 'completed', detail: contextDetail };
-
-  if (result.answer_type === 'portfolio') {
-    const portfolio = result.portfolio;
-    const found = portfolio?.scope !== 'not_found';
-    stages.retrieve = {
-      status: found ? 'completed' : 'failed',
-      detail: found
-        ? `${portfolio?.policies.length ?? 0} policy records matched in the policy system`
-        : 'No matching policyholder on file',
-      ms: t.retrieval,
-    };
-    stages.ground = { status: 'skipped', detail: 'Not needed — answered from policy records, not policy wording' };
-    stages.generate = { status: 'skipped', detail: 'No language model used' };
-    stages.validate = { status: 'skipped', detail: 'Guardrails apply to generated answers, not record lookups' };
-    stages.deliver = { status: 'completed', detail: 'Policy list returned to the browser', ms: result.latency_ms };
-    return stages;
-  }
-
-  if (result.status === 'insufficient_evidence') {
-    stages.retrieve = { status: 'failed', detail: `No matching evidence (searched ${searched})`, ms: t.retrieval };
-    stages.ground = { status: 'skipped', detail: 'Nothing to ground' };
-    stages.generate = { status: 'skipped', detail: 'No answer generated without evidence' };
-    stages.validate = { status: 'skipped' };
-    stages.deliver = { status: 'completed', detail: 'Insufficient-evidence response delivered', ms: result.latency_ms };
-    return stages;
-  }
-
-  const failed = result.guardrail_checks.filter((c) => c.status === 'failed').length;
-  const passed = result.guardrail_checks.filter((c) => c.status === 'passed').length;
-  stages.retrieve = { status: 'completed', detail: `${result.evidence.length} evidence items from ${searched}`, ms: t.retrieval };
-  stages.ground = { status: 'completed', detail: 'Policy, customer and evidence sections assembled', ms: t.grounding };
-  stages.generate = {
-    status: result.is_fallback ? 'attention' : 'completed',
-    detail: result.is_fallback
-      ? `Fallback engine used${result.fallback_reason ? ` — ${result.fallback_reason}` : ''}`
-      : modelLabel(result),
-    ms: t.generation,
-  };
-  stages.validate = {
-    status: result.guardrail_status === 'passed' ? 'completed' : 'attention',
-    detail:
-      result.guardrail_status === 'passed'
-        ? `${passed}/${result.guardrail_checks.length} checks passed · ${result.citations.length} citations verified`
-        : `${failed} check(s) failed — flagged for review`,
-    ms: t.validation,
-  };
-  stages.deliver = { status: 'completed', detail: 'Answer returned to the browser', ms: result.latency_ms };
-  return stages;
-}

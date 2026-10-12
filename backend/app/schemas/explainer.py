@@ -106,6 +106,8 @@ class QuestionAnswerResponse(BaseModel):
     timings_ms: dict[str, int] = {}
     latency_ms: Optional[int] = None
     ledger_id: Optional[str] = None
+    # Size of the grounding context sent to the model, in characters (None when nothing was grounded).
+    grounding_context_chars: Optional[int] = None
     # How the question was understood: corrected wording, names, policy numbers, search terms.
     interpretation: Optional[dict[str, Any]] = None
     # Who asked, for the audit record shown with the answer.

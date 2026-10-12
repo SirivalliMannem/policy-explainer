@@ -97,9 +97,10 @@ export function ExplainerLandingPage() {
   const forwardQuestion = incoming.initialQuestion || searchParams.get('q');
   const forwardConversation = incoming.conversationId || searchParams.get('conv');
 
+  // Every visit focuses the composer, including "New conversation" pressed while already here.
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
+  }, [location.key]);
 
   if (forwardConversation) return <Navigate to={`/app/explainer/c/${forwardConversation}`} replace />;
   if (forwardQuestion) return <Navigate to="/app/explainer/new" replace state={{ initialQuestion: forwardQuestion }} />;

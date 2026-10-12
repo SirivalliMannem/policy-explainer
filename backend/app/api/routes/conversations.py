@@ -376,6 +376,7 @@ def submit_question(
         timings_ms=ai_resp.timings_ms,
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
+        grounding_context_chars=len(ai_resp.grounding_context) if ai_resp.evidence else None,
         interpretation=ai_resp.interpretation or interpretation,
         asked_by=asked_by(conv.employee_id, ledger_entry),
         asked_at=question_record.created_at,
@@ -531,6 +532,11 @@ def get_conversation_messages(
                     timings_ms=entry.timings_ms or {},
                     latency_ms=entry.latency_ms,
                     ledger_id=entry.id,
+                    grounding_context_chars=(
+                        len(entry.grounding_context)
+                        if entry.retrieved_evidence and entry.grounding_context and not is_portfolio
+                        else None
+                    ),
                     asked_by=asked_by(conv.employee_id, entry),
                     asked_at=q.created_at,
                 )
