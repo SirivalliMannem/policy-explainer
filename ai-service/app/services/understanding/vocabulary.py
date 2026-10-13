@@ -95,6 +95,22 @@ PHRASE_SYNONYMS: dict[str, list[str]] = {
     "backed up": ["water backup", "sewer"],
     "sump pump": ["sump", "water backup"],
     "out of pocket": ["deductible"],
+    "what policy do we have": ["policy summary"],
+    "what policy do i have": ["policy summary"],
+    "what policy is this": ["policy summary"],
+    "what policy is that": ["policy summary"],
+    "which policy is this": ["policy summary"],
+    "what is this policy": ["policy summary"],
+    "what is our policy": ["policy summary"],
+    "policy summary": ["policy summary"],
+    "summarize policy": ["policy summary"],
+    "policy details": ["policy summary"],
+    "policy information": ["policy summary"],
+    "policy number": ["policy number"],
+    "effective date": ["effective dates"],
+    "effective dates": ["effective dates"],
+    "expiration date": ["expiration dates"],
+    "policy status": ["policy status"],
 }
 
 # Domain words every question may use even if no clause happens to contain them.
@@ -107,6 +123,7 @@ DOMAIN_WORDS = {
     "motorists", "household", "households", "expired", "homeowners", "homeowner", "auto", "vehicle",
     "vehicles", "renewal", "flood", "water", "damage", "insurance", "account", "accounts", "form", "forms",
     "definition", "occurrence", "business", "property", "personal", "adjuster", "status", "open",
+    "summary", "summaries", "number", "numbers", "effective", "expiration", "dates", "period", "term", "terms",
 }
 
 _CACHE_SECONDS = 300

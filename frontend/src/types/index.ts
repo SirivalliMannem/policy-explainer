@@ -344,6 +344,48 @@ export interface ConversationMessageRecord {
   answer?: QuestionAnswerResponse | null;
 }
 
+export interface CustomerSummary {
+  id: string;
+  name: string;
+}
+
+export interface PolicySummary {
+  id: string;
+  policy_number: string;
+  line_of_business: string;
+  product_name: string;
+}
+
+export interface ContextCheckResponse {
+  switch_type: 'same_customer_same_policy' | 'same_customer_different_policy' | 'different_customer' | 'initial_selection';
+  requires_confirmation: boolean;
+  current_customer?: CustomerSummary | null;
+  current_policy?: PolicySummary | null;
+  target_customer: CustomerSummary;
+  target_policy: PolicySummary;
+  allowed: boolean;
+  message?: string | null;
+}
+
+export interface ContextSwitchAuditItem {
+  id: string;
+  conversation_id: string;
+  employee_id: string;
+  employee_name?: string | null;
+  timestamp: string;
+  previous_customer_id?: string | null;
+  previous_customer_name?: string | null;
+  previous_policy_id?: string | null;
+  previous_policy_number?: string | null;
+  new_customer_id?: string | null;
+  new_customer_name?: string | null;
+  new_policy_id?: string | null;
+  new_policy_number?: string | null;
+  switch_type: string;
+  outcome: string;
+  reason?: string | null;
+}
+
 // ==========================================
 // Source Viewer
 // ==========================================

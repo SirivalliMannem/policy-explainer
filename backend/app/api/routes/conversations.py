@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
-from app.models.conversation import Conversation, ConversationQuestion
+from app.models.conversation import ContextSwitchAudit, Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CorePolicy
 from app.schemas.conversation import (
+    ContextCheckResponse,
+    ContextSwitchAuditItem,
     ConversationArchiveResponse,
     ConversationContextUpdateRequest,
     ConversationListPage,
@@ -25,11 +27,20 @@ from app.schemas.conversation import (
 from app.schemas.dashboard import RecentQuestionItem
 from app.schemas.explainer import ConversationMessage, QuestionAnswerResponse
 from app.services.ai_client import ai_client
+from app.services.authorization import (
+    validate_employee_authorization,
+    validate_policy_customer_relationship,
+)
+from app.services.context_switch_service import (
+    evaluate_context_transition,
+    record_context_switch,
+)
 from app.services.ledger.ledger_service import LedgerService, answer_outcome
 from app.services.recent_questions import recent_questions
 from app.services.conversation_history import asked_by, list_conversations
 from app.services.interpretation import (
     asks_about_portfolio,
+    invalidate_conversation,
     interpret as interpret_question,
     previous_question,
     understood_text,
@@ -96,6 +107,7 @@ def create_conversation(
 ):
     """Create a new conversation session with optional initial policy context."""
     policy_id: Optional[str] = None
+    policy: Optional[CorePolicy] = None
     if payload and payload.policy_id and payload.policy_id.strip():
         policy_id = payload.policy_id.strip()
         policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
@@ -104,6 +116,7 @@ def create_conversation(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Policy not found",
             )
+        validate_employee_authorization(employee, policy)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     conversation = Conversation(
@@ -116,6 +129,17 @@ def create_conversation(
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
+
+    if policy:
+        record_context_switch(
+            db=db,
+            conversation_id=conversation.id,
+            employee=employee,
+            previous_policy=None,
+            new_policy=policy,
+            switch_type="initial_selection",
+            outcome="success",
+        )
 
     return ConversationResponse(
         conversation_id=conversation.id,
@@ -188,6 +212,26 @@ def get_conversation(
     )
 
 
+@router.get("/{conversation_id}/context-check", response_model=ContextCheckResponse)
+def check_conversation_context_switch(
+    conversation_id: str,
+    target_policy_id: str = Query(..., description="Target policy ID to check switch transition"),
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Check whether switching to the target policy requires confirmation or is allowed."""
+    conv = _get_conversation_or_404(conversation_id, db, employee)
+    target_policy = db.query(CorePolicy).filter(CorePolicy.id == target_policy_id.strip()).first()
+    if not target_policy:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target policy not found",
+        )
+    validate_employee_authorization(employee, target_policy)
+    current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
+    return evaluate_context_transition(current_policy, target_policy)
+
+
 @router.post("/{conversation_id}/context", response_model=ConversationResponse)
 def set_conversation_context(
     conversation_id: str,
@@ -195,20 +239,67 @@ def set_conversation_context(
     employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    """Update or bind a resolved policy context to the conversation."""
+    """Update or bind a resolved policy context to the conversation with authorization and switch checks."""
     conv = _get_conversation_or_404(conversation_id, db, employee)
     policy_id = payload.policy_id.strip()
-    policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
-    if not policy:
+    target_policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
+    if not target_policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Policy not found",
         )
 
+    # 1. Authorize employee access to target policy
+    validate_employee_authorization(employee, target_policy)
+
+    # 2. Validate customer relationship if customer_id specified
+    validate_policy_customer_relationship(target_policy, payload.customer_id)
+
+    # 3. Evaluate transition against active context
+    current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
+    check = evaluate_context_transition(current_policy, target_policy)
+
+    # 4. Require explicit confirmation if switching to a different customer
+    if check.switch_type == "different_customer" and not payload.confirm_different_customer:
+        record_context_switch(
+            db=db,
+            conversation_id=conv.id,
+            employee=employee,
+            previous_policy=current_policy,
+            new_policy=target_policy,
+            switch_type=check.switch_type,
+            outcome="rejected",
+            reason="Unconfirmed switch to a different customer",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"You're switching to a different customer. "
+                f"You're currently discussing a policy belonging to {check.current_customer.name if check.current_customer else 'Customer A'}. "
+                f"The selected policy belongs to {check.target_customer.name}. "
+                "Explicit confirmation is required to switch the existing conversation."
+            ),
+        )
+
+    # 5. Apply context update
     conv.policy_id = policy_id
     conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(conv)
+
+    # 6. Invalidate interpretation cache to prevent cross-policy contamination
+    invalidate_conversation(conv.id)
+
+    # 7. Record successful context transition audit
+    record_context_switch(
+        db=db,
+        conversation_id=conv.id,
+        employee=employee,
+        previous_policy=current_policy,
+        new_policy=target_policy,
+        switch_type=check.switch_type,
+        outcome="success",
+    )
 
     return ConversationResponse(
         conversation_id=conv.id,
@@ -228,10 +319,23 @@ def clear_conversation_context(
 ):
     """Clear the currently bound policy context from the conversation."""
     conv = _get_conversation_or_404(conversation_id, db, employee)
+    current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
     conv.policy_id = None
     conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(conv)
+
+    invalidate_conversation(conv.id)
+
+    record_context_switch(
+        db=db,
+        conversation_id=conv.id,
+        employee=employee,
+        previous_policy=current_policy,
+        new_policy=None,
+        switch_type="clear_context",
+        outcome="success",
+    )
 
     return ConversationResponse(
         conversation_id=conv.id,
@@ -241,6 +345,23 @@ def clear_conversation_context(
         updated_at=conv.updated_at,
         policy_context=None,
     )
+
+
+@router.get("/{conversation_id}/context-audit", response_model=list[ContextSwitchAuditItem])
+def get_conversation_context_audit(
+    conversation_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Retrieve chronological audit trail of all policy and customer transitions for this conversation."""
+    _get_conversation_or_404(conversation_id, db, employee)
+    entries = (
+        db.query(ContextSwitchAudit)
+        .filter(ContextSwitchAudit.conversation_id == conversation_id)
+        .order_by(ContextSwitchAudit.timestamp.asc())
+        .all()
+    )
+    return entries
 
 
 @router.post(
@@ -272,7 +393,7 @@ def submit_question(
 
     # Customer and portfolio questions ("how many policies does X have?") are answered from
     # policy records and do not need, or change, the conversation's single-policy context.
-    if asks_about_portfolio(question_text, interpretation):
+    if asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
         return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee)
 
     if not conv.policy_id:
@@ -281,12 +402,14 @@ def submit_question(
             detail="Conversation has no resolved policy context. Policy context is required to ask questions.",
         )
 
-    policy_context = _build_policy_context(conv.policy_id, db)
-    if not policy_context:
+    policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first()
+    if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Resolved policy associated with conversation no longer exists",
         )
+    validate_employee_authorization(employee, policy)
+    policy_context = _build_policy_context(conv.policy_id, db)
 
     # 1. Record incoming question
     now = datetime.now(timezone.utc).replace(tzinfo=None)

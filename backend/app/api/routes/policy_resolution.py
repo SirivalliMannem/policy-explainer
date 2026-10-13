@@ -1,5 +1,6 @@
 """Policy resolution search and resolution API endpoints."""
 
+import re
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import desc, func, or_
@@ -17,10 +18,18 @@ from app.schemas.policy_resolution import (
 from app.models.conversation import Conversation, ConversationQuestion
 from app.services.ai_client import ai_client
 from app.services.interpretation import asks_about_portfolio, previous_question, remember, understood_text
-from app.services.policy_resolver import resolve_policy_from_question
+from app.services.policy_resolver import (
+    ResolutionResult,
+    current_terms,
+    line_hint,
+    resolve_policy_from_question,
+)
 from app.services import small_talk
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
+
+
+from app.services.authorization import validate_employee_authorization
 
 
 def _to_candidate(policy: CorePolicy) -> PolicyContextCandidate:
@@ -40,12 +49,19 @@ def _to_candidate(policy: CorePolicy) -> PolicyContextCandidate:
 @router.get("/search", response_model=list[PolicyContextCandidate])
 def search_policy_context(
     q: Optional[str] = Query(None, description="Search by policy number, customer name, or email"),
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Search for policy contexts matching policy number, customer name, or customer email.
 
     Returns candidate policy + customer contexts.
     """
+    if (employee.role or "").strip().lower() in {"unauthorized", "suspended", "inactive"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Employee is not authorized to search policy records",
+        )
+
     if not q or not q.strip():
         return []
 
@@ -71,6 +87,7 @@ def search_policy_context(
 @router.post("/resolve", response_model=PolicyContextCandidate)
 def resolve_policy_context(
     payload: PolicyResolveRequest,
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
     """Resolve a specific policy by policy_id and return its policy + customer context."""
@@ -88,6 +105,7 @@ def resolve_policy_context(
             detail="Policy not found",
         )
 
+    validate_employee_authorization(employee, policy)
     return _to_candidate(policy)
 
 
@@ -175,7 +193,52 @@ def resolve_policy_from_question_text(
     result = resolve_policy_from_question(understood, db)
     if result.status == "no_reference" and understood != question:
         result = resolve_policy_from_question(question, db)
-    intent = "portfolio" if asks_about_portfolio(question, interpretation) else "policy"
+
+    # When an active policy is selected and no other customer is named, resolve questions
+    # referring to that customer's other policies (e.g. "What about her auto policy?", "her other policy").
+    if result.status == "no_reference" and active and active.account:
+        account_policies = (
+            db.query(CorePolicy)
+            .filter(CorePolicy.account_id == active.account_id)
+            .all()
+        )
+        hint = line_hint(understood) or line_hint(question)
+        if hint:
+            hinted = [p for p in current_terms(account_policies) if p.line_of_business == hint]
+            if len(hinted) == 1:
+                result = ResolutionResult(
+                    status="resolved",
+                    matched_on="customer_name",
+                    reference=active.account.name,
+                    policy=hinted[0],
+                )
+            elif len(hinted) > 1:
+                result = ResolutionResult(
+                    status="ambiguous",
+                    matched_on="customer_name",
+                    reference=active.account.name,
+                    candidates=hinted,
+                    message=f"{active.account.name} has more than one {hint.replace('_', ' ')} policy.",
+                )
+        elif re.search(r"\b(?:other|another|different|second)\s+policy\b", question, re.IGNORECASE):
+            others = [p for p in current_terms(account_policies) if p.id != active.id]
+            if len(others) == 1:
+                result = ResolutionResult(
+                    status="resolved",
+                    matched_on="customer_name",
+                    reference=active.account.name,
+                    policy=others[0],
+                )
+            elif len(others) > 1:
+                result = ResolutionResult(
+                    status="ambiguous",
+                    matched_on="customer_name",
+                    reference=active.account.name,
+                    candidates=others,
+                    message=f"{active.account.name} has {len(others)} other policies that could apply.",
+                )
+
+    intent = "portfolio" if asks_about_portfolio(question, interpretation, has_selected_policy=bool(active)) else "policy"
     reply: Optional[small_talk.Reply] = None
     suggested: list[CorePolicy] = []
     if result.status == "no_reference":

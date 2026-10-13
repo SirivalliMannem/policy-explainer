@@ -4,6 +4,8 @@ import type {
   AttentionResponse,
   BillingItem,
   ClaimItem,
+  ContextCheckResponse,
+  ContextSwitchAuditItem,
   ConversationListPage,
   ConversationMessageRecord,
   ConversationResponse,
@@ -237,11 +239,36 @@ export async function getConversation(conversationId: string): Promise<Conversat
 
 export async function setConversationContext(
   conversationId: string,
-  policyId: string
+  policyId: string,
+  options?: { customerId?: string; confirmDifferentCustomer?: boolean }
 ): Promise<ConversationResponse> {
   return apiClient.post<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/context`,
-    { policy_id: policyId }
+    {
+      policy_id: policyId,
+      customer_id: options?.customerId,
+      confirm_different_customer: options?.confirmDifferentCustomer ?? false,
+    }
+  );
+}
+
+export async function checkContextSwitch(
+  conversationId: string,
+  targetPolicyId: string
+): Promise<ContextCheckResponse> {
+  return apiClient.get<ContextCheckResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/context-check`,
+    {
+      params: { target_policy_id: targetPolicyId },
+    }
+  );
+}
+
+export async function getContextAudit(
+  conversationId: string
+): Promise<ContextSwitchAuditItem[]> {
+  return apiClient.get<ContextSwitchAuditItem[]>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/context-audit`
   );
 }
 

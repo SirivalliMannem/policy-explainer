@@ -16,7 +16,8 @@ import {
 import { currentEmployee } from '../services/auth';
 import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner';
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
-import { ChatMessage, ConversationStream } from '../components/explainer/ConversationStream';
+import { ChatMessage, ConversationStream, PendingCustomerSwitch } from '../components/explainer/ConversationStream';
+import { PolicySwitcherModal } from '../components/explainer/PolicySwitcherModal';
 import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
 import { AIProcessPanel, AuditTarget, PanelContent } from '../components/explainer/AIProcessPanel';
@@ -114,6 +115,10 @@ export function ExplainerPage() {
   const [panel, setPanel] = useState<PanelContent | null>(null);
   const [panelAutoFocus, setPanelAutoFocus] = useState(false);
   const docked = useMediaQuery(DOCK_QUERY);
+
+  // Safe Customer and Policy Switching state (inline confirmation card)
+  const [pendingSwitch, setPendingSwitch] = useState<PendingCustomerSwitch | null>(null);
+  const [policySwitcherOpen, setPolicySwitcherOpen] = useState(false);
 
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
@@ -221,6 +226,8 @@ export function ExplainerPage() {
     panelOpenerRef.current = null;
     setLoadError(null);
     setProcess(IDLE_PROCESS);
+    setPendingSwitch(null);
+    setPolicySwitcherOpen(false);
   };
 
   const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string, candidatesLabel?: string) => {
@@ -316,10 +323,26 @@ export function ExplainerPage() {
         if (pending && isBareReference(text, resolution)) {
           question = pending;
         }
+
+        // Scenario C: If switching to an unrelated customer, require explicit confirmation via inline card
+        if (current && current.customer_id && resolved.customer_id && current.customer_id !== resolved.customer_id) {
+          setPendingSwitch({
+            currentPolicy: current,
+            targetPolicy: resolved,
+            pendingQuestion: question,
+            matchedOn: resolution.matched_on || null,
+          });
+          setProcess(IDLE_PROCESS);
+          return;
+        }
+
         pendingQuestionRef.current = null;
         if (!current || current.policy_id !== resolved.policy_id) {
+          const isSwitch = Boolean(current);
           try {
-            await setConversationContext(convId, resolved.policy_id);
+            await setConversationContext(convId, resolved.policy_id, {
+              customerId: resolved.customer_id,
+            });
           } catch (err) {
             const friendly = describeError(err);
             failProcess(friendly);
@@ -334,7 +357,8 @@ export function ExplainerPage() {
             time: nowTime(),
             policy: resolved,
             matchedOn: resolution.matched_on,
-            switched: Boolean(current),
+            switched: isSwitch,
+            switchType: isSwitch ? 'same_customer_different_policy' : 'initial_selection',
             answering: question !== text ? question : undefined,
           });
         }
@@ -387,15 +411,49 @@ export function ExplainerPage() {
 
   const handleChooseCandidate = async (candidate: PolicyContextCandidate) => {
     if (busyRef.current) return;
+    setPolicySwitcherOpen(false);
+    const current = policyRef.current;
+    const pending = pendingQuestionRef.current;
+
+    // Scenario C: If selecting a policy belonging to a different customer, require confirmation via inline card
+    if (current && current.customer_id && candidate.customer_id && current.customer_id !== candidate.customer_id) {
+      setPendingSwitch({
+        currentPolicy: current,
+        targetPolicy: candidate,
+        pendingQuestion: pending || null,
+        matchedOn: null,
+      });
+      return;
+    }
+
+    // Scenario A: Same customer, same policy
+    if (current && current.policy_id === candidate.policy_id) {
+      pendingQuestionRef.current = null;
+      if (pending) {
+        busyRef.current = true;
+        setIsWorking(true);
+        try {
+          const convId = await ensureConversation();
+          await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number}`);
+        } finally {
+          busyRef.current = false;
+          setIsWorking(false);
+        }
+      }
+      return;
+    }
+
+    // Scenario B: Same customer, different policy (or initial policy selection)
     busyRef.current = true;
     setIsWorking(true);
     try {
       const convId = await ensureConversation();
-      await setConversationContext(convId, candidate.policy_id);
-      const previous = policyRef.current;
+      const isSwitch = Boolean(current);
+      await setConversationContext(convId, candidate.policy_id, {
+        customerId: candidate.customer_id,
+      });
       setActivePolicy(candidate);
       setFeatureTab(null);
-      const pending = pendingQuestionRef.current;
       pendingQuestionRef.current = null;
       push({
         kind: 'context',
@@ -403,9 +461,11 @@ export function ExplainerPage() {
         time: nowTime(),
         policy: candidate,
         matchedOn: null,
-        switched: Boolean(previous),
+        switched: isSwitch,
+        switchType: isSwitch ? 'same_customer_different_policy' : 'initial_selection',
         answering: pending ?? undefined,
       });
+      notifyConversationsChanged();
       if (pending) {
         await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`);
       } else {
@@ -419,6 +479,76 @@ export function ExplainerPage() {
       busyRef.current = false;
       setIsWorking(false);
     }
+  };
+
+  /** Scenario D: Start a new conversation with the newly selected customer/policy. */
+  const handleConfirmStartNew = async () => {
+    if (!pendingSwitch) return;
+    const { targetPolicy, pendingQuestion } = pendingSwitch;
+    setPendingSwitch(null);
+
+    try {
+      const newConv = await createConversation(targetPolicy.policy_id);
+      notifyConversationsChanged();
+      navigate(`/app/explainer/c/${newConv.conversation_id}`, {
+        state: pendingQuestion ? { initialQuestion: pendingQuestion } : null,
+      });
+    } catch (err) {
+      const friendly = describeError(err);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    }
+  };
+
+  /** Scenario C action 2: Switch the existing conversation to the newly selected customer. */
+  const handleConfirmSwitchExisting = async () => {
+    if (!pendingSwitch) return;
+    const { targetPolicy, pendingQuestion, matchedOn } = pendingSwitch;
+    setPendingSwitch(null);
+
+    busyRef.current = true;
+    setIsWorking(true);
+    try {
+      const convId = await ensureConversation();
+      await setConversationContext(convId, targetPolicy.policy_id, {
+        customerId: targetPolicy.customer_id,
+        confirmDifferentCustomer: true,
+      });
+      setActivePolicy(targetPolicy);
+      setFeatureTab(null);
+      pendingQuestionRef.current = null;
+      push({
+        kind: 'context',
+        id: nextId('context'),
+        time: nowTime(),
+        policy: targetPolicy,
+        matchedOn,
+        switched: true,
+        switchType: 'different_customer',
+        answering: pendingQuestion ?? undefined,
+      });
+      notifyConversationsChanged();
+      if (pendingQuestion) {
+        await runPipeline(
+          pendingQuestion,
+          convId,
+          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`
+        );
+      } else {
+        setProcess(IDLE_PROCESS);
+      }
+    } catch (err) {
+      const friendly = describeError(err);
+      failProcess(friendly);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    } finally {
+      busyRef.current = false;
+      setIsWorking(false);
+    }
+  };
+
+  /** Scenario C action 3: Cancel customer switch, retaining existing conversation context. */
+  const handleCancelCustomerSwitch = () => {
+    setPendingSwitch(null);
   };
 
   const handleClearContext = async () => {
@@ -551,6 +681,14 @@ export function ExplainerPage() {
     const load = ++loadIdRef.current;
     setIsLoadingHistory(true);
     loadConversation(convId)
+      .then(() => {
+        if (load !== loadIdRef.current) return;
+        const state = (location.state || {}) as { initialQuestion?: string };
+        if (state.initialQuestion) {
+          navigate(location.pathname, { replace: true, state: null });
+          handleAsk(state.initialQuestion);
+        }
+      })
       .catch((err) => {
         if (load !== loadIdRef.current) return; // the employee has moved on
         conversationRef.current = null;
@@ -578,6 +716,7 @@ export function ExplainerPage() {
           openTab={featureTab}
           onOpenTab={(tab) => openTab(tab)}
           onClear={handleClearContext}
+          onOpenSwitcher={() => setPolicySwitcherOpen(true)}
           processAvailable={liveAvailable || Boolean(lastAnswer)}
           processOpen={Boolean(panel)}
           onToggleProcess={toggleProcess}
@@ -634,6 +773,10 @@ export function ExplainerPage() {
               onChooseCandidate={handleChooseCandidate}
               onOpenSource={openSource}
               onOpenTab={openTab}
+              pendingSwitch={pendingSwitch}
+              onConfirmSwitchContext={handleConfirmSwitchExisting}
+              onConfirmStartNew={handleConfirmStartNew}
+              onCancelSwitch={handleCancelCustomerSwitch}
             />
           )}
 
@@ -669,6 +812,15 @@ export function ExplainerPage() {
 
       <AIProcessPanel content={panel} process={process} docked={docked} autoFocus={panelAutoFocus} onClose={closePanel} />
       <SourceViewer target={sourceTarget} onClose={() => setSourceTarget(null)} />
+
+      {/* Policy and Customer Selection Modal */}
+      <PolicySwitcherModal
+        isOpen={policySwitcherOpen}
+        onClose={() => setPolicySwitcherOpen(false)}
+        currentPolicy={activePolicy}
+        onSelectPolicy={handleChooseCandidate}
+      />
+
       {routeConversationId && <span className="sr-only" data-conversation-id={routeConversationId} />}
     </div>
   );

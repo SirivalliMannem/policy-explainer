@@ -2,7 +2,13 @@ import { useId, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Archive, ChevronDown, ChevronRight, RefreshCw, Search } from 'lucide-react';
 import { archiveConversation } from '../../services/api';
-import { groupConversations, notifyConversationsChanged, shortWhen, useMyConversations } from '../../lib/conversations';
+import {
+  formatConversationTitle,
+  groupConversations,
+  notifyConversationsChanged,
+  shortWhen,
+  useMyConversations,
+} from '../../lib/conversations';
 import { describeError } from '../../lib/explainer';
 import { cn } from '../../lib/utils';
 
@@ -103,6 +109,7 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
                 <ul className="space-y-0.5">
                   {groupItems.map((c) => {
                     const active = c.conversation_id === activeId;
+                    const displayTitle = formatConversationTitle(c.title, c.customer_name, c.policy_number);
                     return (
                       <li key={c.conversation_id} className="group relative">
                         <Link
@@ -113,17 +120,17 @@ export function ExplainerHistoryNav({ onNavigate }: { onNavigate?: () => void })
                             'block rounded-md px-2 py-1.5 pr-7 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn',
                             active ? 'bg-[#FFF1E6] text-[#9A3D09]' : 'text-espresso hover:bg-muted'
                           )}
-                          title={c.title}
+                          title={displayTitle}
                         >
                           <span className={cn('block truncate text-[12.5px]', active ? 'font-semibold' : 'font-medium')}>
-                            {c.title}
+                            {displayTitle}
                           </span>
                           <span className="block truncate text-[10.5px] text-muted-foreground">{shortWhen(c.last_activity_at)}</span>
                         </Link>
                         <button
                           type="button"
-                          onClick={() => archive(c.conversation_id, c.title)}
-                          aria-label={`Archive conversation: ${c.title}`}
+                          onClick={() => archive(c.conversation_id, displayTitle)}
+                          aria-label={`Archive conversation: ${displayTitle}`}
                           title="Archive"
                           className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-white hover:text-espresso focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn group-hover:opacity-100"
                         >

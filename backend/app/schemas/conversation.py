@@ -29,6 +29,53 @@ class ConversationContextUpdateRequest(BaseModel):
     """Request payload to set/update resolved policy context for a conversation."""
 
     policy_id: str = Field(..., min_length=1, description="Policy UUID to bind to context")
+    customer_id: Optional[str] = Field(None, description="Expected customer/account UUID for relationship validation")
+    confirm_different_customer: bool = Field(False, description="Explicit confirmation when switching to an unrelated customer")
+
+
+class CustomerSummary(BaseModel):
+    id: str
+    name: str
+
+
+class PolicySummary(BaseModel):
+    id: str
+    policy_number: str
+    line_of_business: str
+    product_name: str
+
+
+class ContextCheckResponse(BaseModel):
+    switch_type: str  # "same_customer_same_policy" | "same_customer_different_policy" | "different_customer" | "initial_selection"
+    requires_confirmation: bool
+    current_customer: Optional[CustomerSummary] = None
+    current_policy: Optional[PolicySummary] = None
+    target_customer: CustomerSummary
+    target_policy: PolicySummary
+    allowed: bool = True
+    message: Optional[str] = None
+
+
+class ContextSwitchAuditItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversation_id: str
+    employee_id: str
+    employee_name: Optional[str] = None
+    employee_role: Optional[str] = None
+    timestamp: datetime
+    previous_customer_id: Optional[str] = None
+    previous_customer_name: Optional[str] = None
+    previous_policy_id: Optional[str] = None
+    previous_policy_number: Optional[str] = None
+    new_customer_id: Optional[str] = None
+    new_customer_name: Optional[str] = None
+    new_policy_id: Optional[str] = None
+    new_policy_number: Optional[str] = None
+    switch_type: str
+    outcome: str
+    reason: Optional[str] = None
 
 
 class ConversationResponse(BaseModel):

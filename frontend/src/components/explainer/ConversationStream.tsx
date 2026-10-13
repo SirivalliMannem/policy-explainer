@@ -47,6 +47,7 @@ export type ChatMessage =
       policy: PolicyContextCandidate;
       matchedOn?: string | null;
       switched: boolean;
+      switchType?: 'same_customer_different_policy' | 'different_customer' | 'initial_selection' | string;
       answering?: string;
     }
   | {
@@ -62,6 +63,15 @@ export type ChatMessage =
   | { kind: 'assistant'; id: string; time: string; text: string; suggestions: string[] }
   | { kind: 'answer'; id: string; time: string; question: string; result: QuestionAnswerResponse }
   | { kind: 'error'; id: string; time: string; title: string; text: string };
+
+import { InlineCustomerSwitchCard } from './InlineCustomerSwitchCard';
+
+export interface PendingCustomerSwitch {
+  currentPolicy: PolicyContextCandidate;
+  targetPolicy: PolicyContextCandidate;
+  pendingQuestion?: string | null;
+  matchedOn?: string | null;
+}
 
 interface ConversationStreamProps {
   messages: ChatMessage[];
@@ -80,6 +90,10 @@ interface ConversationStreamProps {
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
   onOpenSource: (item: EvidenceItem) => void;
   onOpenTab: (tab: PolicyFeatureTab, highlight?: { type: 'coverage' | 'form'; id: string }) => void;
+  pendingSwitch?: PendingCustomerSwitch | null;
+  onConfirmSwitchContext?: () => Promise<void> | void;
+  onConfirmStartNew?: () => Promise<void> | void;
+  onCancelSwitch?: () => void;
 }
 
 const MATCH_LABEL: Record<string, string> = {
@@ -536,12 +550,16 @@ export function ConversationStream({
   onChooseCandidate,
   onOpenSource,
   onOpenTab,
+  pendingSwitch,
+  onConfirmSwitchContext,
+  onConfirmStartNew,
+  onCancelSwitch,
 }: ConversationStreamProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, isWorking]);
+  }, [messages, isWorking, pendingSwitch]);
 
   if (messages.length === 0 && !isWorking) {
     return (
@@ -551,12 +569,10 @@ export function ConversationStream({
             <Shield className="h-5 w-5 text-[#F97316]" />
           </span>
           <h2 className="font-display text-[28px] leading-tight text-[#0F2A43]">
-            {timeGreeting()}
-            {firstName ? `, ${firstName}` : ''}
+            Explore
           </h2>
-          <p className="mx-auto mt-2 max-w-md text-[14px] leading-relaxed text-[#64748B]">
-            Ask about any policy's coverage, limits, forms, claims or billing. Name a policy number or a policyholder and
-            I'll answer from the policy wording, with citations.
+          <p className="mx-auto mt-2 max-w-lg text-[14px] leading-relaxed text-[#64748B]">
+            Explore policy coverage, limits, deductibles, forms, claims, billing, and customer policies. Ask a question to get evidence-grounded answers with citations.
           </p>
           <div className="mt-7 grid gap-2 text-left sm:grid-cols-2">
             {STARTERS.map(({ label, prompt, icon: Icon }) => (
@@ -607,12 +623,28 @@ export function ConversationStream({
               </div>
             );
 
-          case 'context':
+          case 'context': {
+            const isDiffCustomer = msg.switchType === 'different_customer';
+            const isPolicySwitch = msg.switchType === 'same_customer_different_policy';
             return (
               <div key={msg.id} className="message-in flex justify-center">
-                <span className="inline-flex flex-wrap items-center justify-center gap-1.5 rounded-full border border-[#E2E8F0] bg-white px-3 py-1 text-[11.5px] text-[#64748B] shadow-sm">
-                  <Link2 className="h-3.5 w-3.5 text-[#F97316]" />
-                  {msg.switched ? 'Policy context switched to' : 'Policy context resolved:'}
+                <span
+                  className={`inline-flex flex-wrap items-center justify-center gap-1.5 rounded-full border px-3.5 py-1 text-[11.5px] shadow-sm ${
+                    isDiffCustomer
+                      ? 'border-[#FDBA74] bg-[#FFF7ED] text-[#C2410C]'
+                      : isPolicySwitch
+                      ? 'border-blue-200 bg-blue-50 text-blue-800'
+                      : 'border-[#E2E8F0] bg-white text-[#64748B]'
+                  }`}
+                >
+                  <Link2 className={`h-3.5 w-3.5 ${isDiffCustomer ? 'text-[#EA580C]' : isPolicySwitch ? 'text-blue-600' : 'text-[#F97316]'}`} />
+                  {isDiffCustomer
+                    ? 'Customer context switched to:'
+                    : isPolicySwitch
+                    ? 'Policy switched to:'
+                    : msg.switched
+                    ? 'Policy context switched to:'
+                    : 'Policy context resolved:'}
                   <span className="font-semibold text-[#0F2A43]">{msg.policy.customer_name}</span>
                   <span className="font-mono font-semibold text-[#0F2A43]">{msg.policy.policy_number}</span>
                   <span>· {lineLabel(msg.policy.line_of_business)}</span>
@@ -625,6 +657,7 @@ export function ConversationStream({
                 </span>
               </div>
             );
+          }
 
           case 'clarify':
             return (
@@ -719,6 +752,22 @@ export function ConversationStream({
             );
         }
       })}
+
+      {pendingSwitch && onConfirmSwitchContext && onConfirmStartNew && onCancelSwitch && (
+        <div className="my-6 flex justify-center w-full" role="region" aria-label="Customer context switch">
+          <InlineCustomerSwitchCard
+            currentCustomerName={pendingSwitch.currentPolicy.customer_name}
+            currentPolicyNumber={pendingSwitch.currentPolicy.policy_number}
+            currentLineOfBusiness={pendingSwitch.currentPolicy.line_of_business}
+            targetCustomerName={pendingSwitch.targetPolicy.customer_name}
+            targetPolicyNumber={pendingSwitch.targetPolicy.policy_number}
+            targetLineOfBusiness={pendingSwitch.targetPolicy.line_of_business}
+            onSwitchContext={onConfirmSwitchContext}
+            onStartNewConversation={onConfirmStartNew}
+            onCancel={onCancelSwitch}
+          />
+        </div>
+      )}
 
       {isWorking && process.phase === 'running' && process.stages.context.status === 'processing' && (
         <div className="message-in flex items-center gap-3" role="status" aria-label="Reading your question">

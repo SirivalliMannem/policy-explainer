@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.conversation import ConversationQuestion
 from app.services.ai_client import ai_client
-from app.services.portfolio import CONTENT_TERMS, is_portfolio_question
+from app.services.portfolio import CONTENT_TERMS, is_portfolio_question, is_selected_policy_inquiry
 
 _TTL_SECONDS = 600
 _MAX_ENTRIES = 500
@@ -43,6 +43,16 @@ def recall(conversation_id: Optional[str], question: str) -> Optional[dict]:
     if hit and time.monotonic() - hit[0] < _TTL_SECONDS:
         return hit[1]
     return None
+
+
+def invalidate_conversation(conversation_id: Optional[str]) -> None:
+    """Evict all cached interpretations for this conversation to prevent cross-policy contamination."""
+    if not conversation_id:
+        return
+    with _lock:
+        keys_to_remove = [k for k in _cache if k[0] == conversation_id]
+        for k in keys_to_remove:
+            _cache.pop(k, None)
 
 
 def previous_question(conversation_id: Optional[str], policy_id: Optional[str], db: Session) -> Optional[str]:
@@ -73,9 +83,26 @@ def understood_text(question: str, interpretation: Optional[dict]) -> str:
     return normalized.strip() if isinstance(normalized, str) and normalized.strip() else question
 
 
-def asks_about_portfolio(question: str, interpretation: Optional[dict]) -> bool:
-    """Portfolio when the canonical wording reads as one, or the model judged it one and it is not about wording."""
+def asks_about_portfolio(
+    question: str,
+    interpretation: Optional[dict],
+    has_selected_policy: bool = False,
+) -> bool:
+    """Portfolio when the question asks about the customer or company book.
+
+    When a specific policy is already selected in the conversation, inquiries about that
+    selected policy (such as 'What policy do we have?' or 'What is this policy?') are answered
+    from the grounded policy context, not as a book/portfolio listing.
+    """
     text = understood_text(question, interpretation)
-    if is_portfolio_question(text) or is_portfolio_question(question):
-        return True
-    return (interpretation or {}).get("intent") == "portfolio" and not CONTENT_TERMS.search(text)
+    is_portfolio = is_portfolio_question(text) or is_portfolio_question(question)
+    if not is_portfolio:
+        is_portfolio = (interpretation or {}).get("intent") == "portfolio" and not CONTENT_TERMS.search(text)
+
+    if not is_portfolio:
+        return False
+
+    if has_selected_policy and (is_selected_policy_inquiry(text) or is_selected_policy_inquiry(question)):
+        return False
+
+    return True

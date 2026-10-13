@@ -6,6 +6,7 @@ truncated, and outcomes come from the evidence ledger.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -17,11 +18,91 @@ from app.schemas.conversation import AskedBy, ConversationListPage, Conversation
 from app.services.ledger.ledger_service import answer_outcome
 
 TITLE_LENGTH = 40
+POLICY_NUMBER_PATTERN = re.compile(r"\b((?:HO|PA)[-\s]?\d{3,4}(?:[-\s]\d{3,4})?)\b", re.IGNORECASE)
+COVERAGE_PATTERN = re.compile(r"\b(Coverage\s+[A-Za-z0-9]+)\b", re.IGNORECASE)
 
 
-def conversation_title(first_question: str) -> str:
-    """The first question, cut at a word boundary to about 40 characters."""
-    text = " ".join(first_question.split())
+def conversation_title(
+    first_question: str,
+    customer_name: Optional[str] = None,
+    policy_number: Optional[str] = None,
+) -> str:
+    """Concise, human-readable conversation title based on initial question and policy context."""
+    text = " ".join((first_question or "").split()).strip()
+    if not text:
+        return "New Conversation"
+
+    # 1. Book-wide portfolio inquiries: "What policies do we have?" -> "Policy Overview"
+    if (
+        re.search(r"^\s*(?:what|which|list|show)\s+(?:kind\s+of\s+|type\s+of\s+)?(?:all\s+)?(?:our\s+)?policies\s+do\s+(?:we|i)\s+have[?.]*\s*$", text, re.I)
+        or re.search(r"^\s*what\s+policies\s+do\s+(?:we|i)\s+have[?.]*\s*$", text, re.I)
+        or re.search(r"^\s*(?:what|which)\s+policies\s+are\s+(?:in\s+force|on\s+file)[?.]*\s*$", text, re.I)
+    ):
+        return "Policy Overview"
+
+    # 2. Customer policies:
+    # "What policies does Elena Moreau have?" -> "Elena Moreau — Policies"
+    # "What are David Chen's policies?" -> "David Chen — Policies"
+    cust_match1 = re.search(r"\bwhat\s+policies\s+does\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\s+have\b", text, re.I)
+    if cust_match1:
+        return f"{cust_match1.group(1).title()} — Policies"
+
+    cust_match2 = re.search(r"\bwhat\s+are\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)(?:'s|’s)\s+policies\b", text, re.I)
+    if cust_match2:
+        return f"{cust_match2.group(1).title()} — Policies"
+
+    cust_match3 = re.search(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)(?:'s|’s)\s+policies\b", text, re.I)
+    if cust_match3:
+        return f"{cust_match3.group(1).title()} — Policies"
+
+    if customer_name and re.search(r"\bpolicies\b", text, re.I) and not re.search(r"\b(?:Coverage|HO|PA)\b", text, re.I):
+        if re.search(rf"\b{re.escape(customer_name)}\b", text, re.I):
+            return f"{customer_name} — Policies"
+
+    # 3. Policy Number references (e.g. "What does HO-9021-4477 cover?", "HO-908-023 limits and deductibles"):
+    pol_match = POLICY_NUMBER_PATTERN.search(text)
+    pol_num = pol_match.group(1).upper().replace(" ", "-") if pol_match else (
+        policy_number if (policy_number and policy_number.upper() in text.upper()) else None
+    )
+    if pol_num:
+        if re.search(r"\b(?:limits?\s+and\s+deductibles?|deductibles?\s+and\s+limits?)\b", text, re.I):
+            return f"{pol_num} — Limits & Deductibles"
+        if re.search(r"\bdeductibles?\b", text, re.I):
+            return f"{pol_num} — Deductible"
+        if re.search(r"\blimits?\b", text, re.I):
+            return f"{pol_num} — Limits"
+        if re.search(r"\b(?:cover|covers|covered|coverage)\b", text, re.I):
+            return f"{pol_num} — Coverage Details"
+        if re.search(r"\bclaims?\b", text, re.I):
+            return f"{pol_num} — Claims"
+        if re.search(r"\b(?:forms?|endorsements?)\b", text, re.I):
+            return f"{pol_num} — Forms & Endorsements"
+        if re.search(r"\b(?:billing|premium)\b", text, re.I):
+            return f"{pol_num} — Billing"
+        return f"{pol_num} — Policy Details"
+
+    # 4. Coverage letters / items: "What is the deductible for Coverage A?" -> "Coverage A — Deductible"
+    cov_match = COVERAGE_PATTERN.search(text)
+    if cov_match:
+        cov_name = cov_match.group(1).title()
+        if re.search(r"\b(?:limits?\s+and\s+deductibles?|deductibles?\s+and\s+limits?)\b", text, re.I):
+            return f"{cov_name} — Limits & Deductibles"
+        if re.search(r"\bdeductibles?\b", text, re.I):
+            return f"{cov_name} — Deductible"
+        if re.search(r"\blimits?\b", text, re.I):
+            return f"{cov_name} — Limits"
+        if re.search(r"\b(?:cover|covers|covered|coverage)\b", text, re.I):
+            return f"{cov_name} — Coverage Details"
+        return f"{cov_name} — Details"
+
+    # 5. "Explain this policy" / "Explain the policy" -> "Policy Explanation"
+    if (
+        re.search(r"^\s*(?:please\s+)?(?:explain|summarize)\s+(?:this\s+|the\s+|our\s+)?policy[?.]*\s*$", text, re.I)
+        or re.search(r"\bexplain\s+this\s+policy\b", text, re.I)
+    ):
+        return "Policy Explanation"
+
+    # Default fallback: clean truncation at word boundary
     if len(text) <= TITLE_LENGTH:
         return text
     cut = text[:TITLE_LENGTH].rsplit(" ", 1)[0] or text[:TITLE_LENGTH]
@@ -70,7 +151,12 @@ def list_conversations(
         group["questions"].append(question)
 
     needle = (search or "").strip().lower()
-    groups = [g for g in grouped.values() if not needle or needle in g["first"].question.lower()]
+    groups = [
+        g for g in grouped.values()
+        if not needle
+        or needle in g["first"].question.lower()
+        or needle in conversation_title(g["first"].question).lower()
+    ]
     groups.sort(key=lambda g: g["questions"][-1].created_at, reverse=True)
     page = groups[offset:offset + limit]
 
@@ -116,7 +202,7 @@ def list_conversations(
         items.append(
             ConversationSummary(
                 conversation_id=conv.id,
-                title=conversation_title(g["first"].question),
+                title=conversation_title(g["first"].question, customer_name, policy.policy_number if policy else None),
                 created_at=conv.created_at,
                 last_activity_at=latest.created_at,
                 question_count=len(questions),

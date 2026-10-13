@@ -50,6 +50,18 @@ STOP_WORDS = {
 
 POLICY_NUMBER_REFERENCE = re.compile(r"\b(?:HO|PA)[-\s]?\d{4}(?:[-\s]\d{4})?\b", re.IGNORECASE)
 
+POLICY_IDENTIFICATION_PATTERN = re.compile(
+    r"\b(?:what\s+(?:kind\s+of\s+|type\s+of\s+)?policy|which\s+policy|what\s+is\s+(?:this|that|the|our|my)\s+policy|"
+    r"what\s+do\s+we\s+have|what\s+policy\s+do\s+(?:we|i)\s+have|"
+    r"policy\s+summary|summarize\s+(?:this\s+|the\s+)?policy|policy\s+overview|"
+    r"who\s+is\s+(?:the\s+)?(?:insured|policyholder|named\s+insured)|who\s+is\s+this\s+policy\s+for|"
+    r"policy\s+number|policy\s*#|number\s+of\s+(?:this|the)\s+policy|"
+    r"(?:effective|expiration)\s+(?:dates?|period)|when\s+does\s+(?:this|the)\s+policy\s+expire|"
+    r"policy\s+status|status\s+of\s+(?:this|the)\s+policy|is\s+(?:this|the)\s+policy\s+(?:in\s+force|active)|"
+    r"product\s+(?:name|type)|line\s+of\s+business)\b",
+    re.IGNORECASE,
+)
+
 
 def _tokenize(text: str) -> set[str]:
     """Extract lowercased alphanumeric words and normalized tokens from text."""
@@ -118,7 +130,18 @@ class EvidenceRetriever:
         # The policyholder's name identifies the policy; it is never something its wording says.
         holder_tokens = _tokenize(policy.account.name) if policy.account else set()
         q_tokens -= holder_tokens
-        stats["query_terms"] = sorted(q_tokens)
+
+        # When broad policy questions yield no remaining tokens due to stop words,
+        # capture the identified inquiry terms so valid questions do not become empty queries.
+        if not q_tokens:
+            raw_words = re.findall(r"[a-zA-Z0-9_\-]+", q_clean.lower())
+            preserved = [w.strip("-_") for w in raw_words if len(w.strip("-_")) >= 2]
+            intent_terms = [
+                w for w in preserved if w in ["policy", "summary", "number", "dates", "status", "effective"] or len(w) >= 4
+            ]
+            stats["query_terms"] = sorted(set(intent_terms or preserved[:3]))
+        else:
+            stats["query_terms"] = sorted(q_tokens)
 
         evidence_items: list[EvidenceItem] = []
 
@@ -126,6 +149,14 @@ class EvidenceRetriever:
         coverages = db.query(CoreCoverage).filter(CoreCoverage.policy_id == policy_id).all()
         stats["coverages_searched"] = len(coverages)
         matched_coverage_patterns: set[str] = set()
+
+        is_general_coverage_q = bool(
+            re.search(
+                r"\b(?:what\s+does\s+.*?\bcover\b|what\s+is\s+covered\b|what\s+are\s+the\s+coverages\b|what\s+coverages?\s+(?:are|do|does)\b|what\s+do\s+we\s+cover\b|list\s+(?:the\s+)?coverages?\b|coverages?\s+(?:on|for)\b|what\s+about\s+.*?\bpolicy\b|how\s+about\s+.*?\bpolicy\b)\b",
+                q_lower,
+            )
+            or (not q_tokens and re.search(r"\b(?:cover|covers|covered|coverage)\b", q_lower))
+        )
 
         for cov in coverages:
             cov_tokens = _tokenize(cov.name) | _tokenize(cov.pattern_code)
@@ -137,6 +168,8 @@ class EvidenceRetriever:
             score = 0.0
             if overlap:
                 score += len(overlap) * 4.0
+            if is_general_coverage_q and cov.included:
+                score += 8.0
             if is_deductible_q:
                 # The declarations schedule is the policy-specific source of truth for amounts,
                 # so it must outrank generic clause wording that merely mentions deductibles.
@@ -348,6 +381,73 @@ class EvidenceRetriever:
                         metadata={"status": bill.status, "plan": bill.plan},
                     )
                 )
+
+        # ── 6. Match Policy Metadata (Identification, Summary, Status, Dates) ──
+        has_specific_coverage_inquiry = bool(
+            re.search(r"\b(?:cover|covers|covered|coverage|exclu\w*|peril\w*|damage|loss|losses)\b", q_lower)
+            and not re.search(
+                r"\b(?:what\s+(?:kind\s+of\s+|type\s+of\s+)?policy|which\s+policy|what\s+policy\s+do|policy\s+summary|summarize)\b",
+                q_lower,
+            )
+        )
+        is_policy_id_q = not has_specific_coverage_inquiry and bool(
+            POLICY_IDENTIFICATION_PATTERN.search(question)
+            or POLICY_IDENTIFICATION_PATTERN.search(q_clean)
+            or any(t in q_tokens for t in ["number", "effective", "expiration", "status"])
+        )
+
+        meta_score = 0.0
+        if is_policy_id_q:
+            meta_score += 12.0
+            if "summary" in q_tokens or "summarize" in q_lower:
+                meta_score += 3.0
+            if "number" in q_tokens and "policy" in q_lower:
+                meta_score += 3.0
+            if any(k in q_tokens for k in ["effective", "expiration", "dates", "period"]):
+                meta_score += 3.0
+        elif is_general_coverage_q:
+            meta_score += 6.0
+
+        if meta_score >= 3.0:
+            status_desc = "in force" if policy.status == "in_force" else policy.status.replace("_", " ")
+            line_desc = (policy.line_of_business or "").replace("_", " ").title()
+            named_insured = policy.account.name if policy.account else "N/A"
+            location_info = f"Insured Location: {policy.insured_location}. " if policy.insured_location else ""
+            premium_info = f"Annual Premium: ${policy.annual_premium:,.2f}. " if policy.annual_premium else ""
+
+            content = (
+                f"Policy Number: {policy.policy_number}. "
+                f"Product: {policy.product_name or line_desc}. "
+                f"Line of Business: {line_desc}. "
+                f"Status: {status_desc}. "
+                f"Effective Period: {policy.effective_date} to {policy.expiration_date} (Term {policy.term_number}). "
+                f"Named Insured: {named_insured}. "
+                f"State: {policy.state or 'N/A'}. "
+                f"{location_info}"
+                f"{premium_info}"
+            ).strip()
+
+            evidence_items.append(
+                EvidenceItem(
+                    source_type="policy_meta",
+                    source_id=policy.id,
+                    title=f"Policy Record: {policy.policy_number} — {policy.product_name or line_desc}",
+                    content=content,
+                    heading=f"Policy Record ({policy.policy_number})",
+                    relevance_score=meta_score,
+                    metadata={
+                        "policy_number": policy.policy_number,
+                        "line_of_business": policy.line_of_business,
+                        "product_name": policy.product_name,
+                        "status": policy.status,
+                        "effective_date": str(policy.effective_date),
+                        "expiration_date": str(policy.expiration_date),
+                        "term_number": policy.term_number,
+                        "named_insured": named_insured,
+                        "scope": "policy_record",
+                    },
+                )
+            )
 
         # Filter items with meaningful score (threshold >= 1.5)
         filtered = [item for item in evidence_items if item.relevance_score >= 1.5]

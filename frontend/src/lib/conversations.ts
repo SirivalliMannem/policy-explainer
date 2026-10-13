@@ -14,6 +14,9 @@ export function notifyConversationsChanged(): void {
 export { parseUtc, historyGroup } from './historyGroups';
 export type { HistoryGroup } from './historyGroups';
 
+export { formatConversationTitle } from './conversationTitles';
+
+
 export function groupConversations(items: ConversationSummary[]): { group: HistoryGroup; items: ConversationSummary[] }[] {
   return groupByActivity(items);
 }
