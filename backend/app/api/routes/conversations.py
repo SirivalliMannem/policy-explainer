@@ -628,7 +628,7 @@ def _answer_factual_question(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     question_record = ConversationQuestion(
         conversation_id=conv.id,
-        policy_id=conv.policy_id,
+        policy_id=policy.id,
         question=question_text,
         status="answered" if found else "insufficient_evidence",
         created_at=now,
@@ -659,7 +659,7 @@ def _answer_factual_question(
     ledger_entry = LedgerService.record_entry(
         conversation_id=conv.id,
         question_id=question_record.id,
-        policy_id=conv.policy_id,
+        policy_id=policy.id,
         question=question_text,
         evidence=evidence,
         grounding_context=grounding_ctx,
@@ -687,7 +687,7 @@ def _answer_factual_question(
         question_id=question_record.id,
         question=question_text,
         answer=answer_text,
-        policy_context=_build_policy_context(conv.policy_id, db),
+        policy_context=_build_policy_context(policy.id, db),
         evidence=evidence,
         citations=citations,
         confidence="high" if found else "none",

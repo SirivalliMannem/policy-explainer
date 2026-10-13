@@ -103,3 +103,34 @@ def test_from_question_endpoint_reports_the_identifier(monkeypatch):
         headers=headers,
     ).json()
     assert body["status"] == "ambiguous" and body["answer_all"] is True
+
+
+def test_exact_identifiers_survive_the_interpreter_rewriting_them(monkeypatch):
+    """The language model may rewrite an email or claim number; the lookup uses what was typed."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.ai_client import ai_client
+
+    rewrites = {
+        "margaret.chen@example.com asked about her deductible": "Margaret Chen asked about her deductible.",
+        "Who is the adjuster on CLM-2026-00417?": "Who is the adjuster on claim CLM 2026?",
+    }
+
+    def interpret(question, previous=None):
+        text = rewrites.get(question, question)
+        return {"original": question, "corrected": text, "normalized": text, "method": "llm", "intent": "policy",
+                "policyholders": [], "policy_numbers": [], "search_terms": [], "corrections": [], "latency_ms": 1}
+
+    monkeypatch.setattr(ai_client, "interpret", interpret)
+    client = TestClient(app)
+    headers = {"X-Employee-Id": "EMP-ID-02", "X-Employee-Name": quote("Test Agent"), "X-Employee-Role": "csr"}
+
+    body = client.post("/api/policy-resolution/from-question",
+                       json={"question": "margaret.chen@example.com asked about her deductible"}, headers=headers).json()
+    assert body["matched_on"] == "email" and body["answer_all"] is True
+    assert sorted(c["policy_number"] for c in body["candidates"]) == ["HO-2847-1193", "PA-6120-7742"]
+
+    body = client.post("/api/policy-resolution/from-question",
+                       json={"question": "Who is the adjuster on CLM-2026-00417?"}, headers=headers).json()
+    assert body["matched_on"] == "claim_number" and body["policy"]["policy_number"] == "PA-5518-0042"

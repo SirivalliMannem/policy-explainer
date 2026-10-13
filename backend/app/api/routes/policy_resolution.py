@@ -28,6 +28,9 @@ from app.services import small_talk
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
 
+# Matched exactly on a record, never on interpreted wording.
+EXACT_IDENTIFIERS = {"policy_number", "claim_number", "account_number", "email", "phone", "vin", "plate"}
+
 
 from app.services.authorization import validate_employee_authorization
 
@@ -190,9 +193,16 @@ def resolve_policy_from_question_text(
         remember(conversation.id, question, interpretation)
     understood = understood_text(question, interpretation)
 
-    result = resolve_policy_from_question(understood, db)
-    if result.status == "no_reference" and understood != question:
-        result = resolve_policy_from_question(question, db)
+    # Exact identifiers are read from what the employee typed: the interpreter may rewrite them
+    # ("margaret.chen@example.com" became "Margaret Chen"), and a rewritten claim number, VIN or
+    # phone would match the wrong record or none. Names and loose wording use the understood text.
+    typed = resolve_policy_from_question(question, db)
+    if typed.matched_on in EXACT_IDENTIFIERS:
+        result = typed
+    else:
+        result = resolve_policy_from_question(understood, db) if understood != question else typed
+        if result.status == "no_reference" and understood != question:
+            result = typed
 
     # When an active policy is selected and no other customer is named, resolve questions
     # referring to that customer's other policies (e.g. "What about her auto policy?", "her other policy").

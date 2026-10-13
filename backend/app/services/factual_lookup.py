@@ -138,7 +138,7 @@ def _answer_deductible(
                 source_type="coverage",
                 source_id=specific_cov.id,
                 title=f"Coverage: {specific_cov.name}",
-                content=f"{specific_cov.name} ΓÇö Limit: {specific_cov.limit_text or 'N/A'}, Deductible: {specific_cov.deductible_text or 'None'}.",
+                content=f"{specific_cov.name} — Limit: {specific_cov.limit_text or 'N/A'}, Deductible: {specific_cov.deductible_text or 'None'}.",
                 form_number=specific_cov.governing_form or None,
                 relevance_score=1.0,
                 metadata={
@@ -168,13 +168,13 @@ def _answer_deductible(
         ev_items = []
         cit_items = []
         for i, c in enumerate(covs_with_ded, start=start_index):
-            lines.append(f"ΓÇó {c.name}: {c.deductible_text} [E{i}]")
+            lines.append(f"• {c.name}: {c.deductible_text} [E{i}]")
             ev_items.append(
                 EvidenceItemSchema(
                     source_type="coverage",
                     source_id=c.id,
                     title=f"Coverage: {c.name}",
-                    content=f"{c.name} ΓÇö Limit: {c.limit_text or 'N/A'}, Deductible: {c.deductible_text}.",
+                    content=f"{c.name} — Limit: {c.limit_text or 'N/A'}, Deductible: {c.deductible_text}.",
                     form_number=c.governing_form or None,
                     relevance_score=1.0,
                     metadata={"pattern_code": c.pattern_code, "deductible_amount": c.deductible_amount},
@@ -231,7 +231,7 @@ def _answer_limit(
                 source_type="coverage",
                 source_id=specific_cov.id,
                 title=f"Coverage: {specific_cov.name}",
-                content=f"{specific_cov.name} ΓÇö Limit: {lim_str}, Deductible: {ded_str}.",
+                content=f"{specific_cov.name} — Limit: {lim_str}, Deductible: {ded_str}.",
                 form_number=specific_cov.governing_form or None,
                 relevance_score=1.0,
                 metadata={
@@ -260,15 +260,15 @@ def _answer_limit(
         for i, c in enumerate(coverages, start=start_index):
             lim = c.limit_text or "N/A"
             if also_include_deductible and c.deductible_text and c.deductible_text.lower() != "none":
-                lines.append(f"ΓÇó {c.name}: limit {lim}, deductible {c.deductible_text} [E{i}]")
+                lines.append(f"• {c.name}: limit {lim}, deductible {c.deductible_text} [E{i}]")
             else:
-                lines.append(f"ΓÇó {c.name}: {lim} [E{i}]")
+                lines.append(f"• {c.name}: {lim} [E{i}]")
             ev_items.append(
                 EvidenceItemSchema(
                     source_type="coverage",
                     source_id=c.id,
                     title=f"Coverage: {c.name}",
-                    content=f"{c.name} ΓÇö Limit: {lim}, Deductible: {c.deductible_text or 'None'}.",
+                    content=f"{c.name} — Limit: {lim}, Deductible: {c.deductible_text or 'None'}.",
                     form_number=c.governing_form or None,
                     relevance_score=1.0,
                     metadata={"pattern_code": c.pattern_code, "limit_amount": c.limit_amount},
@@ -303,7 +303,7 @@ def _answer_premium(
                 source_type="policy_meta",
                 source_id=policy.id,
                 title=f"Policy Record: {policy.policy_number}",
-                content=f"Policy {policy.policy_number} ΓÇö Annual Premium: ${policy.annual_premium:,.2f}, Status: {policy.status}.",
+                content=f"Policy {policy.policy_number} — Annual Premium: ${policy.annual_premium:,.2f}, Status: {policy.status}.",
                 relevance_score=1.0,
                 metadata={"policy_number": policy.policy_number, "annual_premium": policy.annual_premium},
             )
@@ -445,8 +445,8 @@ def _answer_claim(
     for i, c in enumerate(claims, start=start_index):
         adj = c.adjuster.strip() if c.adjuster else "Unassigned"
         st = c.status or "open"
-        loss_info = f" ┬╖ Loss Date: {c.loss_date} ({c.loss_cause})" if c.loss_date else ""
-        lines.append(f"ΓÇó Claim {c.claim_number}: Status: {st} ┬╖ Adjuster: {adj}{loss_info} [E{i}]")
+        loss_info = f" · Loss Date: {c.loss_date} ({c.loss_cause})" if c.loss_date else ""
+        lines.append(f"• Claim {c.claim_number}: Status: {st} · Adjuster: {adj}{loss_info} [E{i}]")
         ev_items.append(
             EvidenceItemSchema(
                 source_type="claim",

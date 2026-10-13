@@ -58,7 +58,7 @@ def test_deductible_specific_coverage(elena_home_policy_id):
     with patch("app.services.ai_client.ai_client.explain") as mock_explain:
         q_resp = client.post(
             f"/api/conversations/{conv_id}/questions",
-            json={"question": "What is the deductible for Coverage A ΓÇö Dwelling?"},
+            json={"question": "What is the deductible for Coverage A — Dwelling?"},
         )
         assert q_resp.status_code == 201
         data = q_resp.json()
