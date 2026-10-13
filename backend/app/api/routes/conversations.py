@@ -45,6 +45,7 @@ from app.services.interpretation import (
     invalidate_conversation,
     interpret as interpret_question,
     previous_question,
+    remember,
     understood_text,
 )
 from app.services.portfolio import (
@@ -434,31 +435,37 @@ def submit_question(
 
     conv = _get_conversation_or_404(conversation_id, db, employee)
     started = time.perf_counter()
+    # An explicit policy answers this question for one of a customer's several matching policies,
+    # without changing the conversation's context; otherwise the conversation's policy is used.
+    policy_id = payload.policy_id or conv.policy_id
 
     # Understand the question first (spelling, names, paraphrase). Reuses the interpretation made
     # when the frontend resolved the policy, so the language model is consulted once per question.
-    prior_question = previous_question(conv.id, conv.policy_id, db)
+    prior_question = previous_question(conv.id, policy_id, db)
     interpretation = interpret_question(conv.id, question_text, prior_question)
+    if payload.policy_id:
+        # The same question follows for the customer's other policies: keep its interpretation.
+        remember(conv.id, question_text, interpretation)
 
     # Customer and portfolio questions ("how many policies does X have?") are answered from
     # policy records and do not need, or change, the conversation's single-policy context.
-    if asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
+    if not payload.policy_id and asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
         return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee)
 
-    if not conv.policy_id:
+    if not policy_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Conversation has no resolved policy context. Policy context is required to ask questions.",
         )
 
-    policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first()
+    policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Resolved policy associated with conversation no longer exists",
         )
     validate_employee_authorization(employee, policy)
-    policy_context = _build_policy_context(conv.policy_id, db)
+    policy_context = _build_policy_context(policy_id, db)
 
     canonical_question = understood_text(question_text, interpretation)
     is_factual = is_factual_query(canonical_question) or is_factual_query(question_text)
@@ -477,7 +484,7 @@ def submit_question(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     question_record = ConversationQuestion(
         conversation_id=conv.id,
-        policy_id=conv.policy_id,
+        policy_id=policy_id,
         question=question_text,
         status="processing",
         created_at=now,
@@ -492,7 +499,7 @@ def submit_question(
     try:
         ai_resp = ai_client.explain(
             question=question_text,
-            policy_id=conv.policy_id,
+            policy_id=policy_id,
             conversation_id=conv.id,
             policy_context=policy_context,
             previous_question=prior_question,
@@ -528,7 +535,7 @@ def submit_question(
     ledger_entry = LedgerService.record_entry(
         conversation_id=conv.id,
         question_id=question_record.id,
-        policy_id=conv.policy_id,
+        policy_id=policy_id,
         question=question_text,
         evidence=merged_evidence,
         grounding_context=ai_resp.grounding_context,

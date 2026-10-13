@@ -183,6 +183,8 @@ export interface QuestionResolution {
   suggestions?: string[];
   /** The employee's recently checked policies, offered when the question names no policy. */
   suggested_policies?: PolicyContextCandidate[];
+  /** Ambiguous, but every candidate belongs to one customer: answer the question for each. */
+  answer_all?: boolean;
 }
 
 export interface CitationItem {

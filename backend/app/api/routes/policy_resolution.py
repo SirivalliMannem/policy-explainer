@@ -254,6 +254,7 @@ def resolve_policy_from_question_text(
         reply=reply.text if reply else None,
         suggestions=reply.suggestions if reply else [],
         suggested_policies=[_to_candidate(p) for p in suggested],
+        answer_all=result.status == "ambiguous" and len({p.account_id for p in result.candidates}) == 1,
         interpretation=interpretation,
         matched_on=result.matched_on,
         reference=result.reference,

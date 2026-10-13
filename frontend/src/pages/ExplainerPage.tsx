@@ -30,8 +30,13 @@ import {
   describeError,
   freshStages,
   interpretedText,
+  lineLabel,
 } from '../lib/explainer';
 import { notifyConversationsChanged } from '../lib/conversations';
+import { groupPolicyAnswers } from '../lib/answerGroups';
+
+/** Most policies one question is answered for at once; more than this, the employee chooses. */
+const MAX_ANSWER_ALL = 4;
 
 const MATCH_LABEL: Record<string, string> = {
   policy_number: 'policy number',
@@ -182,7 +187,8 @@ export function ExplainerPage() {
   /** Stages 2–6: submit to the backend, which answers it (AI service or policy records) and records the Evidence Ledger. */
   // The backend answers in one request, so stages 2–6 are reported together when it returns: step 2
   // shows as in progress until then, and every value shown afterwards is the one the pipeline measured.
-  const runPipeline = async (question: string, convId: string, contextDetail: string) => {
+  // `forPolicy` answers for one of a customer's matching policies (labelled), leaving the context as it is.
+  const runPipeline = async (question: string, convId: string, contextDetail: string, forPolicy?: PolicyContextCandidate) => {
     // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
     openPanel({ mode: 'live' }, null);
     setProcess((prev) => ({
@@ -195,7 +201,7 @@ export function ExplainerPage() {
     }));
 
     try {
-      const result = await submitQuestion(convId, question);
+      const result = await submitQuestion(convId, question, forPolicy?.policy_id);
       setProcess((prev) => ({
         ...prev,
         phase: 'completed',
@@ -203,7 +209,7 @@ export function ExplainerPage() {
         askedBy: result.asked_by ?? prev.askedBy,
         askedAt: result.asked_at ?? prev.askedAt,
       }));
-      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result });
+      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result, labelled: Boolean(forPolicy) });
     } catch (err) {
       const friendly = describeError(err);
       failProcess(friendly);
@@ -365,6 +371,36 @@ export function ExplainerPage() {
         contextDetail = `${resolved.customer_name} · ${resolved.policy_number} — matched on ${
           MATCH_LABEL[resolution.matched_on || ''] || 'reference'
         }${understoodNote}`;
+      } else if (
+        resolution.status === 'ambiguous' &&
+        resolution.answer_all &&
+        resolution.candidates.length <= MAX_ANSWER_ALL &&
+        // Another customer's policies still go through the switch confirmation below.
+        (!current || resolution.candidates.every((c) => c.customer_id === current.customer_id))
+      ) {
+        // Several policies of one customer: answer the question for each, labelled by policy number.
+        const pending = pendingQuestionRef.current;
+        if (pending && isBareReference(text, resolution)) question = pending;
+        pendingQuestionRef.current = null;
+        const policies = resolution.candidates;
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: `${policies[0].customer_name} has ${policies.length} policies that match: ${policies
+            .map((c) => `${c.policy_number} (${lineLabel(c.line_of_business)})`)
+            .join(' and ')}. Here is the answer for each.`,
+          suggestions: [],
+        });
+        for (const policy of policies) {
+          await runPipeline(
+            question,
+            convId,
+            `${policy.customer_name} · ${policy.policy_number} — ${policies.indexOf(policy) + 1} of ${policies.length} matching policies${understoodNote}`,
+            policy
+          );
+        }
+        return;
       } else if (resolution.status === 'ambiguous') {
         if (current && resolution.candidates.some((c) => c.policy_id === current.policy_id)) {
           contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
@@ -625,15 +661,18 @@ export function ExplainerPage() {
     }
     const records = await getConversationMessages(convId);
     const restored: ChatMessage[] = [];
-    for (const record of records) {
-      restored.push({
-        kind: 'user',
-        id: nextId('user'),
-        time: timeOf(record.created_at),
-        text: record.question,
-        askedBy: record.asked_by,
-        askedAt: record.created_at,
-      });
+    // A question answered for each of a customer's policies shows once, with its labelled answers.
+    for (const { record, startsQuestion, inGroup } of groupPolicyAnswers(records)) {
+      if (startsQuestion) {
+        restored.push({
+          kind: 'user',
+          id: nextId('user'),
+          time: timeOf(record.created_at),
+          text: record.question,
+          askedBy: record.asked_by,
+          askedAt: record.created_at,
+        });
+      }
       if (record.answer) {
         restored.push({
           kind: 'answer',
@@ -641,6 +680,7 @@ export function ExplainerPage() {
           time: timeOf(record.created_at),
           question: record.question,
           result: record.answer,
+          labelled: inGroup,
         });
       } else if (record.status === 'failed') {
         restored.push({

@@ -61,7 +61,15 @@ export type ChatMessage =
     }
   /** A conversational reply (greeting, thanks, help, off-topic) with example questions to continue. */
   | { kind: 'assistant'; id: string; time: string; text: string; suggestions: string[] }
-  | { kind: 'answer'; id: string; time: string; question: string; result: QuestionAnswerResponse }
+  | {
+      kind: 'answer';
+      id: string;
+      time: string;
+      question: string;
+      result: QuestionAnswerResponse;
+      /** One of several answers to the same question, one per matching policy: label it with its policy. */
+      labelled?: boolean;
+    }
   | { kind: 'error'; id: string; time: string; title: string; text: string };
 
 import { InlineCustomerSwitchCard } from './InlineCustomerSwitchCard';
@@ -215,12 +223,14 @@ function AnswerCard({
   question,
   result,
   time,
+  labelled,
   onAsk,
   onOpenSource,
   onOpenTab,
   onShowAudit,
 }: {
   question: string;
+  labelled?: boolean;
   onShowAudit: ConversationStreamProps['onShowAudit'];
   result: QuestionAnswerResponse;
   time: string;
@@ -240,6 +250,16 @@ function AnswerCard({
     <div className="message-in flex items-start gap-3">
       <AssistantAvatar />
       <div className="min-w-0 max-w-[46rem] flex-1 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3.5 shadow-sm sm:px-5">
+        {labelled && result.policy_context && (
+          <div className="-mx-4 -mt-3.5 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-t-2xl rounded-tl-md border-b border-[#FDBA74] bg-[#FFF7ED] px-4 py-2 sm:-mx-5 sm:px-5">
+            <span className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-[#9A3D09]">Answer for</span>
+            <span className="font-mono text-[12.5px] font-bold text-[#0F2A43]">{result.policy_context.policy_number}</span>
+            <span className="rounded border border-[#FDBA74] bg-white px-1.5 py-px text-[10px] font-semibold uppercase text-[#C2410C]">
+              {lineLabel(result.policy_context.line_of_business)}
+            </span>
+            <span className="text-[12px] text-[#475569]">{result.policy_context.customer_name}</span>
+          </div>
+        )}
         <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-[11px]">
             <span className="font-bold text-[#0F2A43]">Policy Explainer</span>
@@ -742,6 +762,7 @@ export function ConversationStream({
               <AnswerCard
                 key={msg.id}
                 question={msg.question}
+                labelled={msg.labelled}
                 onShowAudit={onShowAudit}
                 result={msg.result}
                 time={msg.time}
