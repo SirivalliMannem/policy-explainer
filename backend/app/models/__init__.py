@@ -1,6 +1,6 @@
 """Application SQLAlchemy models."""
 
-from app.models.conversation import Conversation, ConversationQuestion
+from app.models.conversation import ContextSwitchAudit, Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import (
     Clause,
@@ -22,5 +22,6 @@ __all__ = [
     "Clause",
     "Conversation",
     "ConversationQuestion",
+    "ContextSwitchAudit",
     "EvidenceLedger",
 ]

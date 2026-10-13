@@ -75,10 +75,12 @@ You NEVER answer the question. You return ONLY a JSON object with exactly these 
 "search_terms": up to 8 short terms that homeowners or personal auto policy wording would use for this topic,
   for example "loss of use", "additional living expense", "theft", "jewelry", "special limits of liability",
   "accidental discharge or overflow of water", "water backup", "sewer", "windstorm or hail", "deductible",
-  "transportation expenses", "public or livery conveyance", "uninsured motorists", "other than collision".
+  "transportation expenses", "public or livery conveyance", "uninsured motorists", "other than collision",
+  "policy summary", "policy number", "effective dates", "policy status".
 
-  Use only specific terms. Never use generic words such as "coverage", "damage", "perils", "exclusions", "limits"
-  or "policy". Return an empty list when the topic is not something homeowners or auto policies address.
+  Use specific terms. For policy overview or identification inquiries, use "policy summary", "policy number",
+  "effective dates", or "policy status". Do not hallucinate unrelated terms (such as "public or livery conveyance"
+  for policy number inquiries). Return an empty list when the topic is not something homeowners or auto policies address.
 
 Do not add facts. Do not guess amounts. Output JSON only."""
 

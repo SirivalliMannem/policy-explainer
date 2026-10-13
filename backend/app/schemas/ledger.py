@@ -25,6 +25,9 @@ class LedgerRow(BaseModel):
     conversation_id: str
     question_id: str
     agent: Optional[str] = None
+    # Recorded with the answer; None on entries written before names were stored.
+    agent_name: Optional[str] = None
+    agent_role: Optional[str] = None
     insured: Optional[str] = None
     customer_id: Optional[str] = None
     policy_id: Optional[str] = None

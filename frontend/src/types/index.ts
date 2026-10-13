@@ -167,14 +167,22 @@ export interface Interpretation {
 
 export interface QuestionResolution {
   status: ResolutionStatus;
-  /** "portfolio": counts or lists policies/customers; answered from policy records, no single-policy context needed. */
-  intent: 'policy' | 'portfolio';
+  /**
+   * "portfolio": counts or lists policies/customers; answered from policy records, no single-policy context needed.
+   * "conversation": greeting, thanks or a question about the assistant; "off_topic": not about policies.
+   * Both are answered by `reply`; nothing is retrieved or recorded.
+   */
+  intent: 'policy' | 'portfolio' | 'conversation' | 'off_topic';
   matched_on?: 'policy_number' | 'customer_name' | 'surname' | 'first_name' | null;
   reference?: string | null;
   policy?: PolicyContextCandidate | null;
   candidates: PolicyContextCandidate[];
   message: string;
   interpretation?: Interpretation | null;
+  reply?: string | null;
+  suggestions?: string[];
+  /** The employee's recently checked policies, offered when the question names no policy. */
+  suggested_policies?: PolicyContextCandidate[];
 }
 
 export interface CitationItem {
@@ -274,10 +282,44 @@ export interface QuestionAnswerResponse {
   is_fallback: boolean;
   fallback_reason?: string | null;
   retrieval: RetrievalSummary;
-  timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
+  timings_ms: Partial<Record<'interpretation' | 'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
   latency_ms?: number | null;
   ledger_id?: string | null;
+  /** Characters in the grounding context sent to the model; null when nothing was grounded or not recorded. */
+  grounding_context_chars?: number | null;
   interpretation?: Interpretation | null;
+  /** Who asked, from the evidence ledger. */
+  asked_by?: AskedBy | null;
+  asked_at?: string | null;
+}
+
+/** Who asked a question. name and role are null on entries recorded before they were stored. */
+export interface AskedBy {
+  employee_id: string;
+  name?: string | null;
+  role?: string | null;
+}
+
+export type ConversationOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
+
+export interface ConversationSummary {
+  conversation_id: string;
+  /** The first question, truncated. */
+  title: string;
+  created_at: string;
+  last_activity_at: string;
+  question_count: number;
+  asked_by: AskedBy;
+  policy_number?: string | null;
+  customer_name?: string | null;
+  latest_outcome?: ConversationOutcome | string | null;
+}
+
+export interface ConversationListPage {
+  items: ConversationSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ConversationResponse {
@@ -298,7 +340,50 @@ export interface ConversationMessageRecord {
   status: string;
   policy_id?: string | null;
   created_at: string;
+  asked_by?: AskedBy | null;
   answer?: QuestionAnswerResponse | null;
+}
+
+export interface CustomerSummary {
+  id: string;
+  name: string;
+}
+
+export interface PolicySummary {
+  id: string;
+  policy_number: string;
+  line_of_business: string;
+  product_name: string;
+}
+
+export interface ContextCheckResponse {
+  switch_type: 'same_customer_same_policy' | 'same_customer_different_policy' | 'different_customer' | 'initial_selection';
+  requires_confirmation: boolean;
+  current_customer?: CustomerSummary | null;
+  current_policy?: PolicySummary | null;
+  target_customer: CustomerSummary;
+  target_policy: PolicySummary;
+  allowed: boolean;
+  message?: string | null;
+}
+
+export interface ContextSwitchAuditItem {
+  id: string;
+  conversation_id: string;
+  employee_id: string;
+  employee_name?: string | null;
+  timestamp: string;
+  previous_customer_id?: string | null;
+  previous_customer_name?: string | null;
+  previous_policy_id?: string | null;
+  previous_policy_number?: string | null;
+  new_customer_id?: string | null;
+  new_customer_name?: string | null;
+  new_policy_id?: string | null;
+  new_policy_number?: string | null;
+  switch_type: string;
+  outcome: string;
+  reason?: string | null;
 }
 
 // ==========================================
@@ -348,18 +433,48 @@ export interface SourceTarget {
 // Evidence Ledger ("The Record")
 // ==========================================
 
-export interface TopicItem {
-  form_number: string;
-  title: string;
+export type AttentionReason = 'guardrail_flagged' | 'no_evidence' | 'customer_not_found' | 'low_confidence';
+
+export interface AttentionItem {
+  question: string;
+  reason: AttentionReason;
+  reason_label: string;
+  detail: string;
+  policy_number?: string | null;
+  insured?: string | null;
   line_of_business?: string | null;
-  count: number;
-  share_pct: number;
+  times_asked: number;
+  first_asked_at: string;
+  last_asked_at: string;
+  latest_entry_id: string;
+  sources: {
+    query_terms: string[];
+    coverages_searched: number;
+    forms_searched: number;
+    clauses_searched: number;
+    citations: string[];
+  };
 }
 
-export interface TopicsResponse {
+export interface AttentionCause {
+  reason: AttentionReason;
+  label: string;
+  description: string;
+  count: number;
+  share_pct: number;
+  examples: string[];
+}
+
+export interface AttentionResponse {
   range: 'today' | '7d' | '30d';
-  answers_considered: number;
-  topics: TopicItem[];
+  /** Ledger entries in the range. */
+  answers_total: number;
+  /** Ledger entries that need a person. */
+  flagged_total: number;
+  /** Distinct flagged questions; items may be capped below this. */
+  questions_flagged: number;
+  items: AttentionItem[];
+  causes: AttentionCause[];
 }
 
 export interface LedgerSummary {
@@ -380,6 +495,8 @@ export interface LedgerRow {
   conversation_id: string;
   question_id: string;
   agent?: string | null;
+  agent_name?: string | null;
+  agent_role?: string | null;
   insured?: string | null;
   customer_id?: string | null;
   policy_id?: string | null;

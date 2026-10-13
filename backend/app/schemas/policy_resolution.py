@@ -40,7 +40,9 @@ class QuestionResolution(BaseModel):
     """Outcome of resolving a policy reference from a question."""
 
     status: str  # resolved | ambiguous | not_found | no_reference
-    # policy: about one policy's contents; portfolio: counts or lists policies/customers
+    # policy: about one policy's contents; portfolio: counts or lists policies/customers;
+    # conversation: a greeting, thanks or question about the assistant (answered by `reply`);
+    # off_topic: not about insurance policies (answered by `reply`)
     intent: str = "policy"
     matched_on: Optional[str] = None
     reference: Optional[str] = None
@@ -49,3 +51,8 @@ class QuestionResolution(BaseModel):
     message: str = ""
     # How the question was understood (corrected wording, names, policy numbers, search terms).
     interpretation: Optional[dict[str, Any]] = None
+    # The assistant's reply for conversation / off_topic messages, with example questions to continue.
+    reply: Optional[str] = None
+    suggestions: list[str] = []
+    # The employee's recently checked policies, offered when a question names no policy.
+    suggested_policies: list[PolicyContextCandidate] = []

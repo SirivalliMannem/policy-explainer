@@ -48,7 +48,14 @@ export function AppLayout() {
           title={getPageTitle(location.pathname)}
           isBackendHealthy={isBackendHealthy}
         />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        {/* The Policy Explainer chat is a full-height workspace with its own scrolling; other pages scroll as a whole. */}
+        <main
+          className={
+            /^\/app\/explainer(\/|$)/.test(location.pathname)
+              ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+              : 'flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8'
+          }
+        >
           <Outlet />
         </main>
       </div>

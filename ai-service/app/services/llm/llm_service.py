@@ -116,6 +116,7 @@ class LLMService:
                     return index, item
             return None
 
+        meta_hit = first("policy_meta")
         cov_hit = first("coverage")
         clause_hit = first("clause")
         form_hit = first("form")
@@ -124,6 +125,11 @@ class LLMService:
 
         sentences = []
         citations = extract_citations_from_evidence(evidence)
+
+        # Case 0: Policy metadata details present
+        if meta_hit:
+            index, primary_meta = meta_hit
+            sentences.append(f"According to policy records, {primary_meta.content.rstrip('.')} [E{index}].")
 
         # Case 1: Coverage details present
         if cov_hit:
@@ -140,20 +146,21 @@ class LLMService:
             sentences.append(f"{source_ref}: {explanation} [E{index}]")
 
         # Case 3: Attached form inquiry
-        elif form_hit:
+        elif not meta_hit and form_hit:
             index, primary_form = form_hit
             sentences.append(f"This policy attaches {primary_form.content.rstrip('.')} [E{index}].")
 
         # Case 4: Claims inquiry
-        elif claim_hit:
+        elif not meta_hit and claim_hit:
             index, primary_claim = claim_hit
             sentences.append(f"Regarding claims on this policy: {primary_claim.content.rstrip('.')} [E{index}].")
 
         # Case 5: Billing inquiry
-        elif billing_hit:
+        elif not meta_hit and billing_hit:
             index, primary_bill = billing_hit
             sentences.append(f"Regarding billing on this policy: {primary_bill.content.rstrip('.')} [E{index}].")
 
+        meta_items = [meta_hit] if meta_hit else []
         cov_items = [cov_hit] if cov_hit else []
         clause_items = [clause_hit] if clause_hit else []
 
@@ -168,7 +175,7 @@ class LLMService:
             answer=final_answer,
             raw_response=final_answer,
             citations=citations,
-            confidence="high" if (cov_items or clause_items) else "medium",
+            confidence="high" if (meta_items or cov_items or clause_items) else "medium",
             model_used="grounded-carrier-engine",
             is_fallback=True,
         )

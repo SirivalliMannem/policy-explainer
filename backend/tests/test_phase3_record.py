@@ -159,9 +159,14 @@ def test_ai_service_down_marks_question_failed(monkeypatch):
 
 def test_database_is_at_latest_migration_and_upgrade_is_idempotent():
     """Alembic has the database at head, the ledger has its audit columns, and re-running is a no-op."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from app.db.migrate import BACKEND_DIR
+
     run_migrations()  # already applied at app start; must be safe to run again
+    head = ScriptDirectory.from_config(Config(str(BACKEND_DIR / "alembic.ini"))).get_current_head()
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001_baseline"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     columns = {c["name"]: c for c in inspect(engine).get_columns("evidence_ledger")}
     assert {"outcome", "guardrail_checks", "model_used", "latency_ms", "retrieval"} <= set(columns)
     assert columns["policy_id"]["nullable"]  # portfolio answers have no single policy
@@ -296,6 +301,7 @@ def test_dashboard_topics_endpoint():
     assert res.status_code == 200
     body = res.json()
     assert body["range"] == "30d"
+    assert body["forms_cited"] >= len(body["topics"])
     counts = [t["count"] for t in body["topics"]]
     assert counts == sorted(counts, reverse=True)
     for topic in body["topics"]:
@@ -303,3 +309,22 @@ def test_dashboard_topics_endpoint():
         assert 0 < topic["count"] <= body["answers_considered"]
         assert topic["share_pct"] == round(topic["count"] / body["answers_considered"] * 100, 1)
     assert client.get("/api/dashboard/topics", params={"range": "1y"}).status_code == 422
+
+
+def test_needs_attention_endpoint():
+    """Unanswered questions are queued, grouped by question, with their causes adding up."""
+    res = resolve("Does Margaret Chen have water backup coverage?")
+    conv = client.post("/api/conversations", json={"policy_id": res["policy"]["policy_id"]}).json()["conversation_id"]
+    marker = uuid.uuid4().hex[:6]
+    question = f"Does this policy cover damage from zorblax meteors {marker}?"
+    for _ in range(2):
+        ask(conv, question)
+    res = client.get("/api/dashboard/attention", params={"range": "today"})
+    assert res.status_code == 200
+    body = res.json()
+    item = next(i for i in body["items"] if marker in i["question"])
+    assert item["reason"] == "no_evidence" and item["times_asked"] == 2
+    assert item["policy_number"] == "HO-2847-1193" and item["sources"]["clauses_searched"] > 0
+    assert sum(c["count"] for c in body["causes"]) == body["flagged_total"]
+    assert body["questions_flagged"] >= len(body["items"])
+    assert client.get("/api/dashboard/attention", params={"range": "1y"}).status_code == 422

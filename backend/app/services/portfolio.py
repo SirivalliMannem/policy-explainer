@@ -24,13 +24,13 @@ SUBJECT = r"(?:policies|policy|policyholders?|customers?|insureds?|accounts?|hou
 # ... asked as a count or a listing.
 PORTFOLIO_PATTERNS = [
     re.compile(rf"\bhow many\b.*\b{SUBJECT}\b", re.IGNORECASE),
-    re.compile(r"\b(?:what|which|list|show|give|display|name)\b.*\b(?:policies|policyholders|customers|insureds|accounts)\b", re.IGNORECASE),
-    re.compile(r"\b(?:any|other|all)\s+(?:other\s+)?(?:policies|policyholders|customers)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:what|which|list|show|give|display|name)\b.*\b{SUBJECT}\b", re.IGNORECASE),
+    re.compile(rf"\b(?:any|other|all)\s+(?:other\s+)?(?:{SUBJECT})\b", re.IGNORECASE),
 ]
-# Questions about what a policy *says* stay with the grounded explainer even if they say "policies".
+# Questions about what a policy *says* or individual policy metadata stay with the grounded explainer even if they say "policy".
 CONTENT_TERMS = re.compile(
     r"\b(?:cover|covers|covered|coverage|deductibles?|limits?|exclu\w*|endorsements?|forms?|claims?|"
-    r"bill\w*|premium|pay\w*|wording|clause\w*|peril\w*|damage)\b",
+    r"bill\w*|premium|pay\w*|wording|clause\w*|peril\w*|damage|dates?|effective|expiration|status)\b",
     re.IGNORECASE,
 )
 HOUSEHOLD_TERMS = re.compile(r"\b(?:household|family|spouse|husband|wife|partner)\b", re.IGNORECASE)
@@ -50,11 +50,38 @@ US_STATES = {
 }
 LINE_LABEL = {"homeowners": "Homeowners", "personal_auto": "Personal Auto"}
 
+# Inquiries identifying or summarizing the single currently selected policy in session
+SELECTED_POLICY_INQUIRY_PATTERN = re.compile(
+    r"\b(?:what\s+(?:kind\s+of\s+|type\s+of\s+)?policy\s+do\s+(?:we|i)\s+have|"
+    r"what\s+policy\s+is\s+(?:this|that)|which\s+policy\s+is\s+(?:this|that)|"
+    r"what\s+is\s+(?:this|that|our|my|the)\s+policy|"
+    r"what\s+kind\s+of\s+policy\s+is\s+(?:this|that)|what\s+type\s+of\s+policy\s+is\s+(?:this|that)|"
+    r"what\s+is\s+(?:the\s+)?policy(?:\s*'?s)?\s*number|"
+    r"(?:what\s+are\s+the\s+)?(?:policy(?:\s*'?s)?\s*)?effective\s+dates?|"
+    r"effective\s+(?:and\s+expiration\s+)?dates?|"
+    r"(?:when\s+is\s+(?:the|this)\s+policy\s+effective)|"
+    r"(?:policy\s+period|policy\s+term)|"
+    r"what\s+is\s+(?:the\s+)?(?:policy(?:\s*'?s)?\s*)?status|"
+    r"who\s+is\s+(?:the\s+)?policyholder|who\s+is\s+this\s+policy\s+for|"
+    r"policy\s+summary|summarize\s+(?:this\s+|the\s+)?policy)\b",
+    re.IGNORECASE,
+)
+
+
+def is_selected_policy_inquiry(text: str) -> bool:
+    """True when a question specifically asks to identify or summarize the single currently active policy."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    return bool(SELECTED_POLICY_INQUIRY_PATTERN.search(cleaned))
+
 
 def is_portfolio_question(question: str) -> bool:
     """True for questions that count or list policies/customers rather than ask what a policy says."""
     text = (question or "").strip()
     if not text or CONTENT_TERMS.search(text):
+        return False
+    if re.search(r"\b(?:what|how)\s+about\b", text, re.IGNORECASE):
         return False
     return any(p.search(text) for p in PORTFOLIO_PATTERNS)
 

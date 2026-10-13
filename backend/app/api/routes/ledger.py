@@ -74,6 +74,8 @@ def _row(entry: EvidenceLedger, policy: Optional[CorePolicy], account: Optional[
         conversation_id=entry.conversation_id,
         question_id=entry.question_id,
         agent=entry.employee_id or (conversation.employee_id if conversation else None),
+        agent_name=entry.employee_name,
+        agent_role=entry.employee_role,
         insured=insured,
         answer_type="portfolio" if portfolio is not None else "policy_explanation",
         customer_id=account.id if account else None,

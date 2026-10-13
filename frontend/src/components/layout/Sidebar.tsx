@@ -5,6 +5,7 @@ import { PRIMARY_NAV_ITEMS, SECONDARY_NAV_ITEMS } from '../../config';
 import { cn } from '../../lib/utils';
 import { Tooltip } from '../ui/Tooltip';
 import { Separator } from '../ui/Separator';
+import { ExplainerHistoryNav } from './ExplainerHistoryNav';
 import { clearSession, getSession } from '../../services/auth';
 
 export interface SidebarProps {
@@ -24,6 +25,7 @@ export function Sidebar({
   const session = getSession();
   const email = session?.user.email || 'Signed in';
   const displayName = session?.user.name || 'Insurance Specialist';
+  const employeeId = session?.user.employeeId || session?.user.id;
   const initials =
     displayName
       .split(/\s+/)
@@ -88,9 +90,10 @@ export function Sidebar({
 
         <Separator />
 
-        {/* Primary Navigation */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-          <nav className="space-y-1">
+        {/* Navigation stays fixed; only the employee's conversation list scrolls. On a very short
+            screen, where even the list's minimum height does not fit, the whole section scrolls. */}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-4">
+          <nav className="flex flex-1 flex-col gap-1">
             {!isCollapsed && (
               <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Workspace
@@ -118,20 +121,29 @@ export function Sidebar({
                 </NavLink>
               );
 
-              return isCollapsed ? (
-                <Tooltip key={item.href} content={item.title} position="right" className="w-full">
+              if (isCollapsed) {
+                return (
+                  <Tooltip key={item.href} content={item.title} position="right" className="w-full">
+                    {linkContent}
+                  </Tooltip>
+                );
+              }
+              // Policy Explainer carries the employee's own conversation history beneath it.
+              return item.href === '/app/explainer' ? (
+                <div key={item.href} className="flex flex-1 flex-col">
                   {linkContent}
-                </Tooltip>
+                  <ExplainerHistoryNav onNavigate={onCloseMobile} />
+                </div>
               ) : (
                 linkContent
               );
             })}
           </nav>
 
-          <Separator />
+          <Separator className="shrink-0" />
 
           {/* Secondary Navigation */}
-          <nav className="space-y-1">
+          <nav className="shrink-0 space-y-1">
             {!isCollapsed && (
               <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Support
@@ -183,7 +195,9 @@ export function Sidebar({
             {!isCollapsed && (
               <div className="flex flex-col overflow-hidden">
                 <span className="truncate text-xs font-semibold text-navy">{displayName}</span>
-                <span className="truncate text-[11px] text-muted-foreground">{email}</span>
+                <span className="truncate text-[11px] text-muted-foreground">
+                  <span className="font-mono">{employeeId}</span> · {email}
+                </span>
               </div>
             )}
           </div>

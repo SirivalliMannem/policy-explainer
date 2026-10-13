@@ -1,24 +1,27 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, ChevronDown, ChevronUp, Cpu, RefreshCw, Send } from 'lucide-react';
-import type { EvidenceItem, PolicyContextCandidate, QuestionResolution, RecentQuestionItem, SourceTarget } from '../types';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { AlertCircle, ArrowLeft, ArrowUp } from 'lucide-react';
+import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionResolution, SourceTarget } from '../types';
 import {
+  ApiError,
   clearConversationContext,
   createConversation,
   getConversation,
   getConversationMessages,
-  getRecentQuestions,
   resolvePolicyContext,
   resolvePolicyFromQuestion,
   setConversationContext,
   submitQuestion,
 } from '../services/api';
+import { currentEmployee } from '../services/auth';
 import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner';
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
-import { ChatMessage, ConversationStream } from '../components/explainer/ConversationStream';
-import { ExplainerRail, RailTab } from '../components/explainer/ExplainerRail';
+import { ChatMessage, ConversationStream, PendingCustomerSwitch } from '../components/explainer/ConversationStream';
+import { PolicySwitcherModal } from '../components/explainer/PolicySwitcherModal';
 import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
+import { AIProcessPanel, AuditTarget, PanelContent } from '../components/explainer/AIProcessPanel';
+import { Skeleton } from '../components/ui/Skeleton';
 import {
   FriendlyError,
   IDLE_PROCESS,
@@ -27,8 +30,8 @@ import {
   describeError,
   freshStages,
   interpretedText,
-  stagesFromResult,
 } from '../lib/explainer';
+import { notifyConversationsChanged } from '../lib/conversations';
 
 const MATCH_LABEL: Record<string, string> = {
   policy_number: 'policy number',
@@ -37,12 +40,21 @@ const MATCH_LABEL: Record<string, string> = {
   first_name: 'first name',
 };
 
-// Visual pacing for stages 2–4 while the single synchronous request runs. The real response
-// always replaces these with the stage times measured by the AI service.
-const STAGE_SCHEDULE: { at: number; complete: StageKey; start: StageKey }[] = [
-  { at: 450, complete: 'retrieve', start: 'ground' },
-  { at: 800, complete: 'ground', start: 'generate' },
-];
+/** Wide enough for the chat column and the docked AI process panel side by side. */
+const DOCK_QUERY = '(min-width: 1000px)';
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches ?? true);
+  useEffect(() => {
+    const list = window.matchMedia?.(query);
+    if (!list) return;
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener('change', update);
+    return () => list.removeEventListener('change', update);
+  }, [query]);
+  return matches;
+}
 
 const FILLER_WORDS = new Set([
   'it', 'its', "it's", 'is', 'the', 'for', 'on', 'about', 'policy', 'customer', 'policyholder', 'please',
@@ -56,6 +68,12 @@ function nowTime(): string {
 function timeOf(iso: string): string {
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** The signed-in employee, as shown on questions asked in this session. */
+function me(): AskedBy | null {
+  const employee = currentEmployee();
+  return employee ? { employee_id: employee.employeeId, name: employee.name, role: employee.role } : null;
 }
 
 /** Clarification replies are short ("Margaret Chen", "HO-2847-1193"); a full question is a new question. */
@@ -74,54 +92,45 @@ function isBareReference(text: string, resolution: QuestionResolution): boolean 
   return words.length <= 1;
 }
 
+/**
+ * The conversation screen: `/app/explainer/new` for a new conversation, `/app/explainer/c/:id` for
+ * an existing one. History is read from stored answers only; nothing is re-run to display it.
+ */
 export function ExplainerPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
 
-  const [conversationId, setConversationIdState] = useState<string | null>(null);
   const [activePolicy, setActivePolicyState] = useState<PolicyContextCandidate | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [process, setProcess] = useState<ProcessState>(IDLE_PROCESS);
   const [isWorking, setIsWorking] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
-  const [initError, setInitError] = useState<FriendlyError | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [loadError, setLoadError] = useState<FriendlyError | null>(null);
   const [featureTab, setFeatureTab] = useState<PolicyFeatureTab | null>(null);
   const [highlight, setHighlight] = useState<{ type: 'coverage' | 'form'; id: string } | null>(null);
   const [sourceTarget, setSourceTarget] = useState<SourceTarget | null>(null);
-  const [showMobileProcess, setShowMobileProcess] = useState(false);
-  const [railTab, setRailTab] = useState<RailTab>('process');
-  const [recent, setRecent] = useState<RecentQuestionItem[] | null>(null);
-  const [recentError, setRecentError] = useState<string | null>(null);
-  const [recentLoading, setRecentLoading] = useState(false);
+  const [panel, setPanel] = useState<PanelContent | null>(null);
+  const [panelAutoFocus, setPanelAutoFocus] = useState(false);
+  const docked = useMediaQuery(DOCK_QUERY);
 
-  const loadRecent = useCallback(async () => {
-    setRecentLoading(true);
-    try {
-      setRecent(await getRecentQuestions());
-      setRecentError(null);
-    } catch (err) {
-      setRecentError(describeError(err).message);
-    } finally {
-      setRecentLoading(false);
-    }
-  }, []);
+  // Safe Customer and Policy Switching state (inline confirmation card)
+  const [pendingSwitch, setPendingSwitch] = useState<PendingCustomerSwitch | null>(null);
+  const [policySwitcherOpen, setPolicySwitcherOpen] = useState(false);
 
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
   const policyRef = useRef<PolicyContextCandidate | null>(null);
   const pendingQuestionRef = useRef<string | null>(null);
   const busyRef = useRef(false);
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const panelOpenerRef = useRef<HTMLElement | null>(null);
   const idRef = useRef(0);
-  const initRef = useRef(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const newVisitRef = useRef<string | null>(null);
+  const loadIdRef = useRef(0);
 
-  const setConversationId = (id: string | null) => {
-    conversationRef.current = id;
-    setConversationIdState(id);
-  };
   const setActivePolicy = (policy: PolicyContextCandidate | null) => {
     policyRef.current = policy;
     setActivePolicyState(policy);
@@ -129,110 +138,100 @@ export function ExplainerPage() {
   const nextId = (prefix: string) => `${prefix}-${++idRef.current}`;
   const push = (msg: ChatMessage) => setMessages((prev) => [...prev, msg]);
 
-  const clearTimers = () => {
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current = [];
-  };
-
-  const setStage = (key: StageKey, patch: ProcessState['stages'][StageKey]) =>
-    setProcess((prev) => ({ ...prev, stages: { ...prev.stages, [key]: patch } }));
-
-  /** Mark whichever stage was in flight as failed and everything after it as skipped. */
-  const failProcess = (reason: string) =>
+  /** Mark whichever stage was in flight as failed, with the reason in plain language, and stop. */
+  const failProcess = (friendly: FriendlyError) =>
     setProcess((prev) => {
       const stages = { ...prev.stages };
       let failed = false;
       (Object.keys(stages) as StageKey[]).forEach((key) => {
         if (stages[key].status === 'processing' && !failed) {
-          stages[key] = { status: 'failed', detail: reason };
+          const repeatsTitle = friendly.message.toLowerCase().startsWith(friendly.title.toLowerCase());
+          stages[key] = { status: 'failed', detail: repeatsTitle ? friendly.message : `${friendly.title}. ${friendly.message}` };
           failed = true;
         } else if (stages[key].status === 'waiting' || stages[key].status === 'processing') {
-          stages[key] = { status: 'skipped' };
+          stages[key] = { status: 'skipped', detail: 'Not run: an earlier step failed.' };
         }
       });
-      return { phase: 'failed', stages, result: null };
+      return { ...prev, phase: 'failed', stages, result: null };
     });
 
+  /** Open the AI process panel. `opener` is the button that asked for it; focus returns there on close. */
+  const openPanel = (content: PanelContent, opener: HTMLElement | null) => {
+    panelOpenerRef.current = opener;
+    setPanelAutoFocus(Boolean(opener));
+    setPanel(content);
+  };
+
+  const closePanel = useCallback(() => {
+    setPanel(null);
+    const opener = panelOpenerRef.current;
+    panelOpenerRef.current = null;
+    if (opener && opener.isConnected) opener.focus();
+    else inputRef.current?.focus();
+  }, []);
+
+  /** A conversation is created only when the first question is asked, then gets its own URL. */
   const ensureConversation = async (): Promise<string> => {
     if (conversationRef.current) return conversationRef.current;
     const conv = await createConversation();
-    setConversationId(conv.conversation_id);
-    setInitError(null);
+    conversationRef.current = conv.conversation_id;
+    navigate(`/app/explainer/c/${conv.conversation_id}`, { replace: true });
     return conv.conversation_id;
   };
 
   /** Stages 2–6: submit to the backend, which answers it (AI service or policy records) and records the Evidence Ledger. */
-  const runPipeline = async (question: string, convId: string, contextDetail: string, recordLookup = false) => {
+  // The backend answers in one request, so stages 2–6 are reported together when it returns: step 2
+  // shows as in progress until then, and every value shown afterwards is the one the pipeline measured.
+  const runPipeline = async (question: string, convId: string, contextDetail: string) => {
+    // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
+    openPanel({ mode: 'live' }, null);
     setProcess((prev) => ({
+      ...prev,
       phase: 'running',
       result: null,
-      stages: { ...prev.stages, context: { status: 'completed', detail: contextDetail }, retrieve: { status: 'processing' } },
+      question,
+      contextDetail,
+      stages: { ...freshStages(), context: { status: 'completed', detail: contextDetail }, retrieve: { status: 'processing' } },
     }));
-    clearTimers();
-    // A records lookup has no grounding or generation stages to pace.
-    if (!recordLookup) {
-      timersRef.current = STAGE_SCHEDULE.map(({ at, complete, start }) =>
-        setTimeout(() => {
-          setStage(complete, { status: 'completed' });
-          setStage(start, { status: 'processing' });
-        }, at)
-      );
-    }
 
     try {
       const result = await submitQuestion(convId, question);
-      clearTimers();
-      setProcess({ phase: 'completed', stages: stagesFromResult(result, contextDetail), result });
-      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), result });
+      setProcess((prev) => ({
+        ...prev,
+        phase: 'completed',
+        result,
+        askedBy: result.asked_by ?? prev.askedBy,
+        askedAt: result.asked_at ?? prev.askedAt,
+      }));
+      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result });
     } catch (err) {
-      clearTimers();
       const friendly = describeError(err);
-      failProcess(friendly.title);
+      failProcess(friendly);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
     }
-    loadRecent();
+    notifyConversationsChanged();
   };
 
-  /** Clear the conversation view before reopening another conversation or starting a new one. */
+  /** Clear the conversation view before opening another conversation or starting a new one. */
   const resetView = () => {
-    clearTimers();
+    loadIdRef.current += 1;
+    setIsLoadingHistory(false);
     setMessages([]);
     setActivePolicy(null);
     pendingQuestionRef.current = null;
     setFeatureTab(null);
     setHighlight(null);
     setSourceTarget(null);
+    setPanel(null);
+    panelOpenerRef.current = null;
+    setLoadError(null);
     setProcess(IDLE_PROCESS);
+    setPendingSwitch(null);
+    setPolicySwitcherOpen(false);
   };
 
-  const openConversation = async (convId: string) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    resetView();
-    try {
-      await loadConversation(convId);
-    } catch (err) {
-      const friendly = describeError(err);
-      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
-    } finally {
-      busyRef.current = false;
-    }
-  };
-
-  const newConversation = async () => {
-    if (busyRef.current) return;
-    resetView();
-    setConversationId(null);
-    try {
-      await ensureConversation();
-    } catch (err) {
-      setInitError(describeError(err));
-    }
-    setRailTab('process');
-  };
-
-  const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string) => {
-    push({ kind: 'clarify', id: nextId('clarify'), time: nowTime(), text, candidates });
+  const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string, candidatesLabel?: string) => {
+    push({ kind: 'clarify', id: nextId('clarify'), time: nowTime(), text, candidates, candidatesLabel });
     setProcess((prev) => ({
       phase: 'needs_input',
       result: null,
@@ -246,17 +245,24 @@ export function ExplainerPage() {
     busyRef.current = true;
     setIsWorking(true);
     setInput('');
-    push({ kind: 'user', id: nextId('user'), time: nowTime(), text });
-    setRailTab('process');
-    setProcess({ phase: 'running', result: null, stages: { ...freshStages(), context: { status: 'processing' } } });
-
+    const askedAt = new Date().toISOString();
+    push({ kind: 'user', id: nextId('user'), time: nowTime(), text, askedBy: me(), askedAt });
+    setProcess({
+      phase: 'running',
+      result: null,
+      question: text,
+      askedBy: me(),
+      askedAt,
+      contextDetail: null,
+      stages: { ...freshStages(), context: { status: 'processing' } },
+    });
     try {
       let convId: string;
       try {
         convId = await ensureConversation();
       } catch (err) {
         const friendly = describeError(err);
-        failProcess(friendly.title);
+        failProcess(friendly);
         push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
         return;
       }
@@ -275,11 +281,25 @@ export function ExplainerPage() {
         );
       } catch (err) {
         const friendly = describeError(err);
-        failProcess(friendly.title);
+        failProcess(friendly);
         push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
         return;
       } finally {
         setIsResolving(false);
+      }
+
+      // Greetings, thanks, "what can you do?" and off-topic messages get a conversational reply;
+      // nothing is retrieved or recorded for them.
+      if ((resolution.intent === 'conversation' || resolution.intent === 'off_topic') && resolution.reply) {
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: resolution.reply,
+          suggestions: resolution.suggestions ?? [],
+        });
+        setProcess(IDLE_PROCESS);
+        return;
       }
 
       const understood = interpretedText(resolution.interpretation);
@@ -289,7 +309,7 @@ export function ExplainerPage() {
       // context, and they neither change the active context nor ask which policy to check.
       if (resolution.intent === 'portfolio') {
         const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
-        await runPipeline(text, convId, `${subject} — answered from policy records${understoodNote}`, true);
+        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records${understoodNote}`);
         return;
       }
 
@@ -303,13 +323,29 @@ export function ExplainerPage() {
         if (pending && isBareReference(text, resolution)) {
           question = pending;
         }
+
+        // Scenario C: If switching to an unrelated customer, require explicit confirmation via inline card
+        if (current && current.customer_id && resolved.customer_id && current.customer_id !== resolved.customer_id) {
+          setPendingSwitch({
+            currentPolicy: current,
+            targetPolicy: resolved,
+            pendingQuestion: question,
+            matchedOn: resolution.matched_on || null,
+          });
+          setProcess(IDLE_PROCESS);
+          return;
+        }
+
         pendingQuestionRef.current = null;
         if (!current || current.policy_id !== resolved.policy_id) {
+          const isSwitch = Boolean(current);
           try {
-            await setConversationContext(convId, resolved.policy_id);
+            await setConversationContext(convId, resolved.policy_id, {
+              customerId: resolved.customer_id,
+            });
           } catch (err) {
             const friendly = describeError(err);
-            failProcess(friendly.title);
+            failProcess(friendly);
             push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
             return;
           }
@@ -321,7 +357,8 @@ export function ExplainerPage() {
             time: nowTime(),
             policy: resolved,
             matchedOn: resolution.matched_on,
-            switched: Boolean(current),
+            switched: isSwitch,
+            switchType: isSwitch ? 'same_customer_different_policy' : 'initial_selection',
             answering: question !== text ? question : undefined,
           });
         }
@@ -352,7 +389,15 @@ export function ExplainerPage() {
         contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
       } else {
         pendingQuestionRef.current = text;
-        askForPolicy('Which policy or policyholder should I check?', [], 'No policy named and no active context');
+        const recent = resolution.suggested_policies ?? [];
+        askForPolicy(
+          recent.length
+            ? 'Happy to help with that. Which policy should I check? Pick one you looked at recently, or give me a policy number or policyholder name.'
+            : 'Happy to help with that. Which policy should I check? Give me a policy number or the policyholder’s name.',
+          recent,
+          'No policy named and no active context',
+          recent.length ? 'Your recent policies' : undefined
+        );
         return;
       }
 
@@ -366,15 +411,49 @@ export function ExplainerPage() {
 
   const handleChooseCandidate = async (candidate: PolicyContextCandidate) => {
     if (busyRef.current) return;
+    setPolicySwitcherOpen(false);
+    const current = policyRef.current;
+    const pending = pendingQuestionRef.current;
+
+    // Scenario C: If selecting a policy belonging to a different customer, require confirmation via inline card
+    if (current && current.customer_id && candidate.customer_id && current.customer_id !== candidate.customer_id) {
+      setPendingSwitch({
+        currentPolicy: current,
+        targetPolicy: candidate,
+        pendingQuestion: pending || null,
+        matchedOn: null,
+      });
+      return;
+    }
+
+    // Scenario A: Same customer, same policy
+    if (current && current.policy_id === candidate.policy_id) {
+      pendingQuestionRef.current = null;
+      if (pending) {
+        busyRef.current = true;
+        setIsWorking(true);
+        try {
+          const convId = await ensureConversation();
+          await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number}`);
+        } finally {
+          busyRef.current = false;
+          setIsWorking(false);
+        }
+      }
+      return;
+    }
+
+    // Scenario B: Same customer, different policy (or initial policy selection)
     busyRef.current = true;
     setIsWorking(true);
     try {
       const convId = await ensureConversation();
-      await setConversationContext(convId, candidate.policy_id);
-      const previous = policyRef.current;
+      const isSwitch = Boolean(current);
+      await setConversationContext(convId, candidate.policy_id, {
+        customerId: candidate.customer_id,
+      });
       setActivePolicy(candidate);
       setFeatureTab(null);
-      const pending = pendingQuestionRef.current;
       pendingQuestionRef.current = null;
       push({
         kind: 'context',
@@ -382,9 +461,11 @@ export function ExplainerPage() {
         time: nowTime(),
         policy: candidate,
         matchedOn: null,
-        switched: Boolean(previous),
+        switched: isSwitch,
+        switchType: isSwitch ? 'same_customer_different_policy' : 'initial_selection',
         answering: pending ?? undefined,
       });
+      notifyConversationsChanged();
       if (pending) {
         await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`);
       } else {
@@ -392,12 +473,82 @@ export function ExplainerPage() {
       }
     } catch (err) {
       const friendly = describeError(err);
-      failProcess(friendly.title);
+      failProcess(friendly);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
     } finally {
       busyRef.current = false;
       setIsWorking(false);
     }
+  };
+
+  /** Scenario D: Start a new conversation with the newly selected customer/policy. */
+  const handleConfirmStartNew = async () => {
+    if (!pendingSwitch) return;
+    const { targetPolicy, pendingQuestion } = pendingSwitch;
+    setPendingSwitch(null);
+
+    try {
+      const newConv = await createConversation(targetPolicy.policy_id);
+      notifyConversationsChanged();
+      navigate(`/app/explainer/c/${newConv.conversation_id}`, {
+        state: pendingQuestion ? { initialQuestion: pendingQuestion } : null,
+      });
+    } catch (err) {
+      const friendly = describeError(err);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    }
+  };
+
+  /** Scenario C action 2: Switch the existing conversation to the newly selected customer. */
+  const handleConfirmSwitchExisting = async () => {
+    if (!pendingSwitch) return;
+    const { targetPolicy, pendingQuestion, matchedOn } = pendingSwitch;
+    setPendingSwitch(null);
+
+    busyRef.current = true;
+    setIsWorking(true);
+    try {
+      const convId = await ensureConversation();
+      await setConversationContext(convId, targetPolicy.policy_id, {
+        customerId: targetPolicy.customer_id,
+        confirmDifferentCustomer: true,
+      });
+      setActivePolicy(targetPolicy);
+      setFeatureTab(null);
+      pendingQuestionRef.current = null;
+      push({
+        kind: 'context',
+        id: nextId('context'),
+        time: nowTime(),
+        policy: targetPolicy,
+        matchedOn,
+        switched: true,
+        switchType: 'different_customer',
+        answering: pendingQuestion ?? undefined,
+      });
+      notifyConversationsChanged();
+      if (pendingQuestion) {
+        await runPipeline(
+          pendingQuestion,
+          convId,
+          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`
+        );
+      } else {
+        setProcess(IDLE_PROCESS);
+      }
+    } catch (err) {
+      const friendly = describeError(err);
+      failProcess(friendly);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    } finally {
+      busyRef.current = false;
+      setIsWorking(false);
+    }
+  };
+
+  /** Scenario C action 3: Cancel customer switch, retaining existing conversation context. */
+  const handleCancelCustomerSwitch = () => {
+    setPendingSwitch(null);
   };
 
   const handleClearContext = async () => {
@@ -428,21 +579,69 @@ export function ExplainerPage() {
     setSourceTarget({ sourceType: item.source_type, sourceId: item.source_id, evidence: item });
   }, []);
 
-  /** Reopen a recorded conversation from the dashboard without asking anything again. */
+  const showAudit = useCallback((target: AuditTarget, opener: HTMLElement) => {
+    panelOpenerRef.current = opener;
+    setPanelAutoFocus(true);
+    setPanel({ mode: 'history', target });
+  }, []);
+
+  const showProcess = useCallback((opener: HTMLElement) => {
+    panelOpenerRef.current = opener;
+    setPanelAutoFocus(true);
+    setPanel({ mode: 'live' });
+  }, []);
+
+  // The header's "AI process" button: the question in progress (or just answered), else the latest answer.
+  const lastAnswer = [...messages].reverse().find((m): m is Extract<ChatMessage, { kind: 'answer' }> => m.kind === 'answer');
+  const liveAvailable = process.phase !== 'idle' && Boolean(process.question);
+  const toggleProcess = (opener: HTMLElement) => {
+    if (panel) {
+      closePanel();
+    } else if (liveAvailable) {
+      showProcess(opener);
+    } else if (lastAnswer) {
+      showAudit(
+        { question: lastAnswer.question, result: lastAnswer.result, askedBy: lastAnswer.result.asked_by, askedAt: lastAnswer.result.asked_at },
+        opener
+      );
+    }
+  };
+
+  const prefill = (text: string) => {
+    setInput(text);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
+  /** Reopen a recorded conversation from stored answers; nothing is asked again. */
   const loadConversation = async (convId: string) => {
     const conv = await getConversation(convId);
-    setConversationId(conv.conversation_id);
-    if (conv.policy_context) {
+    if (conv.policy_context && conversationRef.current === convId) {
       setActivePolicy(await resolvePolicyContext(conv.policy_context.policy_id));
     }
     const records = await getConversationMessages(convId);
     const restored: ChatMessage[] = [];
-    let last = null;
     for (const record of records) {
-      restored.push({ kind: 'user', id: nextId('user'), time: timeOf(record.created_at), text: record.question });
+      restored.push({
+        kind: 'user',
+        id: nextId('user'),
+        time: timeOf(record.created_at),
+        text: record.question,
+        askedBy: record.asked_by,
+        askedAt: record.created_at,
+      });
       if (record.answer) {
-        restored.push({ kind: 'answer', id: nextId('answer'), time: timeOf(record.created_at), result: record.answer });
-        last = record.answer;
+        restored.push({
+          kind: 'answer',
+          id: nextId('answer'),
+          time: timeOf(record.created_at),
+          question: record.question,
+          result: record.answer,
+        });
       } else if (record.status === 'failed') {
         restored.push({
           kind: 'error',
@@ -453,193 +652,176 @@ export function ExplainerPage() {
         });
       }
     }
-    setMessages(restored);
-    if (last) {
-      setProcess({
-        phase: 'completed',
-        stages: stagesFromResult(last, `${last.policy_context?.policy_number ?? ''} — restored from the Evidence Ledger`),
-        result: last,
-      });
-    }
+    if (conversationRef.current === convId) setMessages(restored);
   };
 
-  const startSession = async () => {
-    const state = (location.state || {}) as { initialQuestion?: string; conversationId?: string };
-    const initialQuestion = state.initialQuestion || searchParams.get('q');
-    const passedConversation = state.conversationId || searchParams.get('conv');
-    if (location.state) navigate(location.pathname, { replace: true, state: null });
-
-    try {
-      if (passedConversation) {
-        await loadConversation(passedConversation);
-      } else {
-        await ensureConversation();
-      }
-      setInitError(null);
-    } catch (err) {
-      setInitError(describeError(err));
-    }
-    if (initialQuestion) handleAsk(initialQuestion);
-  };
-
+  // Follow the URL: a conversation id opens that conversation; /new starts an empty one.
+  // Written to be safe when React runs it twice for the same URL (StrictMode in development).
   useEffect(() => {
-    if (initRef.current) return; // StrictMode mounts twice in development; start one session.
-    initRef.current = true;
-    startSession();
-    loadRecent();
-    return clearTimers;
+    // Already showing this conversation (including one this page just created by asking).
+    if (routeConversationId && routeConversationId === conversationRef.current) return;
+    // Already started this visit to /new.
+    if (!routeConversationId && newVisitRef.current === location.key) return;
+
+    resetView();
+    conversationRef.current = routeConversationId ?? null;
+    if (!routeConversationId) {
+      newVisitRef.current = location.key;
+      const state = (location.state || {}) as { initialQuestion?: string };
+      if (state.initialQuestion) {
+        navigate(location.pathname, { replace: true, state: null });
+        handleAsk(state.initialQuestion);
+      } else {
+        inputRef.current?.focus();
+      }
+      return;
+    }
+
+    const convId = routeConversationId;
+    const load = ++loadIdRef.current;
+    setIsLoadingHistory(true);
+    loadConversation(convId)
+      .then(() => {
+        if (load !== loadIdRef.current) return;
+        const state = (location.state || {}) as { initialQuestion?: string };
+        if (state.initialQuestion) {
+          navigate(location.pathname, { replace: true, state: null });
+          handleAsk(state.initialQuestion);
+        }
+      })
+      .catch((err) => {
+        if (load !== loadIdRef.current) return; // the employee has moved on
+        conversationRef.current = null;
+        setLoadError(
+          err instanceof ApiError && err.status === 404
+            ? { title: 'Conversation not available', message: 'It does not exist or belongs to another employee.' }
+            : describeError(err)
+        );
+      })
+      .finally(() => load === loadIdRef.current && setIsLoadingHistory(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [routeConversationId]);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     handleAsk(input);
   };
 
-  const processLabel =
-    process.phase === 'completed'
-      ? process.result?.status === 'insufficient_evidence'
-        ? 'Insufficient evidence'
-        : `Completed · ${process.result?.confidence ?? ''} confidence`
-      : process.phase === 'running'
-      ? 'Processing'
-      : process.phase === 'needs_input'
-      ? 'Needs input'
-      : process.phase === 'failed'
-      ? 'Failed'
-      : 'Idle';
-
   return (
-    <div className="mx-auto flex h-[calc(100vh-6rem)] max-w-[88rem] flex-col gap-3 sm:h-[calc(100vh-7rem)] lg:h-[calc(100vh-8rem)]">
-      {initError && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[12.5px] text-red-700">
-          <span className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>
-              <strong>{initError.title}.</strong> {initError.message}
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setInitError(null);
-              ensureConversation().catch((err) => setInitError(describeError(err)));
-            }}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-red-700 hover:bg-red-100 cursor-pointer"
-          >
-            <RefreshCw className="h-3 w-3" /> Retry
-          </button>
-        </div>
-      )}
-
-      <PolicyContextBanner
-        policy={activePolicy}
-        isResolving={isResolving}
-        openTab={featureTab}
-        onOpenTab={(tab) => openTab(tab)}
-        onClear={handleClearContext}
-      />
-
-      {activePolicy && featureTab && (
-        <PolicyFeaturesPanel
-          policyId={activePolicy.policy_id}
-          activeTab={featureTab}
-          onTabChange={(tab) => {
-            setHighlight(null);
-            setFeatureTab(tab);
-          }}
-          targetHighlight={highlight}
-          isOpen
-          onToggleOpen={() => setFeatureTab(null)}
+    <div className="flex min-h-0 w-full flex-1 bg-white">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <PolicyContextBanner
+          policy={activePolicy}
+          isResolving={isResolving}
+          openTab={featureTab}
+          onOpenTab={(tab) => openTab(tab)}
+          onClear={handleClearContext}
+          onOpenSwitcher={() => setPolicySwitcherOpen(true)}
+          processAvailable={liveAvailable || Boolean(lastAnswer)}
+          processOpen={Boolean(panel)}
+          onToggleProcess={toggleProcess}
         />
-      )}
 
-      <div className="flex min-h-0 flex-1 gap-3">
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
-          <ConversationStream
-            messages={messages}
-            isWorking={isWorking}
-            activePolicy={activePolicy}
-            onAsk={handleAsk}
-            onChooseCandidate={handleChooseCandidate}
-            onOpenSource={openSource}
-            onOpenTab={openTab}
-          />
-
-          {/* AI process on small screens: a status strip that expands in place */}
-          <div className="border-t border-[#E2E8F0] lg:hidden">
-            <button
-              type="button"
-              onClick={() => setShowMobileProcess(!showMobileProcess)}
-              className="flex w-full items-center justify-between px-4 py-2 text-[11.5px] text-[#64748B] cursor-pointer"
-              aria-expanded={showMobileProcess}
-            >
-              <span className="flex items-center gap-1.5">
-                <Cpu className="h-3.5 w-3.5 text-[#F97316]" />
-                <span className="font-semibold uppercase tracking-wider text-[#0F2A43]">AI process</span>
-                <span>· {processLabel}</span>
-              </span>
-              {showMobileProcess ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-            </button>
-            {showMobileProcess && (
-              <div className="max-h-[45vh] overflow-y-auto px-3 pb-3">
-                <ExplainerRail
-                  tab={railTab}
-                  onTabChange={setRailTab}
-                  process={process}
-                  policyNumber={activePolicy?.policy_number}
-                  recent={recent}
-                  recentError={recentError}
-                  recentLoading={recentLoading}
-                  conversationId={conversationId}
-                  busy={isWorking}
-                  onOpenConversation={openConversation}
-                  onNewConversation={newConversation}
-                  onRefreshRecent={loadRecent}
-                />
-              </div>
-            )}
+        {activePolicy && featureTab && (
+          <div className="max-h-[45%] shrink-0 overflow-y-auto border-b border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 sm:px-6">
+            <div className="mx-auto w-full max-w-[780px]">
+              <PolicyFeaturesPanel
+                policyId={activePolicy.policy_id}
+                activeTab={featureTab}
+                onTabChange={(tab) => {
+                  setHighlight(null);
+                  setFeatureTab(tab);
+                }}
+                targetHighlight={highlight}
+                isOpen
+                onToggleOpen={() => setFeatureTab(null)}
+              />
+            </div>
           </div>
+        )}
 
-          <form onSubmit={onSubmit} className="flex items-center gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] p-3 sm:p-4">
-            <QuestionInput
-              value={input}
-              onChange={setInput}
-              disabled={isWorking}
-              placeholder={activePolicy ? `Ask about ${activePolicy.customer_name}'s policy...` : 'Ask a policy question...'}
-              inputRef={inputRef}
+        <section aria-label="Conversation" className="flex min-h-0 flex-1 flex-col bg-[#FBFCFD]">
+          {isLoadingHistory ? (
+            <div className="mx-auto w-full max-w-[780px] flex-1 space-y-5 px-4 py-6" aria-label="Loading conversation">
+              <Skeleton className="ml-auto h-12 w-2/3 rounded-2xl" />
+              <Skeleton className="h-40 w-full rounded-2xl" />
+              <Skeleton className="ml-auto h-12 w-1/2 rounded-2xl" />
+            </div>
+          ) : loadError ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+              <AlertCircle className="h-7 w-7 text-red-600" aria-hidden="true" />
+              <p className="text-[15px] font-semibold text-[#0F2A43]">{loadError.title}</p>
+              <p className="max-w-md text-[13px] text-[#64748B]">{loadError.message}</p>
+              <Link
+                to="/app/explainer"
+                className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-[12.5px] font-semibold text-[#0F2A43] hover:border-[#EA580C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C]"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" /> Back to Policy Explainer
+              </Link>
+            </div>
+          ) : (
+            <ConversationStream
+              messages={messages}
+              isWorking={isWorking}
+              process={process}
+              onShowAudit={showAudit}
+              onShowProcess={showProcess}
+              onPrefill={prefill}
+              firstName={me()?.name?.split(/\s+/)[0]}
+              activePolicy={activePolicy}
+              onAsk={handleAsk}
+              onChooseCandidate={handleChooseCandidate}
+              onOpenSource={openSource}
+              onOpenTab={openTab}
+              pendingSwitch={pendingSwitch}
+              onConfirmSwitchContext={handleConfirmSwitchExisting}
+              onConfirmStartNew={handleConfirmStartNew}
+              onCancelSwitch={handleCancelCustomerSwitch}
             />
-            <button
-              type="submit"
-              disabled={!input.trim() || isWorking}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#EA580C] px-4 py-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#C2410C] disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 cursor-pointer"
-            >
-              <span className="hidden sm:inline">Send</span>
-              <Send className="h-4 w-4" />
-            </button>
-          </form>
-        </section>
+          )}
 
-        <div className="hidden shrink-0 overflow-y-auto lg:block">
-          <ExplainerRail
-                  tab={railTab}
-                  onTabChange={setRailTab}
-                  process={process}
-                  policyNumber={activePolicy?.policy_number}
-                  recent={recent}
-                  recentError={recentError}
-                  recentLoading={recentLoading}
-                  conversationId={conversationId}
-                  busy={isWorking}
-                  onOpenConversation={openConversation}
-                  onNewConversation={newConversation}
-                  onRefreshRecent={loadRecent}
+          <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
+            <form onSubmit={onSubmit} className="mx-auto w-full max-w-[780px]">
+              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-4 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
+                <QuestionInput
+                  variant="bare"
+                  value={input}
+                  onChange={setInput}
+                  disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                  placeholder={
+                    activePolicy ? `Ask about ${activePolicy.customer_name}'s policy, or another one…` : 'Message Policy Explainer…'
+                  }
+                  inputRef={inputRef}
                 />
-        </div>
+                <button
+                  type="submit"
+                  aria-label="Send"
+                  disabled={!input.trim() || isWorking || Boolean(loadError)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EA580C] text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#E2E8F0] disabled:text-[#94A3B8] cursor-pointer"
+                >
+                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                </button>
+              </div>
+              <p className="mt-2 text-center text-[11px] text-[#94A3B8]">
+                Answers come from the policy wording, cite their sources and are recorded in The Record.
+              </p>
+            </form>
+          </div>
+        </section>
       </div>
 
+      <AIProcessPanel content={panel} process={process} docked={docked} autoFocus={panelAutoFocus} onClose={closePanel} />
       <SourceViewer target={sourceTarget} onClose={() => setSourceTarget(null)} />
-      {conversationId && <span className="sr-only" data-conversation-id={conversationId} />}
+
+      {/* Policy and Customer Selection Modal */}
+      <PolicySwitcherModal
+        isOpen={policySwitcherOpen}
+        onClose={() => setPolicySwitcherOpen(false)}
+        currentPolicy={activePolicy}
+        onSelectPolicy={handleChooseCandidate}
+      />
+
+      {routeConversationId && <span className="sr-only" data-conversation-id={routeConversationId} />}
     </div>
   );
 }

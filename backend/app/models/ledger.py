@@ -42,6 +42,9 @@ class EvidenceLedger(Base):
     # Audit detail for "The Record". Nullable so rows written before these columns existed
     # remain valid when Alembic adds them.
     employee_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    # Who asked, as identified when the question was asked (NULL on rows recorded before this).
+    employee_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    employee_role: Mapped[str | None] = mapped_column(String(60), nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     guardrail_checks: Mapped[list | None] = mapped_column(JSON, nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(80), nullable=True)

@@ -1,7 +1,12 @@
 import { APP_CONFIG } from '../config';
+import { currentEmployee } from './auth';
 import type {
+  AttentionResponse,
   BillingItem,
   ClaimItem,
+  ContextCheckResponse,
+  ContextSwitchAuditItem,
+  ConversationListPage,
   ConversationMessageRecord,
   ConversationResponse,
   CoverageItem,
@@ -17,9 +22,7 @@ import type {
   PolicyDetail,
   QuestionAnswerResponse,
   QuestionResolution,
-  RecentQuestionItem,
   SourceDocument,
-  TopicsResponse,
 } from '../types';
 
 /** status 0 = the backend could not be reached; 408 = the browser gave up waiting. */
@@ -50,6 +53,17 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // The backend allows the AI service 45s; leave headroom for the backend's own work.
 const QUESTION_TIMEOUT_MS = 60_000;
 
+/** Who is asking, on every request. Names are URL-encoded so any characters survive HTTP headers. */
+function identityHeaders(): Record<string, string> {
+  const employee = currentEmployee();
+  if (!employee) return {};
+  return {
+    'X-Employee-Id': employee.employeeId,
+    'X-Employee-Name': encodeURIComponent(employee.name),
+    'X-Employee-Role': encodeURIComponent(employee.role),
+  };
+}
+
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
   const { params, headers, timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = options;
   const baseUrl = (APP_CONFIG.apiBaseUrl || '').replace(/\/$/, '');
@@ -75,6 +89,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     response = await fetch(url.toString(), {
       headers: {
         'Content-Type': 'application/json',
+        ...identityHeaders(),
         ...headers,
       },
       ...rest,
@@ -146,11 +161,11 @@ export async function getDashboardStats(
   });
 }
 
-/** Forms most often cited in recorded answers over the range, most-cited first. */
-export async function getDashboardTopics(
+/** Flagged and unanswered questions in the range, grouped by question, with their causes. */
+export async function getNeedsAttention(
   timeRange: 'today' | '7d' | '30d' = '7d'
-): Promise<TopicsResponse> {
-  return apiClient.get<TopicsResponse>('/api/dashboard/topics', {
+): Promise<AttentionResponse> {
+  return apiClient.get<AttentionResponse>('/api/dashboard/attention', {
     params: { range: timeRange },
   });
 }
@@ -224,11 +239,36 @@ export async function getConversation(conversationId: string): Promise<Conversat
 
 export async function setConversationContext(
   conversationId: string,
-  policyId: string
+  policyId: string,
+  options?: { customerId?: string; confirmDifferentCustomer?: boolean }
 ): Promise<ConversationResponse> {
   return apiClient.post<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/context`,
-    { policy_id: policyId }
+    {
+      policy_id: policyId,
+      customer_id: options?.customerId,
+      confirm_different_customer: options?.confirmDifferentCustomer ?? false,
+    }
+  );
+}
+
+export async function checkContextSwitch(
+  conversationId: string,
+  targetPolicyId: string
+): Promise<ContextCheckResponse> {
+  return apiClient.get<ContextCheckResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/context-check`,
+    {
+      params: { target_policy_id: targetPolicyId },
+    }
+  );
+}
+
+export async function getContextAudit(
+  conversationId: string
+): Promise<ContextSwitchAuditItem[]> {
+  return apiClient.get<ContextSwitchAuditItem[]>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/context-audit`
   );
 }
 
@@ -251,9 +291,16 @@ export async function submitQuestion(
   );
 }
 
-/** Most recently asked questions across conversations, newest first. */
-export async function getRecentQuestions(limit = 30): Promise<RecentQuestionItem[]> {
-  return apiClient.get<RecentQuestionItem[]>('/api/conversations/recent', { params: { limit } });
+/** The signed-in employee's conversations, newest activity first, archived ones excluded. */
+export async function listConversations(
+  query: { search?: string; limit?: number; offset?: number } = {}
+): Promise<ConversationListPage> {
+  return apiClient.get<ConversationListPage>('/api/conversations', { params: query });
+}
+
+/** Hide a conversation from the employee's lists. Nothing is deleted; The Record keeps every answer. */
+export async function archiveConversation(conversationId: string): Promise<{ conversation_id: string; is_archived: boolean }> {
+  return apiClient.post(`/api/conversations/${encodeURIComponent(conversationId)}/archive`, {});
 }
 
 export async function getConversationMessages(conversationId: string): Promise<ConversationMessageRecord[]> {

@@ -38,7 +38,13 @@ export function App() {
         >
           <Route index element={<Navigate to="/app/explainer" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="explainer" element={<ExplainerPage />} />
+          {/* The Policy Explainer opens on the chat. One persistent conversation screen for all three
+              URLs, so asking the first question (which moves the URL to /c/:id) does not remount it. */}
+          <Route path="explainer" element={<ExplainerPage />}>
+            <Route index element={null} />
+            <Route path="new" element={null} />
+            <Route path="c/:conversationId" element={null} />
+          </Route>
           <Route path="settings" element={<SettingsPage />} />
           <Route path="help" element={<HelpPage />} />
         </Route>
