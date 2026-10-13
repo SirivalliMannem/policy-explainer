@@ -1,8 +1,4 @@
-"""Conversation title column.
-
-The Conversation model gained an optional `title` (commit 6b831a4) without a migration, so every
-query on `conversation` failed against an existing database. Nullable: existing conversations keep
-their derived titles.
+﻿"""Add title column to conversation table for user rename.
 
 Revision ID: 0005_conversation_title
 Revises: 0004_context_switch_audit
@@ -12,7 +8,6 @@ Create Date: 2026-10-13
 from __future__ import annotations
 
 from collections.abc import Sequence
-
 import sqlalchemy as sa
 from alembic import op
 
