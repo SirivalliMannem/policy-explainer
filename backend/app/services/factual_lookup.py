@@ -17,24 +17,38 @@ from sqlalchemy.orm import Session
 from app.models.policy import CoreBilling, CoreClaim, CoreCoverage, CorePolicy
 from app.schemas.explainer import CitationItem, EvidenceItemSchema
 
-# ΓöÇΓöÇ 1. Classification Patterns ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# ── 1. Classification Patterns ───────────────────────────────────────────────
 
-FACTUAL_DEDUCTIBLE_PATTERN = re.compile(r"\bdeduct[ia]bles?\b", re.IGNORECASE)
-FACTUAL_LIMIT_PATTERN = re.compile(r"\b(?:policy\s+)?limits?\b", re.IGNORECASE)
+# Each pattern also covers the everyday ways employees ask ("out of pocket", "max payout", "past due",
+# "still open", "who is handling the claim").
+FACTUAL_DEDUCTIBLE_PATTERN = re.compile(r"\b(?:deduct[ia]bles?|out[\s-]of[\s-]pocket)\b", re.IGNORECASE)
+FACTUAL_LIMIT_PATTERN = re.compile(
+    r"\b(?:(?:policy\s+)?limits?|how\s+much\s+(?:coverage|cover)\b|max(?:imum)?\s+(?:payout|pay[\s-]?out|benefit|amount)"
+    r"|coverage\s+amounts?|amount\s+of\s+coverage)",
+    re.IGNORECASE,
+)
 FACTUAL_PREMIUM_PATTERN = re.compile(
-    r"\b(?:premiums?|annual\s+premium|policy\s+premium|cost\s+of\s+(?:this|the)\s+policy)\b",
+    r"\b(?:premiums?|annual\s+premium|policy\s+premium|cost\s+of\s+(?:this|the)\s+policy"
+    r"|how\s+much\s+(?:does|is)\s+(?:this|the|my|our|their|his|her)\s+(?:policy|insurance)\s+(?:cost|costing)"
+    r"|(?:annual|yearly|monthly)\s+cost|cost\s+(?:per|a|each)\s+(?:year|month))\b",
     re.IGNORECASE,
 )
 FACTUAL_BILLING_PATTERN = re.compile(
-    r"\b(?:bill\w*|due\s+date|payment\s+due|next\s+payment|amount\s+due|when\s+is\s+(?:the\s+|my\s+)?payment\s+due|when\s+do\s+i\s+have\s+to\s+pay)\b",
+    r"\b(?:bill\w*|due\s+date|payment\s+due|next\s+payment|amount\s+due|when\s+is\s+(?:the\s+|my\s+)?payment\s+due"
+    r"|when\s+do\s+i\s+have\s+to\s+pay|past[\s-]due|overdue|outstanding\s+balance|balance\s+due|amount\s+owed"
+    r"|behind\s+on\s+(?:payments?|the\s+bill)|paid\s+up|payment\s+status)\b",
     re.IGNORECASE,
 )
 FACTUAL_CLAIM_STATUS_PATTERN = re.compile(
-    r"\b(?:claim\s+status|status\s+of\s+(?:the\s+|my\s+)?claim|is\s+(?:the\s+|my\s+)?claim\s+open|is\s+(?:the\s+|my\s+)?claim\s+closed)\b",
+    r"\b(?:claim\s+status|status\s+of\s+(?:the\s+|my\s+)?claim|is\s+(?:the\s+|my\s+)?claim\s+open|is\s+(?:the\s+|my\s+)?claim\s+closed"
+    r"|claim\b[^.?!]{0,40}\b(?:still\s+)?(?:open|closed|settled|pending|resolved)"
+    r"|where\s+(?:is|are)\s+(?:the\s+|my\s+|this\s+)?claims?)\b",
     re.IGNORECASE,
 )
 FACTUAL_ADJUSTER_PATTERN = re.compile(
-    r"\b(?:adjusters?|assigned\s+adjuster|adjuster\s+assigned|who\s+is\s+(?:the\s+|my\s+)?adjuster)\b",
+    r"\b(?:adjusters?|assigned\s+adjuster|adjuster\s+assigned|who\s+is\s+(?:the\s+|my\s+)?adjuster"
+    r"|who(?:'s|\s+is)\s+(?:handling|working\s+on|managing)\s+(?:the\s+|my\s+|this\s+|that\s+)?claim"
+    r"|who(?:'s|\s+is)\s+assigned\s+to\s+(?:the\s+|my\s+|this\s+|that\s+)?claim|claims?\s+handler)\b",
     re.IGNORECASE,
 )
 
@@ -46,6 +60,12 @@ WORDING_INDICATORS = [
     re.compile(r"\b(?:is\s+.*?\s+covered|does\s+.*?\s+cover|are\s+.*?\s+covered|is\s+there\s+coverage\s+for|what\s+is\s+covered|what\s+does\s+.*?\s+cover)\b", re.IGNORECASE),
     re.compile(r"\b(?:peril\w*|cause\s+of\s+loss|wear\s+and\s+tear|mold|mould|termites?|vermin|vandalism)\b", re.IGNORECASE),
     re.compile(r"\b(?:why\s+is|how\s+does\s+(?:the\s+)?coverage\s+apply|explain\s+(?:the|how))\b", re.IGNORECASE),
+    # "...and how does it apply?", "how does that work", "what does it mean", "when does it apply"
+    re.compile(
+        r"\b(?:how\s+(?:does|do|would|will)\s+(?:it|this|that|they|these|those|the\s+\w+(?:\s+\w+)?)\s+(?:apply|work)"
+        r"|what\s+does\s+(?:it|this|that)\s+mean|when\s+does\s+(?:it|this|that)\s+apply)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 COVERAGE_PATTERNS = [
@@ -113,7 +133,7 @@ def find_matching_coverage(question: str, coverages: list[CoreCoverage]) -> Opti
     return None
 
 
-# ΓöÇΓöÇ 2. Field-Specific Answer Builders ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# ── 2. Field-Specific Answer Builders ────────────────────────────────────────
 
 
 def _answer_deductible(
@@ -344,9 +364,11 @@ def _answer_billing(
     status_str = bill.status or "current"
     plan_str = bill.plan or "Monthly"
 
+    past_due = bill.past_due_amount or 0.0
+    past_due_str = f"${past_due:,.2f} is past due" if past_due > 0 else "nothing is past due"
     ans = (
-        f"For policy {policy.policy_number}, the next payment of {amount_str} is due on {date_str} "
-        f"(Plan: {plan_str}, Status: {status_str}) [E{start_index}]."
+        f"For policy {policy.policy_number}, the next payment of {amount_str} is due on {date_str}, and "
+        f"{past_due_str} (Plan: {plan_str}, Status: {status_str}) [E{start_index}]."
     )
     ev = [
         EvidenceItemSchema(
@@ -469,7 +491,7 @@ def _answer_claim(
     return "\n".join(lines), ev_items, cit_items
 
 
-# ΓöÇΓöÇ 3. Main Factual Lookup Execution ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# ── 3. Main Factual Lookup Execution ─────────────────────────────────────────
 
 
 def execute_factual_lookup(
