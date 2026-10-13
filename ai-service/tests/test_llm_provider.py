@@ -12,13 +12,21 @@ ai_service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ai_service_dir not in sys.path:
     sys.path.insert(0, ai_service_dir)
 
+import json
 from app.core.config import settings
+from app.db.database import SessionLocal
+from app.models.policy import CorePolicy
+from app.services.explainer_pipeline import ExplainerPipeline
 from app.services.llm import (
     GroqProvider,
     GeminiProvider,
     LLMConfigurationError,
     LLMProviderError,
     LLMService,
+)
+from app.services.llm.base import (
+    parse_structured_response,
+    validate_ai_suggestions,
 )
 from app.services.retrieval.evidence_retriever import EvidenceItem
 
@@ -243,3 +251,191 @@ def test_groq_long_rate_limit_falls_back_with_reason(monkeypatch, sample_evidenc
     assert post.call_count == 1
     assert res.is_fallback is True
     assert "429" in (res.fallback_reason or "")
+
+
+# ==============================================================================
+# AI-GENERATED SUGGESTED QUESTIONS TESTS
+# ==============================================================================
+
+def test_groq_generates_answer_and_suggestions_in_single_call(monkeypatch, sample_evidence):
+    """Groq returns answer plus dynamically generated suggestions in a single structured API call."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_mock_valid_key")
+
+    provider = LLMService.get_provider()
+    assert isinstance(provider, GroqProvider)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_payload = {
+        "answer": "Water backup is covered up to $5,000 under endorsement HO 04 95 [E1].",
+        "suggested_questions": [
+            "What is the deductible for water backup?",
+            "Does coverage include sump pump overflow?",
+            "Are foundation damages excluded under this endorsement?",
+        ],
+    }
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(mock_payload)}}]
+    }
+
+    with patch("httpx.Client.post", return_value=mock_resp) as post:
+        res = LLMService.generate_answer(
+            question="Is water backup covered?",
+            grounding_context="Grounding context with HO 04 95",
+            evidence=sample_evidence,
+        )
+        # Exactly one call to Groq
+        assert post.call_count == 1
+        assert res.is_fallback is False
+        assert res.model_used == provider.model
+        assert "Water backup is covered" in res.answer
+        assert len(res.suggested_questions) == 3
+        assert res.suggested_questions[0] == "What is the deductible for water backup?"
+        assert res.suggested_questions[1] == "Does coverage include sump pump overflow?"
+        assert res.suggested_questions[2] == "Are foundation damages excluded under this endorsement?"
+
+
+def test_groq_429_uses_carrier_engine_and_python_suggestions_without_second_groq_call(monkeypatch, sample_evidence):
+    """Groq HTTP 429 engages deterministic fallback and Python SuggestionGenerator with NO second Groq call."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_mock_valid_key")
+
+    limited = MagicMock(status_code=429, headers={"retry-after": "60"})
+    with patch("httpx.Client.post", return_value=limited) as post:
+        res = LLMService.generate_answer(
+            question="Is water backup covered?",
+            grounding_context="Context",
+            evidence=sample_evidence,
+        )
+        assert post.call_count == 1
+        assert res.is_fallback is True
+        assert res.model_used == "grounded-carrier-engine"
+        assert res.suggested_questions == []  # LLM did not generate suggestions; pipeline falls back
+
+    # Now verify in full ExplainerPipeline
+    db = SessionLocal()
+    try:
+        policy = db.query(CorePolicy).filter(CorePolicy.policy_number.like("%2847%")).first()
+        if policy:
+            interp = {
+                "original": "Does this policy have water backup coverage?",
+                "corrected": "Does this policy have water backup coverage?",
+                "normalized": "Does this policy have water backup coverage?",
+                "method": "rules",
+                "search_terms": ["water backup"],
+            }
+            with patch("httpx.Client.post", return_value=limited) as post:
+                pipeline_resp = ExplainerPipeline.process_question(
+                    question="Does this policy have water backup coverage?",
+                    policy_id=policy.id,
+                    db=db,
+                    interpretation=interp,
+                )
+                # Exactly one call to Groq was attempted for answer generation; NEVER called for suggestions
+                assert post.call_count == 1
+                assert pipeline_resp.is_fallback is True
+                assert pipeline_resp.model_used == "grounded-carrier-engine"
+                # Fallback suggestions are generated by SuggestionGenerator
+                assert len(pipeline_resp.suggested_questions) > 0
+                assert all(isinstance(s, str) for s in pipeline_resp.suggested_questions)
+    finally:
+        db.close()
+
+
+def test_malformed_ai_suggestions_preserves_valid_answer_and_falls_back(monkeypatch, sample_evidence):
+    """Malformed suggestion format in Groq JSON response preserves valid answer and falls back to Python generator."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_mock_valid_key")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_payload = {
+        "answer": "Water backup is covered under HO 04 95 [E1].",
+        "suggested_questions": "invalid - should be a list, not a string",
+    }
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(mock_payload)}}]
+    }
+
+    with patch("httpx.Client.post", return_value=mock_resp):
+        res = LLMService.generate_answer(
+            question="Is water backup covered?",
+            grounding_context="Context with HO 04 95",
+            evidence=sample_evidence,
+        )
+        # Valid answer is preserved, malformed suggestions are safely dropped to empty list
+        assert res.is_fallback is False
+        assert res.answer == "Water backup is covered under HO 04 95 [E1]."
+        assert res.suggested_questions == []
+
+    # In pipeline, empty suggestions trigger fallback to Python SuggestionGenerator
+    db = SessionLocal()
+    try:
+        policy = db.query(CorePolicy).filter(CorePolicy.policy_number.like("%2847%")).first()
+        if policy:
+            interp = {
+                "original": "Does this policy have water backup coverage?",
+                "corrected": "Does this policy have water backup coverage?",
+                "normalized": "Does this policy have water backup coverage?",
+                "method": "rules",
+                "search_terms": ["water backup"],
+            }
+            with patch("httpx.Client.post", return_value=mock_resp):
+                pipeline_resp = ExplainerPipeline.process_question(
+                    question="Does this policy have water backup coverage?",
+                    policy_id=policy.id,
+                    db=db,
+                    interpretation=interp,
+                )
+                assert pipeline_resp.is_fallback is False
+                assert pipeline_resp.answer == "Water backup is covered under HO 04 95 [E1]."
+                # Python generator safely filled in the suggestions
+                assert len(pipeline_resp.suggested_questions) > 0
+    finally:
+        db.close()
+
+
+def test_ai_suggestions_validation_filtering(sample_evidence):
+    """Suggestions are capped at 3, filtered for duplicates, question near-repeats, and unevidenced forms."""
+    question = "Does this policy have water backup coverage?"
+
+    raw_candidates = [
+        "Does this policy have water backup coverage?",  # Exact repeat -> rejected
+        "What is the water backup limit?",  # Valid 1 -> accepted
+        "What is the water backup limit?",  # Duplicate of valid 1 -> rejected
+        "What deductible applies to water backup?",  # Valid 2 -> accepted
+        "Can I claim under endorsement HO 99 99?",  # Hallucinated form not in evidence -> rejected
+        "What is the coverage condition for drains under HO 04 95?",  # Valid 3 (HO 04 95 in evidence) -> accepted
+        "What is another extra question?",  # 4th valid -> dropped by MAX_AI_SUGGESTIONS cap
+    ]
+
+    validated = validate_ai_suggestions(raw_candidates, question, sample_evidence)
+    assert len(validated) == 3
+    assert "Does this policy have water backup coverage?" not in validated
+    assert "Can I claim under endorsement HO 99 99?" not in validated
+    assert validated[0] == "What is the water backup limit?"
+    assert validated[1] == "What deductible applies to water backup?"
+    assert "HO 04 95" in validated[2]
+
+
+def test_parse_structured_response_markdown_fence_and_plain_text(sample_evidence):
+    """parse_structured_response handles markdown code fences and legacy plain-text responses gracefully."""
+    question = "Is water backup covered?"
+
+    # Markdown fenced JSON
+    fenced = """```json
+{
+  "answer": "Yes, water backup is covered [E1].",
+  "suggested_questions": ["What is the water backup limit?"]
+}
+```"""
+    answer, suggestions = parse_structured_response(fenced, question, sample_evidence)
+    assert answer == "Yes, water backup is covered [E1]."
+    assert suggestions == ["What is the water backup limit?"]
+
+    # Plain text without JSON
+    plain = "Direct plain text answer without JSON markers."
+    answer, suggestions = parse_structured_response(plain, question, sample_evidence)
+    assert answer == plain
+    assert suggestions == []

@@ -326,6 +326,7 @@ export interface ConversationResponse {
   conversation_id: string;
   employee_id: string;
   status: string;
+  title?: string | null;
   created_at: string;
   updated_at: string;
   policy_context?: Pick<

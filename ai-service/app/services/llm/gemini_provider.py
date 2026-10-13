@@ -11,6 +11,7 @@ from app.services.llm.base import (
     SYSTEM_PROMPT,
     USER_INSTRUCTION,
     extract_citations_from_evidence,
+    parse_structured_response,
 )
 from app.services.llm.exceptions import LLMProviderError
 from app.services.retrieval.evidence_retriever import EvidenceItem
@@ -47,14 +48,16 @@ class GeminiProvider(BaseLLMProvider):
         """Invoke Gemini generateContent endpoint with grounded prompt."""
         user_content = f"{grounding_context}\n\n{USER_INSTRUCTION.format(question=question)}"
         content = self.complete(SYSTEM_PROMPT, user_content, max_tokens=600)
+        answer, suggestions = parse_structured_response(content, question, evidence)
         return LLMGenerationResult(
-            answer=content,
+            answer=answer,
             raw_response=content,
             citations=extract_citations_from_evidence(evidence),
             confidence="high",
             model_used=self.model,
             is_fallback=False,
             provider=self.name,
+            suggested_questions=suggestions,
         )
 
     def complete(

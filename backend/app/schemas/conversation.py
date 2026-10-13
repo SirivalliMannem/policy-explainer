@@ -78,6 +78,12 @@ class ContextSwitchAuditItem(BaseModel):
     reason: Optional[str] = None
 
 
+class ConversationTitleUpdateRequest(BaseModel):
+    """Request payload to rename/update a conversation's title."""
+
+    title: str = Field(..., min_length=1, max_length=200, description="New title for the conversation")
+
+
 class ConversationResponse(BaseModel):
     """Conversation session response with optional policy context."""
 
@@ -86,6 +92,7 @@ class ConversationResponse(BaseModel):
     conversation_id: str
     employee_id: str
     status: str
+    title: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     policy_context: Optional[PolicyContextSummary] = None

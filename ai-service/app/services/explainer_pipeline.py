@@ -183,11 +183,16 @@ class ExplainerPipeline:
         verified_citations = guardrail_result.validated_citations
 
         # 5. Generate contextual suggested questions
-        suggestions = SuggestionGenerator.generate(
-            question=question,
-            policy=policy,
-            evidence=evidence,
-        )
+        # Use dynamically generated AI suggestions from the LLM when available and valid;
+        # otherwise fall back to deterministic SuggestionGenerator without calling the LLM again.
+        if llm_result.suggested_questions and not llm_result.is_fallback:
+            suggestions = llm_result.suggested_questions
+        else:
+            suggestions = SuggestionGenerator.generate(
+                question=question,
+                policy=policy,
+                evidence=evidence,
+            )
 
         # 6. Map to schemas
         evidence_schemas = [
