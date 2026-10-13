@@ -95,6 +95,9 @@ class QuestionSubmitRequest(BaseModel):
     """Request payload for submitting a policy question."""
 
     question: str = Field(..., min_length=1, description="Question text submitted by employee")
+    # Answer about this policy instead of the conversation's context, without changing the context.
+    # Used when one question is answered for each of a customer's matching policies.
+    policy_id: Optional[str] = None
 
 
 class QuestionSubmitResponse(BaseModel):

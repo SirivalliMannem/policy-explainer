@@ -54,5 +54,8 @@ class QuestionResolution(BaseModel):
     # The assistant's reply for conversation / off_topic messages, with example questions to continue.
     reply: Optional[str] = None
     suggestions: list[str] = []
+    # True when an ambiguous match is several policies of ONE customer: the question is answered for
+    # each of them together. Matches across different customers are still asked about.
+    answer_all: bool = False
     # The employee's recently checked policies, offered when a question names no policy.
     suggested_policies: list[PolicyContextCandidate] = []

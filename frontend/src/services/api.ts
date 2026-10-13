@@ -280,13 +280,15 @@ export async function clearConversationContext(
   );
 }
 
+/** `policyId` answers for one of a customer's several matching policies without changing the context. */
 export async function submitQuestion(
   conversationId: string,
-  question: string
+  question: string,
+  policyId?: string
 ): Promise<QuestionAnswerResponse> {
   return apiClient.post<QuestionAnswerResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
-    { question },
+    policyId ? { question, policy_id: policyId } : { question },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
 }
