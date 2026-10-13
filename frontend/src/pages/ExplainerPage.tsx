@@ -43,6 +43,14 @@ const MATCH_LABEL: Record<string, string> = {
   customer_name: 'policyholder name',
   surname: 'surname',
   first_name: 'first name',
+  claim_number: 'claim number',
+  account_number: 'account number',
+  email: 'email address',
+  phone: 'phone number',
+  vin: 'VIN',
+  plate: 'license plate',
+  address: 'address',
+  vehicle: 'vehicle',
 };
 
 /** Wide enough for the chat column and the docked AI process panel side by side. */

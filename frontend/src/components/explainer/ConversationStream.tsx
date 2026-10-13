@@ -108,6 +108,15 @@ const MATCH_LABEL: Record<string, string> = {
   policy_number: 'matched on policy number',
   customer_name: 'matched on policyholder name',
   surname: 'matched on surname',
+  first_name: 'matched on first name',
+  claim_number: 'matched on claim number',
+  account_number: 'matched on account number',
+  email: 'matched on email address',
+  phone: 'matched on phone number',
+  vin: 'matched on VIN',
+  plate: 'matched on license plate',
+  address: 'matched on address',
+  vehicle: 'matched on vehicle',
 };
 
 /** "Interpreted as …" — shown only when the understood wording differs from what was typed. */

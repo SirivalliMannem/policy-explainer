@@ -173,7 +173,20 @@ export interface QuestionResolution {
    * Both are answered by `reply`; nothing is retrieved or recorded.
    */
   intent: 'policy' | 'portfolio' | 'conversation' | 'off_topic';
-  matched_on?: 'policy_number' | 'customer_name' | 'surname' | 'first_name' | null;
+  matched_on?:
+    | 'policy_number'
+    | 'claim_number'
+    | 'account_number'
+    | 'email'
+    | 'phone'
+    | 'vin'
+    | 'plate'
+    | 'address'
+    | 'vehicle'
+    | 'customer_name'
+    | 'surname'
+    | 'first_name'
+    | null;
   reference?: string | null;
   policy?: PolicyContextCandidate | null;
   candidates: PolicyContextCandidate[];
