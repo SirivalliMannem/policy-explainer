@@ -1,5 +1,29 @@
-import { BookOpen, MessageSquareQuote } from 'lucide-react';
-import type { CompanyGuidance } from '../../types';
+import { useState } from 'react';
+import { BookOpen, ChevronDown, MessageSquareQuote } from 'lucide-react';
+import type { CompanyGuidance, GuidanceArticle } from '../../types';
+
+/** The approved call script, folded away until the agent asks for it. */
+function SuggestedWording({ article }: { article: GuidanceArticle }) {
+  const [open, setOpen] = useState(false);
+  if (!article.spoken) return null;
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 rounded text-[11.5px] font-semibold text-[#1D4ED8] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8] cursor-pointer"
+      >
+        <MessageSquareQuote className="h-3.5 w-3.5" aria-hidden="true" />
+        {open ? 'Hide what to say to the customer' : 'Show what to say to the customer'}
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
+      {open && (
+        <p className="mt-1 rounded-lg bg-white/70 px-2.5 py-1.5 text-[12px] leading-relaxed text-[#334155]">“{article.spoken}”</p>
+      )}
+    </div>
+  );
+}
 
 /** Approved company articles for the question, kept apart from the policy answer. */
 export function CompanyGuidanceBox({ guidance }: { guidance?: CompanyGuidance | null }) {
@@ -27,14 +51,7 @@ export function CompanyGuidanceBox({ guidance }: { guidance?: CompanyGuidance | 
               <span className="text-[12.5px] font-semibold text-[#0F2A43]">{a.title}</span>
             </div>
             <p className="mt-1 text-[12.5px] leading-relaxed text-[#334155]">{a.body}</p>
-            {a.spoken && (
-              <p className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-white/70 px-2.5 py-1.5 text-[12px] leading-relaxed text-[#334155]">
-                <MessageSquareQuote className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                <span>
-                  <span className="font-semibold text-[#1E3A5F]">Suggested wording: </span>“{a.spoken}”
-                </span>
-              </p>
-            )}
+            <SuggestedWording article={a} />
             <p className="mt-1 text-[10.5px] text-[#64748B]">
               {a.collection} · version {a.version}
               {a.approved_by ? ` · approved by ${a.approved_by}` : ''}
