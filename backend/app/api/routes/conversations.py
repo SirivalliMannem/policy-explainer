@@ -54,6 +54,7 @@ from app.services.portfolio import (
     portfolio_payload,
     portfolio_suggestions,
 )
+from app.services.customer_verification import verification_for_answer
 from app.services.factual_lookup import (
     execute_factual_lookup,
     is_factual_query,
@@ -556,7 +557,11 @@ def submit_question(
         fallback_reason=ai_resp.fallback_reason,
         latency_ms=latency_ms,
         timings_ms=ai_resp.timings_ms,
-        retrieval={**ai_resp.retrieval, "interpretation": ai_resp.interpretation or interpretation},
+        retrieval={
+            **ai_resp.retrieval,
+            "interpretation": ai_resp.interpretation or interpretation,
+            "customer_verification": verification_for_answer(conv.id, question_text, policy),
+        },
     )
 
     # 4. Update question status
@@ -586,7 +591,7 @@ def submit_question(
         provider=ai_resp.provider,
         is_fallback=ai_resp.is_fallback,
         fallback_reason=ai_resp.fallback_reason,
-        retrieval=ai_resp.retrieval,
+        retrieval={**ai_resp.retrieval, "customer_verification": verification_for_answer(conv.id, question_text, policy)},
         timings_ms=ai_resp.timings_ms,
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
@@ -654,6 +659,7 @@ def _answer_factual_question(
         "fields_matched": result.fields_matched if result else [],
         "records_matched": len(evidence),
         "interpretation": interpretation,
+        "customer_verification": verification_for_answer(conv.id, question_text, policy),
     }
 
     ledger_entry = LedgerService.record_entry(
@@ -735,6 +741,7 @@ def _answer_portfolio_question(
         "portfolio": payload,
         "policies_matched": len(result.policies),
         "interpretation": interpretation,
+        "customer_verification": verification_for_answer(conv.id, question_text, None),
     }
 
     question_record = ConversationQuestion(

@@ -196,7 +196,14 @@ export function ExplainerPage() {
   // The backend answers in one request, so stages 2–6 are reported together when it returns: step 2
   // shows as in progress until then, and every value shown afterwards is the one the pipeline measured.
   // `forPolicy` answers for one of a customer's matching policies (labelled), leaving the context as it is.
-  const runPipeline = async (question: string, convId: string, contextDetail: string, forPolicy?: PolicyContextCandidate) => {
+  // `verified` is how the customer was confirmed when the employee chose them (a candidate or a switch).
+  const runPipeline = async (
+    question: string,
+    convId: string,
+    contextDetail: string,
+    forPolicy?: PolicyContextCandidate,
+    verified?: string
+  ) => {
     // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
     openPanel({ mode: 'live' }, null);
     setProcess((prev) => ({
@@ -205,7 +212,12 @@ export function ExplainerPage() {
       result: null,
       question,
       contextDetail,
-      stages: { ...freshStages(), context: { status: 'completed', detail: contextDetail }, retrieve: { status: 'processing' } },
+      stages: {
+        ...freshStages(),
+        verify: verified ? { status: 'completed', detail: verified } : prev.stages.verify,
+        context: { status: 'completed', detail: contextDetail },
+        retrieve: { status: 'processing' },
+      },
     }));
 
     try {
@@ -268,7 +280,7 @@ export function ExplainerPage() {
       askedBy: me(),
       askedAt,
       contextDetail: null,
-      stages: { ...freshStages(), context: { status: 'processing' } },
+      stages: { ...freshStages(), verify: { status: 'processing' } },
     });
     try {
       let convId: string;
@@ -315,6 +327,44 @@ export function ExplainerPage() {
         setProcess(IDLE_PROCESS);
         return;
       }
+
+      // Step 1: verify the customer before any policy information is retrieved. A customer who is not
+      // in the records, or a name several customers share, stops here and the employee is asked.
+      const verification = resolution.customer_verification;
+      if (verification && (verification.status === 'not_found' || verification.status === 'ambiguous')) {
+        const notFound = verification.status === 'not_found';
+        const pending = pendingQuestionRef.current;
+        pendingQuestionRef.current = pending && looksLikeReply(text) ? pending : text;
+        setProcess((prev) => ({
+          ...prev,
+          phase: 'needs_input',
+          stages: { ...prev.stages, verify: { status: notFound ? 'failed' : 'attention', detail: verification.message } },
+        }));
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: notFound
+            ? `${verification.message} Please check the spelling, or give a policy number, claim number, email or phone number.`
+            : `${verification.message} Which customer did you mean?`,
+          suggestions: notFound ? [] : verification.customers.map((c) => c.name),
+        });
+        openPanel({ mode: 'live' }, null);
+        return;
+      }
+      setProcess((prev) => ({
+        ...prev,
+        stages: {
+          ...prev.stages,
+          verify:
+            verification?.status === 'verified'
+              ? { status: 'completed', detail: verification.message }
+              : resolution.intent === 'portfolio'
+              ? { status: 'skipped', detail: 'Not needed: the question is about the book of business, not one customer.' }
+              : { status: 'attention', detail: verification?.message || 'The question does not name a customer yet.' },
+          context: { status: 'processing' },
+        },
+      }));
 
       const understood = interpretedText(resolution.interpretation);
       const understoodNote = understood ? ` · understood as “${understood}”` : '';
@@ -478,7 +528,13 @@ export function ExplainerPage() {
         setIsWorking(true);
         try {
           const convId = await ensureConversation();
-          await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number}`);
+          await runPipeline(
+            pending,
+            convId,
+            `${candidate.customer_name} · ${candidate.policy_number}`,
+            undefined,
+            `${candidate.customer_name}, chosen by the employee.`
+          );
         } finally {
           busyRef.current = false;
           setIsWorking(false);
@@ -511,7 +567,13 @@ export function ExplainerPage() {
       });
       notifyConversationsChanged();
       if (pending) {
-        await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`);
+        await runPipeline(
+          pending,
+          convId,
+          `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`,
+          undefined,
+          `${candidate.customer_name}, chosen by the employee.`
+        );
       } else {
         setProcess(IDLE_PROCESS);
       }
@@ -575,7 +637,9 @@ export function ExplainerPage() {
         await runPipeline(
           pendingQuestion,
           convId,
-          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`
+          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`,
+          undefined,
+          `${targetPolicy.customer_name}, confirmed by the employee when switching customers.`
         );
       } else {
         setProcess(IDLE_PROCESS);

@@ -25,6 +25,7 @@ from app.services.policy_resolver import (
     resolve_policy_from_question,
 )
 from app.services import small_talk
+from app.services import customer_verification
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
 
@@ -248,6 +249,12 @@ def resolve_policy_from_question_text(
                     message=f"{active.account.name} has {len(others)} other policies that could apply.",
                 )
 
+    # Step 1: the customer must exist in the records and be identified uniquely before any policy
+    # information is retrieved. The answer, when given, records how its customer was verified.
+    verification = customer_verification.verify_customer(result, understood, interpretation, active, db)
+    if conversation:
+        customer_verification.remember(conversation.id, question, verification)
+
     intent = "portfolio" if asks_about_portfolio(question, interpretation, has_selected_policy=bool(active)) else "policy"
     reply: Optional[small_talk.Reply] = None
     suggested: list[CorePolicy] = []
@@ -264,6 +271,7 @@ def resolve_policy_from_question_text(
         reply=reply.text if reply else None,
         suggestions=reply.suggestions if reply else [],
         suggested_policies=[_to_candidate(p) for p in suggested],
+        customer_verification=verification,
         answer_all=result.status == "ambiguous" and len({p.account_id for p in result.candidates}) == 1,
         interpretation=interpretation,
         matched_on=result.matched_on,

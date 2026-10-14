@@ -20,6 +20,7 @@ import {
 import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
 import type { ProcessState } from '../../lib/explainer';
 import { askerName, fullWhen } from '../../lib/conversations';
+import { answerConfidence, confidenceExplanation, isRecordAnswer } from '../../lib/confidence';
 import type { AuditTarget } from './AIProcessPanel';
 import { AnswerText } from './AnswerText';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
@@ -179,6 +180,19 @@ function SuggestionChips({ suggestions, onAsk, disabled }: { suggestions: string
   );
 }
 
+/** "· 83%" from the existing confidence rule, or "· exact record" for values read from the records. */
+function confidenceSuffix(result: QuestionAnswerResponse): string {
+  if (isRecordAnswer(result)) return ' · exact record';
+  const confidence = answerConfidence(result);
+  return confidence ? ` · ${confidence.percent}%` : '';
+}
+
+function confidenceTitle(result: QuestionAnswerResponse): string | undefined {
+  if (isRecordAnswer(result)) return 'Values read straight from the policy records: an exact record match.';
+  const confidence = answerConfidence(result);
+  return confidence ? confidenceExplanation(confidence) : undefined;
+}
+
 function AssistantAvatar() {
   return (
     <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#0F2A43] shadow-sm">
@@ -283,6 +297,7 @@ function AnswerCard({
           </div>
           {!insufficient && (
             <span
+              title={confidenceTitle(result)}
               className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wider ring-1 ${
                 result.confidence === 'high'
                   ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
@@ -292,6 +307,7 @@ function AnswerCard({
               }`}
             >
               <ShieldCheck className="h-3 w-3" /> Confidence: {result.confidence}
+              {confidenceSuffix(result)}
             </span>
           )}
         </div>
@@ -585,6 +601,8 @@ export function ConversationStream({
   onCancelSwitch,
 }: ConversationStreamProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  // Verifying the customer and identifying the policy: shown as a typing indicator.
+  const reading = process.stages.verify.status === 'processing' || process.stages.context.status === 'processing';
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -799,7 +817,7 @@ export function ConversationStream({
         </div>
       )}
 
-      {isWorking && process.phase === 'running' && process.stages.context.status === 'processing' && (
+      {isWorking && process.phase === 'running' && reading && (
         <div className="message-in flex items-center gap-3" role="status" aria-label="Reading your question">
           <AssistantAvatar />
           <div className="flex items-center gap-1 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-3.5 shadow-sm">
@@ -810,7 +828,7 @@ export function ConversationStream({
         </div>
       )}
 
-      {isWorking && process.phase === 'running' && process.stages.context.status !== 'processing' && (
+      {isWorking && process.phase === 'running' && !reading && (
         <div className="message-in flex items-center gap-3">
           <AssistantAvatar />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl rounded-tl-md border border-[#E2E8F0] bg-white px-4 py-2.5 text-[12.5px] text-[#475569] shadow-sm">
