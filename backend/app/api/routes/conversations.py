@@ -56,6 +56,7 @@ from app.services.portfolio import (
 )
 from app.services.customer_verification import verification_for_answer
 from app.services.loss_date import extract_loss_date, term_selection
+from app.services.multi_part import Part, PartAnswer, answer_endorsement, answer_records, combine, split_question
 from app.services.factual_lookup import (
     execute_factual_lookup,
     is_factual_query,
@@ -492,6 +493,14 @@ def submit_question(
     policy_context = _build_policy_context(policy_id, db)
 
     canonical_question = understood_text(question_text, interpretation)
+    # Several facts in one question ("the deductible, the endorsement and the open claim"): split it,
+    # answer each part from its own source and combine the parts into one reply.
+    parts = split_question(question_text)
+    if parts:
+        return _answer_multi_part(
+            conv, question_text, parts, policy, policy_context, db, interpretation, prior_question, started, employee, term_choice
+        )
+
     is_factual = is_factual_query(canonical_question) or is_factual_query(question_text)
     is_wording = is_wording_query(canonical_question) or is_wording_query(question_text)
 
@@ -626,6 +635,168 @@ def submit_question(
         ledger_id=ledger_entry.id,
         grounding_context_chars=len(ai_resp.grounding_context) if merged_evidence else None,
         interpretation=ai_resp.interpretation or interpretation,
+        asked_by=asked_by(conv.employee_id, ledger_entry),
+        asked_at=question_record.created_at,
+    )
+
+
+def _answer_multi_part(
+    conv: Conversation,
+    question_text: str,
+    parts: list[Part],
+    policy: CorePolicy,
+    policy_context: PolicyContextSummary,
+    db: Session,
+    interpretation: Optional[dict],
+    prior_question: Optional[str],
+    started: float,
+    employee: EmployeeUser,
+    term_choice: Optional[dict] = None,
+) -> QuestionAnswerResponse:
+    """Answer each part of a several-facts question from its own source and combine them into one reply.
+
+    Facts come from the policy records, endorsements from the attached forms, and only the parts about
+    what the wording means go to clause search and the language model, asked together in one call.
+    """
+    lookup_started = time.perf_counter()
+    answers: list[Optional[PartAnswer]] = []
+    for part in parts:
+        if part.source == "records":
+            answers.append(answer_records(part, policy, db))
+        elif part.source == "forms":
+            answers.append(answer_endorsement(part, policy, db))
+        else:
+            answers.append(None)  # answered by the language model below
+    lookup_ms = int(round((time.perf_counter() - lookup_started) * 1000))
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    question_record = ConversationQuestion(
+        conversation_id=conv.id, policy_id=policy.id, question=question_text, status="processing", created_at=now
+    )
+    conv.updated_at = now
+    db.add(question_record)
+    db.commit()
+    db.refresh(question_record)
+
+    wording_parts = [p for p in parts if p.source == "wording"]
+    ai_resp = None
+    wording_answer: Optional[PartAnswer] = None
+    if wording_parts:
+        wording_question = " ".join(p.text.rstrip("?. ") + "?" for p in wording_parts)
+        try:
+            ai_resp = ai_client.explain(
+                question=wording_question,
+                policy_id=policy.id,
+                conversation_id=conv.id,
+                policy_context=policy_context,
+                previous_question=prior_question,
+                interpretation=None,
+            )
+        except HTTPException:
+            question_record.status = "failed"
+            db.commit()
+            raise
+        ai_evidence = list(ai_resp.evidence)
+        for i, item in enumerate(ai_evidence, start=1):
+            item.evidence_index = item.evidence_index or i
+        wording_answer = PartAnswer(
+            wording_parts[0], ai_resp.answer, ai_evidence, list(ai_resp.citations),
+            found=ai_resp.status != "insufficient_evidence",
+        )
+
+    # The parts in the order they were asked; the wording parts share one model answer.
+    ordered: list[PartAnswer] = []
+    for part, answer in zip(parts, answers):
+        if answer is not None:
+            ordered.append(answer)
+        elif wording_answer is not None and part is wording_parts[0]:
+            ordered.append(wording_answer)
+    answer_text, evidence, citations = combine(ordered)
+    answer_text = _with_term_note(answer_text, term_choice)
+
+    found = any(a.found for a in ordered)
+    status_value = "answered" if found else "insufficient_evidence"
+    guardrail_checks: list[GuardrailCheck] = []
+    if any(p.source in ("records", "forms") for p in parts):
+        guardrail_checks.append(GuardrailCheck(
+            name="records_grounded",
+            status="passed",
+            detail="Facts and endorsements were read directly from the policy records and attached forms.",
+        ))
+    if ai_resp is not None:
+        guardrail_checks.extend(ai_resp.guardrail_checks)
+    guardrail_status = ai_resp.guardrail_status if ai_resp is not None and ai_resp.guardrail_status in ("flagged", "failed") else "passed"
+    outcome = answer_outcome(status_value, guardrail_status)
+    confidence = ai_resp.confidence if ai_resp is not None else ("high" if found else "none")
+    model_used = ai_resp.model_used if ai_resp is not None else "none (records)"
+    provider = ai_resp.provider if ai_resp is not None else "none"
+    timings = {**(ai_resp.timings_ms if ai_resp is not None else {}), "records_lookup": lookup_ms}
+    timings.setdefault("retrieval", lookup_ms)
+    retrieval = {
+        **(ai_resp.retrieval if ai_resp is not None else {}),
+        # All parts from the records reads as a record answer; any wording part makes it a mixed answer.
+        "answer_type": "multi_part" if ai_resp is not None else "factual_lookup",
+        "parts": [{"label": a.part.label, "question": a.part.text, "source": a.part.source, "found": a.found} for a in ordered],
+        "interpretation": interpretation,
+        "customer_verification": verification_for_answer(conv.id, question_text, policy),
+        "term_selection": term_choice,
+    }
+    grounding_ctx = ai_resp.grounding_context if ai_resp is not None else "Answered from the policy records and attached forms."
+    latency_ms = int(round((time.perf_counter() - started) * 1000))
+
+    question_record.status = status_value
+    ledger_entry = LedgerService.record_entry(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        policy_id=policy.id,
+        question=question_text,
+        evidence=evidence,
+        grounding_context=grounding_ctx,
+        raw_llm_response=ai_resp.raw_llm_response if ai_resp is not None else "",
+        final_answer=answer_text,
+        citations=[c.model_dump() for c in citations],
+        confidence=confidence,
+        guardrail_status=guardrail_status,
+        suggested_questions=ai_resp.suggested_questions if ai_resp is not None else [],
+        db=db,
+        employee_id=conv.employee_id,
+        **_asker_fields(employee),
+        outcome=outcome,
+        guardrail_checks=[c.model_dump() for c in guardrail_checks],
+        model_used=model_used,
+        provider=provider,
+        is_fallback=bool(ai_resp.is_fallback) if ai_resp is not None else False,
+        fallback_reason=ai_resp.fallback_reason if ai_resp is not None else None,
+        latency_ms=latency_ms,
+        timings_ms=timings,
+        retrieval=retrieval,
+    )
+    db.commit()
+
+    return QuestionAnswerResponse(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        question=question_text,
+        answer=answer_text,
+        policy_context=_build_policy_context(policy.id, db),
+        evidence=evidence,
+        citations=citations,
+        confidence=confidence,
+        status=status_value,
+        suggested_questions=ai_resp.suggested_questions if ai_resp is not None else [],
+        guardrail_status=guardrail_status,
+        guardrail_checks=guardrail_checks,
+        outcome=outcome,
+        model_used=model_used,
+        provider=provider,
+        is_fallback=bool(ai_resp.is_fallback) if ai_resp is not None else False,
+        fallback_reason=ai_resp.fallback_reason if ai_resp is not None else None,
+        retrieval=retrieval,
+        timings_ms=timings,
+        latency_ms=latency_ms,
+        ledger_id=ledger_entry.id,
+        grounding_context_chars=len(grounding_ctx) if evidence else None,
+        interpretation=interpretation,
         asked_by=asked_by(conv.employee_id, ledger_entry),
         asked_at=question_record.created_at,
     )

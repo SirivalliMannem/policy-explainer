@@ -281,6 +281,7 @@ export function ExplainerPage() {
       askedBy: me(),
       askedAt,
       contextDetail: null,
+      verification: null,
       stages: { ...freshStages(), verify: { status: 'processing' } },
     });
     try {
@@ -355,6 +356,7 @@ export function ExplainerPage() {
       }
       setProcess((prev) => ({
         ...prev,
+        verification: verification ?? null,
         stages: {
           ...prev.stages,
           verify:

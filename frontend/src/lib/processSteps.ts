@@ -4,7 +4,7 @@
 // `node --test` can load it directly.
 import type { AskedBy, CustomerVerification, GuardrailCheck, QuestionAnswerResponse } from '../types';
 import type { StageKey, StageStatus } from './explainer';
-import { STRONG_EVIDENCE_SCORE, evidencePercent, isRecordAnswer, topEvidencePercent } from './confidence.ts';
+import { STRONG_EVIDENCE_SCORE, evidencePercent, isRecordAnswer, searchedEvidence, topEvidencePercent } from './confidence.ts';
 
 export type StepStatus = 'pending' | 'running' | 'done' | 'warning' | 'failed' | 'skipped';
 
@@ -78,6 +78,42 @@ export interface ProcessInput {
   askedBy?: AskedBy | null;
   /** How the policy was identified in this session ("matched on policy number"), when known. */
   contextDetail?: string | null;
+  /** The customer verification made for the question in progress (live runs). */
+  verification?: CustomerVerification | null;
+}
+
+/** What a customer was matched on, in words. */
+const MATCHED_ON: Record<string, string> = {
+  customer_name: 'customer name',
+  surname: 'surname',
+  first_name: 'first name',
+  policy_number: 'policy number',
+  claim_number: 'claim number',
+  account_number: 'account number',
+  email: 'email address',
+  phone: 'phone number',
+  vin: 'VIN',
+  plate: 'license plate',
+  address: 'address',
+  vehicle: 'vehicle',
+  loss_date: 'date of loss',
+  selected_policy: 'the selected policy',
+  conversation: 'the customer already selected in this conversation',
+};
+
+/** Verified: the customer, then where they were found in the records, then their account ID. */
+function verificationLines(v: CustomerVerification): StepLine[] {
+  if (v.status !== 'verified' || !v.customers.length) {
+    return [{ kind: 'result', tone: v.status === 'not_found' ? 'failed' : 'attention', text: v.message }];
+  }
+  const customer = v.customers[0];
+  const on = MATCHED_ON[v.matched_on ?? ''] ?? (v.matched_on ? v.matched_on.replace(/_/g, ' ') : 'the question');
+  const showReference = v.reference && v.matched_on !== 'conversation' && v.reference !== customer.name;
+  return [
+    { kind: 'result', tone: 'passed', text: `Verified: ${customer.name}` },
+    { kind: 'text', text: `Found in the customer records, matched on ${on}${showReference ? ` (${v.reference})` : ''}` },
+    { kind: 'text', text: 'Account ID ', mono: customer.account_number || customer.customer_id },
+  ];
 }
 
 const LIVE_STATUS: Record<StageStatus, StepStatus> = {
@@ -96,7 +132,8 @@ function liveSteps(stages: Record<StageKey, LiveStage>, input: ProcessInput): Pr
     const status = LIVE_STATUS[stage.status];
     const lines: StepLine[] = [];
     if (key === 'verify' && status === 'done') {
-      if (stage.detail) lines.push({ kind: 'result', tone: 'passed', text: `Verified: ${stage.detail}` });
+      if (input.verification?.status === 'verified') lines.push(...verificationLines(input.verification));
+      else if (stage.detail) lines.push({ kind: 'result', tone: 'passed', text: `Verified: ${stage.detail}` });
     } else if (key === 'context' && status === 'done') {
       if (stage.detail) lines.push({ kind: 'text', text: stage.detail });
       lines.push(asker(input.askedBy));
@@ -133,16 +170,7 @@ function verifyStep(result: QuestionAnswerResponse): ProcessStep {
       lines: [{ kind: 'text', text: 'Customer verification was not recorded for this answer.' }],
     };
   }
-  const lines: StepLine[] = [];
-  if (v.status === 'verified') {
-    lines.push({ kind: 'result', tone: 'passed', text: `Verified: ${v.message}` });
-    for (const c of v.customers) {
-      lines.push({ kind: 'text', text: `${c.name}${c.account_number ? ' · ' : ''}`, mono: c.account_number ?? undefined });
-    }
-  } else {
-    lines.push({ kind: 'result', tone: v.status === 'not_found' ? 'failed' : 'attention', text: v.message });
-  }
-  return { key: 'verify', label: STEP_LABELS.verify, status: v.status === 'verified' ? 'done' : 'warning', lines };
+  return { key: 'verify', label: STEP_LABELS.verify, status: v.status === 'verified' ? 'done' : 'warning', lines: verificationLines(v) };
 }
 
 function contextLines(result: QuestionAnswerResponse, input: ProcessInput): StepLine[] {
@@ -312,6 +340,18 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
   const noEvidence = result.status === 'insufficient_evidence' || result.evidence.length === 0;
 
   const retrieveLines: StepLine[] = [];
+  // A several-facts question: each part and where it was answered from.
+  const PART_SOURCE: Record<string, string> = {
+    records: 'read from the policy records',
+    forms: 'read from the attached forms',
+    wording: 'clause search and the language model',
+  };
+  (r.parts ?? []).forEach((part, i) => {
+    retrieveLines.push({
+      kind: 'text',
+      text: `Part ${i + 1} · ${part.label}: ${PART_SOURCE[part.source] ?? part.source}${part.found ? '' : ' (not found)'}`,
+    });
+  });
   if (records) {
     retrieveLines.push({ kind: 'result', tone: 'passed', text: 'Evidence confidence: exact record match. Values were read from the policy’s own records.' });
   } else if (r.clauses_searched !== undefined || r.forms_searched !== undefined) {
@@ -328,14 +368,14 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
   } else {
     const top = topEvidencePercent(result);
     if (!records && top !== null) {
-      const topScore = Math.max(...result.evidence.map((e) => e.relevance_score ?? 0));
+      const topScore = Math.max(...searchedEvidence(result.evidence).map((e) => e.relevance_score ?? 0));
       retrieveLines.push({
         kind: 'result',
         tone: top >= 100 ? 'passed' : 'attention',
         text: `Evidence confidence: ${top}%. The strongest passage scores ${topScore.toFixed(1)} against the strong-evidence threshold of ${STRONG_EVIDENCE_SCORE}.`,
       });
     }
-    for (const item of result.evidence) {
+    for (const item of searchedEvidence(result.evidence)) {
       if (records || item.relevance_score === null || item.relevance_score === undefined) continue;
       retrieveLines.push({
         kind: 'passage',

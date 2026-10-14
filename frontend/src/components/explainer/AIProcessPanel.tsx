@@ -356,6 +356,7 @@ export function AIProcessPanel({
     stages: history ? null : process.stages,
     askedBy,
     contextDetail: history ? null : process.contextDetail,
+    verification: history ? null : process.verification,
   });
   const complete = Boolean(result);
   const title = history ? 'How this was answered' : liveTitle(process.phase);

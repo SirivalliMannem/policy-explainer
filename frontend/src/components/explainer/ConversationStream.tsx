@@ -181,17 +181,17 @@ function SuggestionChips({ suggestions, onAsk, disabled }: { suggestions: string
   );
 }
 
-/** "· 83%" from the existing confidence rule, or "· exact record" for values read from the records. */
+/** "· 83%": the share of confidence criteria the answer meets (see lib/confidence). */
 function confidenceSuffix(result: QuestionAnswerResponse): string {
-  if (isRecordAnswer(result)) return ' · exact record';
   const confidence = answerConfidence(result);
   return confidence ? ` · ${confidence.percent}%` : '';
 }
 
 function confidenceTitle(result: QuestionAnswerResponse): string | undefined {
-  if (isRecordAnswer(result)) return 'Values read straight from the policy records: an exact record match.';
   const confidence = answerConfidence(result);
-  return confidence ? confidenceExplanation(confidence) : undefined;
+  if (!confidence) return undefined;
+  const source = isRecordAnswer(result) ? 'Read straight from the policy records. ' : '';
+  return source + confidenceExplanation(confidence);
 }
 
 function AssistantAvatar() {

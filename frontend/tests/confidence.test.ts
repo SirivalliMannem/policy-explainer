@@ -50,8 +50,15 @@ test('LOW: a failed guardrail is listed as missed', () => {
   assert.match(confidenceExplanation(c!), /missing: guardrails passed/);
 });
 
-test('record and portfolio answers, and answers without recorded checks, have no graded percentage', () => {
-  assert.equal(answerConfidence(answer({ retrieval: { answer_type: 'factual_lookup' } })), null);
+test('values read from the records: found, checked and cited is 100%', () => {
+  const record = { retrieval: { answer_type: 'factual_lookup' }, evidence: [{ source_type: 'coverage', source_id: 'a', content: 'x', relevance_score: 1 }], citations: [{ source_id: 'a' }] };
+  assert.equal(answerConfidence(answer(record))?.percent, 100);
+  // Nothing found in the records: only the record check is met.
+  const missing = answerConfidence(answer({ ...record, evidence: [], citations: [] }));
+  assert.equal(missing?.percent, 33);
+});
+
+test('portfolio answers, and answers without recorded checks, have no graded percentage', () => {
   assert.equal(answerConfidence(answer({ answer_type: 'portfolio' })), null);
   assert.equal(answerConfidence(answer({ guardrail_checks: [] })), null);
 });

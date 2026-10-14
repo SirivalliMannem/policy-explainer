@@ -135,6 +135,18 @@ test('several matching customers wait for the employee at verification', () => {
   assert.ok(steps.slice(1).every((s) => s.status === 'pending'), 'nothing after verification runs');
 });
 
+test('a live run shows the verified customer the same way', () => {
+  const steps = buildProcessSteps({
+    verification,
+    stages: stages({ verify: { status: 'completed', detail: verification.message }, context: { status: 'processing' } }),
+  });
+  assert.deepEqual(step(steps, 'verify').lines.map((l) => ('text' in l ? l.text : '')), [
+    'Verified: Margaret Chen',
+    'Found in the customer records, matched on policy number (HO-2847-1193)',
+    'Account ID ',
+  ]);
+});
+
 test('while running, only real values are shown', () => {
   const steps = buildProcessSteps({
     askedBy: asker,
@@ -158,7 +170,12 @@ test('a stored answer shows the recorded verification, evidence confidence, cita
   const steps = buildProcessSteps({ result: answer() });
   const verify = step(steps, 'verify');
   assert.equal(verify.status, 'done');
-  assert.deepEqual(results(verify), [{ kind: 'result', tone: 'passed', text: `Verified: ${verification.message}` }]);
+  // Verified customer, then where they were found in the records, then their account ID.
+  assert.deepEqual(verify.lines, [
+    { kind: 'result', tone: 'passed', text: 'Verified: Margaret Chen' },
+    { kind: 'text', text: 'Found in the customer records, matched on policy number (HO-2847-1193)' },
+    { kind: 'text', text: 'Account ID ', mono: 'ACCT-100241' },
+  ]);
 
   const retrieve = step(steps, 'retrieve');
   assert.deepEqual(results(retrieve), [
@@ -272,4 +289,31 @@ test('a dated question shows the term in force on the loss date in the policy st
     }),
   });
   assert.deepEqual(results(step(steps, 'context')), [{ kind: 'result', tone: 'passed', text: message }]);
+});
+
+test('a several-facts answer lists each part and its source, and record facts are not scored passages', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: {
+        answer_type: 'multi_part',
+        customer_verification: verification,
+        parts: [
+          { label: 'Deductible', question: 'What is the wind deductible', source: 'records', found: true },
+          { label: 'What the policy wording says', question: 'does it cover hail', source: 'wording', found: true },
+        ],
+      },
+      evidence: [
+        { source_type: 'coverage', source_id: 'cov', content: 'Windstorm or Hail — 2%', relevance_score: 1, scope: 'policy_record' },
+        { source_type: 'clause', source_id: 'c1', form_number: 'HO 00 03', page: 9, content: 'Hail…', relevance_score: 15 },
+      ],
+    }),
+  });
+  const retrieve = step(steps, 'retrieve');
+  assert.deepEqual(retrieve.lines.slice(0, 2), [
+    { kind: 'text', text: 'Part 1 · Deductible: read from the policy records' },
+    { kind: 'text', text: 'Part 2 · What the policy wording says: clause search and the language model' },
+  ]);
+  assert.deepEqual(retrieve.lines.filter((l) => l.kind === 'passage'), [
+    { kind: 'passage', form: 'HO 00 03', page: 9, score: 15, percent: 100 },
+  ]);
 });

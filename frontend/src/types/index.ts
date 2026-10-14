@@ -282,6 +282,8 @@ export interface RetrievalSummary {
   customer_verification?: CustomerVerification | null;
   /** The term in force on the question's date of loss, recorded with the answer. */
   term_selection?: TermSelection | null;
+  /** A several-facts question: each part, and the source it was answered from. */
+  parts?: { label: string; question: string; source: 'records' | 'forms' | 'wording' | string; found: boolean }[];
 }
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';

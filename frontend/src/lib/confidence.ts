@@ -29,21 +29,40 @@ export function evidencePercent(score?: number | null): number | null {
   return Math.round(Math.min(Math.max(score, 0) / STRONG_EVIDENCE_SCORE, 1) * 100);
 }
 
-/** The strongest passage's evidence percentage, or null when nothing was retrieved. */
+/** Passages found by searching the policy wording; facts read from the records are not scored passages. */
+export function searchedEvidence<T extends { scope?: string | null }>(evidence: T[]): T[] {
+  return evidence.filter((e) => e.scope !== 'policy_record');
+}
+
+/** The strongest searched passage's evidence percentage, or null when nothing was searched. */
 export function topEvidencePercent(result: Pick<QuestionAnswerResponse, 'evidence'>): number | null {
-  const scores = result.evidence.map((e) => e.relevance_score).filter((s): s is number => typeof s === 'number');
+  const scores = searchedEvidence(result.evidence)
+    .map((e) => e.relevance_score)
+    .filter((s): s is number => typeof s === 'number');
   return scores.length ? evidencePercent(Math.max(...scores)) : null;
 }
 
+/** Criteria for values read straight from the records: found, checked, and each value cited to its record. */
+function recordConfidence(result: QuestionAnswerResponse): AnswerConfidence {
+  const criteria: ConfidenceCriterion[] = [
+    { label: 'Value found in the policy records', met: result.evidence.length > 0 },
+    { label: 'Record check passed', met: result.guardrail_status === 'passed' },
+    { label: 'Every value cites its record', met: result.evidence.length > 0 && result.citations.length >= result.evidence.length },
+  ];
+  const met = criteria.filter((c) => c.met).length;
+  return { percent: Math.round((met / criteria.length) * 100), criteria };
+}
+
 /**
- * The share of the HIGH-confidence criteria this answer meets. HIGH means all of them; MEDIUM and LOW
- * miss some. Null for record and portfolio answers (exact record matches, not graded) and for older
- * answers recorded without their guardrail checks.
+ * The share of the confidence criteria this answer meets. For a generated answer these are the criteria
+ * of the AI service's HIGH rule (HIGH means all of them; MEDIUM and LOW miss some); for values read from
+ * the records, the record checks. Null for portfolio answers and older answers recorded without checks.
  */
 export function answerConfidence(result: QuestionAnswerResponse): AnswerConfidence | null {
-  if (result.answer_type === 'portfolio' || isRecordAnswer(result)) return null;
+  if (result.answer_type === 'portfolio') return null;
+  if (isRecordAnswer(result)) return recordConfidence(result);
   if (!result.guardrail_checks?.length) return null;
-  const scores = result.evidence.map((e) => e.relevance_score ?? 0);
+  const scores = searchedEvidence(result.evidence).map((e) => e.relevance_score ?? 0);
   const top = scores.length ? Math.max(...scores) : 0;
   const verified = result.citations.length;
   const inline = result.guardrail_checks.find((c) => c.name === 'inline_citations');
