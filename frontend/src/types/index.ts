@@ -199,6 +199,7 @@ export interface QuestionResolution {
   /** Ambiguous, but every candidate belongs to one customer: answer the question for each. */
   answer_all?: boolean;
   customer_verification?: CustomerVerification | null;
+  term_selection?: TermSelection | null;
 }
 
 export interface CitationItem {
@@ -248,6 +249,22 @@ export interface CustomerVerification {
   message: string;
 }
 
+/** The policy term in force on the date of loss a question gives (or why none was). */
+export interface TermSelection {
+  status: 'matched' | 'no_term' | string;
+  loss_date: string;
+  date_text: string;
+  is_loss: boolean;
+  year_assumed: boolean;
+  policy_number: string;
+  policy_id?: string;
+  term_number?: number;
+  effective_date?: string;
+  expiration_date?: string;
+  term_status?: string;
+  message: string;
+}
+
 export interface RetrievalSummary {
   query_terms?: string[];
   coverages_searched?: number;
@@ -263,6 +280,8 @@ export interface RetrievalSummary {
   answer_type?: string;
   /** How the answer's customer was verified, recorded with the answer. */
   customer_verification?: CustomerVerification | null;
+  /** The term in force on the question's date of loss, recorded with the answer. */
+  term_selection?: TermSelection | null;
 }
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';

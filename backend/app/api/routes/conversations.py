@@ -55,6 +55,7 @@ from app.services.portfolio import (
     portfolio_suggestions,
 )
 from app.services.customer_verification import verification_for_answer
+from app.services.loss_date import extract_loss_date, term_selection
 from app.services.factual_lookup import (
     execute_factual_lookup,
     is_factual_query,
@@ -62,6 +63,22 @@ from app.services.factual_lookup import (
 )
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
+
+def _term_for_question(question_text: str, policy: CorePolicy, db: Session) -> Optional[dict]:
+    """When the question gives a date of loss: the term of this policy in force that day, or why none was."""
+    loss = extract_loss_date(question_text)
+    return term_selection(policy.policy_number, loss, db) if loss else None
+
+
+def _with_term_note(answer: str, term_choice: Optional[dict]) -> str:
+    """Start the answer by saying which term it used (or that none was in force), so the record says so too."""
+    if not term_choice:
+        return answer
+    note = term_choice["message"]
+    if term_choice["status"] != "matched":
+        note += " This answer could not use a term in force on that date."
+    return f"{note}\n\n{answer}"
 
 
 def _asker_fields(employee: EmployeeUser) -> dict:
@@ -465,6 +482,12 @@ def submit_question(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Resolved policy associated with conversation no longer exists",
         )
+    # A date of loss: answer from the term in force that day (each renewal has its own limits,
+    # deductibles and forms), whichever term the conversation has selected.
+    term_choice = _term_for_question(question_text, policy, db)
+    if term_choice and term_choice["status"] == "matched" and term_choice["policy_id"] != policy.id:
+        policy = db.get(CorePolicy, term_choice["policy_id"])
+        policy_id = policy.id
     validate_employee_authorization(employee, policy)
     policy_context = _build_policy_context(policy_id, db)
 
@@ -474,7 +497,7 @@ def submit_question(
 
     # 1. Pure factual lookup: answer directly from PostgreSQL records without calling Groq or another LLM
     if is_factual and not is_wording:
-        return _answer_factual_question(conv, question_text, policy, db, interpretation, started, employee)
+        return _answer_factual_question(conv, question_text, policy, db, interpretation, started, employee, term_choice)
 
     # Combined factual + wording question: retrieve factual details directly and preserve wording explanation via AI pipeline
     factual_result = None
@@ -531,6 +554,7 @@ def submit_question(
         final_answer = ai_resp.answer
         merged_evidence = ai_resp.evidence
         merged_citations = [c.model_dump() for c in ai_resp.citations]
+    final_answer = _with_term_note(final_answer, term_choice)
 
     # 3. Persist Evidence Ledger entry
     ledger_entry = LedgerService.record_entry(
@@ -561,6 +585,7 @@ def submit_question(
             **ai_resp.retrieval,
             "interpretation": ai_resp.interpretation or interpretation,
             "customer_verification": verification_for_answer(conv.id, question_text, policy),
+            "term_selection": term_choice,
         },
     )
 
@@ -591,7 +616,11 @@ def submit_question(
         provider=ai_resp.provider,
         is_fallback=ai_resp.is_fallback,
         fallback_reason=ai_resp.fallback_reason,
-        retrieval={**ai_resp.retrieval, "customer_verification": verification_for_answer(conv.id, question_text, policy)},
+        retrieval={
+            **ai_resp.retrieval,
+            "customer_verification": verification_for_answer(conv.id, question_text, policy),
+            "term_selection": term_choice,
+        },
         timings_ms=ai_resp.timings_ms,
         latency_ms=latency_ms,
         ledger_id=ledger_entry.id,
@@ -610,6 +639,7 @@ def _answer_factual_question(
     interpretation: Optional[dict],
     started: float,
     employee: EmployeeUser,
+    term_choice: Optional[dict] = None,
 ) -> QuestionAnswerResponse:
     """Answer a direct factual question from policy schedule records and log it to the Evidence Ledger."""
     lookup_started = time.perf_counter()
@@ -620,10 +650,11 @@ def _answer_factual_question(
 
     lookup_ms = int(round((time.perf_counter() - lookup_started) * 1000))
     found = result.found if result else False
-    answer_text = (
+    answer_text = _with_term_note(
         result.answer
         if result
-        else f"The available records do not contain this information for policy {policy.policy_number}."
+        else f"The available records do not contain this information for policy {policy.policy_number}.",
+        term_choice,
     )
     evidence = result.evidence if result else []
     citations = result.citations if result else []
@@ -660,6 +691,7 @@ def _answer_factual_question(
         "records_matched": len(evidence),
         "interpretation": interpretation,
         "customer_verification": verification_for_answer(conv.id, question_text, policy),
+        "term_selection": term_choice,
     }
 
     ledger_entry = LedgerService.record_entry(

@@ -51,6 +51,7 @@ const MATCH_LABEL: Record<string, string> = {
   plate: 'license plate',
   address: 'address',
   vehicle: 'vehicle',
+  loss_date: 'date of loss',
 };
 
 /** Wide enough for the chat column and the docked AI process panel side by side. */
@@ -366,6 +367,29 @@ export function ExplainerPage() {
         },
       }));
 
+      // A date of loss when no term of the policy was in force that day: say so and ask, rather
+      // than answer from a term that did not cover the loss.
+      const term = resolution.term_selection;
+      if (term?.status === 'no_term') {
+        const pending = pendingQuestionRef.current;
+        pendingQuestionRef.current = pending && looksLikeReply(text) ? pending : text;
+        setProcess((prev) => ({
+          ...prev,
+          phase: 'needs_input',
+          stages: { ...prev.stages, context: { status: 'attention', detail: term.message } },
+        }));
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: `${term.message} Please check the date of loss.`,
+          suggestions: [],
+        });
+        openPanel({ mode: 'live' }, null);
+        return;
+      }
+      const termNote = term?.status === 'matched' ? ` · ${term.message}` : '';
+
       const understood = interpretedText(resolution.interpretation);
       const understoodNote = understood ? ` · understood as “${understood}”` : '';
 
@@ -428,7 +452,7 @@ export function ExplainerPage() {
         }
         contextDetail = `${resolved.customer_name} · ${resolved.policy_number} — matched on ${
           MATCH_LABEL[resolution.matched_on || ''] || 'reference'
-        }${understoodNote}`;
+        }${understoodNote}${termNote}`;
       } else if (
         resolution.status === 'ambiguous' &&
         resolution.answer_all &&

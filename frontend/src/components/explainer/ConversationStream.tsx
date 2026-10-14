@@ -118,6 +118,7 @@ const MATCH_LABEL: Record<string, string> = {
   plate: 'matched on license plate',
   address: 'matched on address',
   vehicle: 'matched on vehicle',
+  loss_date: 'term in force on the date of loss',
 };
 
 /** "Interpreted as …" — shown only when the understood wording differs from what was typed. */

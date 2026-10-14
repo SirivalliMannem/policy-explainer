@@ -159,6 +159,15 @@ function contextLines(result: QuestionAnswerResponse, input: ProcessInput): Step
   } else {
     lines.push({ kind: 'text', text: 'Policy: not recorded' });
   }
+  // The term in force on the question's date of loss (or why none was).
+  const term = result.retrieval?.term_selection;
+  if (term && !input.contextDetail?.includes(term.message)) {
+    lines.push(
+      term.status === 'matched'
+        ? { kind: 'result', tone: 'passed', text: term.message }
+        : { kind: 'result', tone: 'attention', text: term.message }
+    );
+  }
   lines.push(asker(input.askedBy ?? result.asked_by));
   return lines;
 }
@@ -210,7 +219,7 @@ function citationsStep(result: QuestionAnswerResponse, noAnswer: boolean): Proce
     kind: 'result',
     tone: ok ? 'passed' : verified ? 'attention' : 'failed',
     text: ok
-      ? `Verified: ${plural(verified, 'citation')} match the retrieved evidence.`
+      ? `Verified: ${plural(verified, 'citation')} ${verified === 1 ? 'matches' : 'match'} the retrieved evidence.`
       : verified
       ? `Needs attention: ${plural(verified, 'citation')} verified, but not every citation check passed.`
       : 'Failed: no citation could be matched to the retrieved evidence.',
@@ -258,7 +267,11 @@ function guardrailsStep(result: QuestionAnswerResponse, ms: number | undefined, 
     result_line = { kind: 'result', tone: 'attention', text: `Needs attention: ${names(attention)}.` };
   } else {
     status = 'done';
-    result_line = { kind: 'result', tone: 'passed', text: `Passed: all ${plural(checks.length, 'guardrail check')} passed.` };
+    result_line = {
+      kind: 'result',
+      tone: 'passed',
+      text: checks.length === 1 ? 'Passed: the guardrail check passed.' : `Passed: all ${plural(checks.length, 'guardrail check')} passed.`,
+    };
   }
   return { key: 'validate', label: STEP_LABELS.validate, status, ms, lines: [result_line, ...checks.map(checkLine)] };
 }

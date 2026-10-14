@@ -260,3 +260,16 @@ test('details missing from older stored answers say so instead of inventing valu
   assert.ok(step(steps, 'deliver').lines.some((l) => l.kind === 'warning'));
   assert.deepEqual(step(steps, 'context').lines.at(-1), { kind: 'text', text: 'Asked by: not recorded' });
 });
+
+test('a dated question shows the term in force on the loss date in the policy step', () => {
+  const message = 'Using term 1 of HO-2847-1193 (March 1, 2025 – March 1, 2026), the term in force on the loss date, November 3, 2025.';
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: {
+        customer_verification: verification,
+        term_selection: { status: 'matched', loss_date: '2025-11-03', date_text: '2025-11-03', is_loss: true, year_assumed: false, policy_number: 'HO-2847-1193', term_number: 1, message },
+      },
+    }),
+  });
+  assert.deepEqual(results(step(steps, 'context')), [{ kind: 'result', tone: 'passed', text: message }]);
+});

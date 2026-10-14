@@ -26,6 +26,7 @@ from app.services.policy_resolver import (
 )
 from app.services import small_talk
 from app.services import customer_verification
+from app.services.loss_date import extract_loss_date, term_in_force, term_selection
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
 
@@ -249,6 +250,37 @@ def resolve_policy_from_question_text(
                     message=f"{active.account.name} has {len(others)} other policies that could apply.",
                 )
 
+    # A date of loss picks the term in force that day: each renewal has its own limits, deductibles
+    # and forms. The date is read from what was typed; the interpreter may reword it.
+    loss = extract_loss_date(question)
+    term_choice: Optional[dict] = None
+    if loss:
+        if result.status == "resolved" and result.policy:
+            term_choice = term_selection(result.policy.policy_number, loss, db)
+            if term_choice["status"] == "matched":
+                result.policy = db.get(CorePolicy, term_choice["policy_id"])
+        elif result.status == "ambiguous":
+            in_force = [t for t in (term_in_force(p.policy_number, loss.value, db) for p in result.candidates) if t]
+            if len(in_force) == 1:
+                term_choice = term_selection(in_force[0].policy_number, loss, db)
+                result = ResolutionResult(
+                    status="resolved", matched_on=result.matched_on, reference=result.reference, policy=in_force[0]
+                )
+            elif in_force:
+                result.candidates = in_force
+            else:
+                term_choice = term_selection(result.candidates[0].policy_number, loss, db)
+        elif result.status == "no_reference" and active:
+            # A follow-up such as "what if the loss was on 1 June 2025?" stays with the selected policy.
+            term_choice = term_selection(active.policy_number, loss, db)
+            if term_choice["status"] == "matched" and term_choice["policy_id"] != active.id:
+                result = ResolutionResult(
+                    status="resolved",
+                    matched_on="loss_date",
+                    reference=active.policy_number,
+                    policy=db.get(CorePolicy, term_choice["policy_id"]),
+                )
+
     # Step 1: the customer must exist in the records and be identified uniquely before any policy
     # information is retrieved. The answer, when given, records how its customer was verified.
     verification = customer_verification.verify_customer(result, understood, interpretation, active, db)
@@ -272,6 +304,7 @@ def resolve_policy_from_question_text(
         suggestions=reply.suggestions if reply else [],
         suggested_policies=[_to_candidate(p) for p in suggested],
         customer_verification=verification,
+        term_selection=term_choice,
         answer_all=result.status == "ambiguous" and len({p.account_id for p in result.candidates}) == 1,
         interpretation=interpretation,
         matched_on=result.matched_on,
