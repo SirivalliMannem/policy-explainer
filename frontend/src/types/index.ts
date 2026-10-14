@@ -230,6 +230,17 @@ export interface EvidenceItem {
   relevance_score?: number | null;
   evidence_index?: number | null;
   scope?: EvidenceScope | string | null;
+  /** Clauses only: how the search found it. */
+  matched_by?: 'words' | 'meaning' | 'words and meaning' | string | null;
+}
+
+/** The meaning-based clause search that runs alongside word match. */
+export interface MeaningSearch {
+  status: 'used' | 'unavailable' | string;
+  model?: string;
+  reason?: string;
+  found_by_meaning?: number;
+  words_and_meaning?: number;
 }
 
 export type GuardrailCheckStatus = 'passed' | 'warning' | 'failed';
@@ -284,6 +295,8 @@ export interface RetrievalSummary {
   term_selection?: TermSelection | null;
   /** A several-facts question: each part, and the source it was answered from. */
   parts?: { label: string; question: string; source: 'records' | 'forms' | 'wording' | string; found: boolean }[];
+  /** Meaning-based clause search alongside word match. */
+  meaning_search?: MeaningSearch | null;
   /** Company guidance articles searched next to the policy wording, shown apart from the answer. */
   company_guidance?: CompanyGuidance | null;
 }
@@ -588,6 +601,8 @@ export interface LedgerRow {
   provider?: string | null;
   is_fallback?: boolean | null;
   confidence: string;
+  /** Share of the confidence criteria met (same rule as the chat badge); null where it does not apply. */
+  confidence_percent?: number | null;
   guardrail_status: string;
   outcome: AnswerOutcome | string;
   reviewer?: string | null;

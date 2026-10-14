@@ -367,3 +367,42 @@ test('no matching article, a withheld answer, and older answers each say so', ()
   });
   assert.ok(!lines(undefined).some((l) => 'text' in l && l.text.startsWith('Company guidance')));
 });
+
+test('meaning search: passages found by meaning are tagged, and the retrieve step says what it added', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: {
+        ...answer().retrieval,
+        meaning_search: { status: 'used', model: 'BAAI/bge-small-en-v1.5', found_by_meaning: 1, words_and_meaning: 1 },
+      },
+      evidence: [
+        { source_type: 'clause', source_id: 'c1', form_number: 'HO 00 03', page: 7, content: '…', relevance_score: 18.1, matched_by: 'meaning' },
+        { source_type: 'clause', source_id: 'c2', form_number: 'HO 00 03', page: 19, content: '…', relevance_score: 14, matched_by: 'words and meaning' },
+      ],
+    }),
+  });
+  const lines = step(steps, 'retrieve').lines;
+  assert.ok(
+    lines.some((l) => l.kind === 'text' && l.text === 'Meaning search: 1 passage found by meaning only, 1 passage matched by words and meaning')
+  );
+  assert.deepEqual(
+    lines.filter((l) => l.kind === 'passage').map((l) => (l.kind === 'passage' ? l.matchedBy : null)),
+    ['meaning', 'words and meaning']
+  );
+});
+
+test('meaning search unavailable or finding nothing says so; older answers show nothing', () => {
+  const lines = (meaning_search: unknown) =>
+    step(buildProcessSteps({ result: answer({ retrieval: { ...answer().retrieval, meaning_search } as never }) }), 'retrieve').lines;
+  assert.ok(
+    lines({ status: 'unavailable', reason: 'switched off (SEMANTIC_SEARCH=off)' }).some(
+      (l) => l.kind === 'warning' && l.text === 'Meaning search unavailable (switched off (SEMANTIC_SEARCH=off)): word match only'
+    )
+  );
+  assert.ok(
+    lines({ status: 'used', found_by_meaning: 0, words_and_meaning: 0 }).some(
+      (l) => l.kind === 'text' && l.text === 'Meaning search: no passage stood out by meaning'
+    )
+  );
+  assert.ok(!lines(undefined).some((l) => 'text' in l && l.text.startsWith('Meaning search')));
+});

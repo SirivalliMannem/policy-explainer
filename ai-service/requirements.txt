@@ -6,3 +6,4 @@ psycopg[binary]
 python-dotenv
 httpx
 pydantic
+fastembed

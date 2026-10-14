@@ -120,7 +120,7 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <OutcomeBadge outcome={entry.outcome} />
-                <ConfidenceBadge confidence={entry.confidence} />
+                <ConfidenceBadge confidence={entry.confidence} percent={entry.confidence_percent} />
                 <GuardrailStatusBadge status={entry.guardrail_status} />
                 <span className="ml-auto text-[11px] text-[#64748B]">{formatDateTime(entry.created_at)}</span>
               </div>

@@ -2,7 +2,14 @@
 // Every value comes from the pipeline's own response or the evidence ledger; nothing is estimated
 // except the token figure, which is labelled as an estimate. Imports only pure modules so
 // `node --test` can load it directly.
-import type { AskedBy, CompanyGuidance, CustomerVerification, GuardrailCheck, QuestionAnswerResponse } from '../types';
+import type {
+  AskedBy,
+  CompanyGuidance,
+  CustomerVerification,
+  GuardrailCheck,
+  MeaningSearch,
+  QuestionAnswerResponse,
+} from '../types';
 import type { StageKey, StageStatus } from './explainer';
 import { STRONG_EVIDENCE_SCORE, evidencePercent, isRecordAnswer, searchedEvidence, topEvidencePercent } from './confidence.ts';
 
@@ -10,7 +17,7 @@ export type StepStatus = 'pending' | 'running' | 'done' | 'warning' | 'failed' |
 
 export type StepLine =
   | { kind: 'text'; text: string; mono?: string }
-  | { kind: 'passage'; form: string; page?: number | null; score: number; percent: number }
+  | { kind: 'passage'; form: string; page?: number | null; score: number; percent: number; matchedBy?: string | null }
   | { kind: 'check'; ok: boolean; text: string }
   | { kind: 'result'; tone: 'passed' | 'failed' | 'attention'; text: string }
   | { kind: 'warning'; text: string }
@@ -304,6 +311,22 @@ function guardrailsStep(result: QuestionAnswerResponse, ms: number | undefined, 
   return { key: 'validate', label: STEP_LABELS.validate, status, ms, lines: [result_line, ...checks.map(checkLine)] };
 }
 
+/** Meaning-based search alongside word match: what it added, or why it did not run. */
+export function meaningLines(meaning?: MeaningSearch | null): StepLine[] {
+  if (!meaning) return []; // answers recorded before meaning search existed
+  if (meaning.status !== 'used') {
+    return [{ kind: 'warning', text: `Meaning search unavailable${meaning.reason ? ` (${meaning.reason})` : ''}: word match only` }];
+  }
+  const byMeaning = meaning.found_by_meaning ?? 0;
+  const both = meaning.words_and_meaning ?? 0;
+  if (!byMeaning && !both) return [{ kind: 'text', text: 'Meaning search: no passage stood out by meaning' }];
+  const parts = [
+    byMeaning ? `${plural(byMeaning, 'passage')} found by meaning only` : '',
+    both ? `${plural(both, 'passage')} matched by words and meaning` : '',
+  ].filter(Boolean);
+  return [{ kind: 'text', text: `Meaning search: ${parts.join(', ')}` }];
+}
+
 /** Company guidance searched next to the policy wording: which articles matched, and on which words. */
 export function guidanceLines(guidance?: CompanyGuidance | null): StepLine[] {
   if (!guidance) return []; // answers recorded before guidance was searched
@@ -375,6 +398,7 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
       kind: 'text',
       text: `Searched ${plural(passages, 'passage')} across ${plural(r.forms_searched ?? 0, 'form')}`,
     });
+    retrieveLines.push(...meaningLines(r.meaning_search));
   } else {
     retrieveLines.push({ kind: 'text', text: 'Search counts not recorded for this answer.' });
   }
@@ -398,6 +422,7 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
         page: item.page,
         score: item.relevance_score,
         percent: evidencePercent(item.relevance_score) ?? 0,
+        ...(item.matched_by ? { matchedBy: item.matched_by } : {}),
       });
     }
   }

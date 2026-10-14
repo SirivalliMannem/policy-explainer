@@ -45,6 +45,8 @@ class LedgerRow(BaseModel):
     provider: Optional[str] = None
     is_fallback: Optional[bool] = None
     confidence: str
+    # Share of the confidence criteria met (same rule as the chat badge); None where it does not apply.
+    confidence_percent: Optional[int] = None
     guardrail_status: str
     outcome: str
     reviewer: Optional[str] = None

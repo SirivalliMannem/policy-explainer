@@ -1,6 +1,7 @@
 """Main FastAPI application for Policy Explainer AI Service microservice."""
 
 import logging
+import threading
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from sqlalchemy import text
@@ -8,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.api.routes.explain import router as explain_router
 from app.core.config import settings
-from app.db.database import get_db
+from app.db.database import SessionLocal, get_db
+from app.services.retrieval.semantic_index import semantic_index
 
 # Application loggers (provider calls, fallbacks) at INFO; messages never include credentials.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
@@ -23,6 +25,12 @@ app = FastAPI(
 
 # Register routes
 app.include_router(explain_router)
+
+
+@app.on_event("startup")
+def warm_meaning_search():
+    """Load the meaning-search model in the background; questions are answered meanwhile by word match."""
+    threading.Thread(target=semantic_index.warm_up, args=(SessionLocal,), daemon=True).start()
 
 
 @app.get("/health")

@@ -356,7 +356,7 @@ export function TheRecord() {
                     )}
                   </td>
                   <td className="px-3 py-2.5">
-                    <ConfidenceBadge confidence={row.confidence} />
+                    <ConfidenceBadge confidence={row.confidence} percent={row.confidence_percent} />
                   </td>
                   <td className="px-3 py-2.5">
                     <GuardrailStatusBadge status={row.guardrail_status} />

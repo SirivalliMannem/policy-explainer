@@ -56,6 +56,14 @@ function Line({ line }: { line: StepLine }) {
           <span className="min-w-0 flex-1 truncate">
             <span className="font-mono">{line.form}</span>
             {line.page ? <span className="text-muted-foreground"> · p.{line.page}</span> : null}
+            {line.matchedBy && line.matchedBy !== 'words' && (
+              <span
+                className="ml-1.5 rounded border border-[#BFDBFE] bg-[#F0F7FF] px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-[#1D4ED8]"
+                title={line.matchedBy === 'meaning' ? 'Found by meaning; no words in common with the question' : 'Matched by words and by meaning'}
+              >
+                {line.matchedBy === 'meaning' ? 'meaning' : 'words + meaning'}
+              </span>
+            )}
           </span>
           <span className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
             <span className="block h-full rounded-full bg-orange-btn" style={{ width: `${line.percent}%` }} />
@@ -202,11 +210,6 @@ function AnswerRecord({ result, askedBy, askedAt }: { result: QuestionAnswerResp
                     </div>
                   </div>
                 </div>
-                {evidence.content && (
-                  <blockquote className="mt-2 border-l-2 border-[#FDBA74] pl-2.5 font-serif text-[12.5px] leading-relaxed text-espresso">
-                    {evidence.content.length > 420 ? `${evidence.content.slice(0, 420)}…` : evidence.content}
-                  </blockquote>
-                )}
               </li>
             ))}
           </ol>

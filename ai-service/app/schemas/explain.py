@@ -36,6 +36,8 @@ class EvidenceItemSchema(BaseModel):
     relevance_score: float = 1.0
     evidence_index: Optional[int] = None
     scope: Optional[str] = None
+    # Clauses only: how the search found it ("words", "meaning", "words and meaning").
+    matched_by: Optional[str] = None
 
 
 class GuardrailCheck(BaseModel):
