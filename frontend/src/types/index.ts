@@ -284,6 +284,29 @@ export interface RetrievalSummary {
   term_selection?: TermSelection | null;
   /** A several-facts question: each part, and the source it was answered from. */
   parts?: { label: string; question: string; source: 'records' | 'forms' | 'wording' | string; found: boolean }[];
+  /** Company guidance articles searched next to the policy wording, shown apart from the answer. */
+  company_guidance?: CompanyGuidance | null;
+}
+
+/** One approved company article, shown exactly as stored and cited as [G1], [G2]. */
+export interface GuidanceArticle {
+  ref: string;
+  document_id: string;
+  title: string;
+  collection: string;
+  kind: string;
+  body: string;
+  spoken: string;
+  matched_on: string[];
+  version: string;
+  approved_by: string;
+}
+
+export interface CompanyGuidance {
+  /** False when no policy answer was delivered, so guidance was not offered. */
+  searched: boolean;
+  articles: GuidanceArticle[];
+  reason?: string;
 }
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';

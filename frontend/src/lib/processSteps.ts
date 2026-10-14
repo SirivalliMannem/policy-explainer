@@ -2,7 +2,7 @@
 // Every value comes from the pipeline's own response or the evidence ledger; nothing is estimated
 // except the token figure, which is labelled as an estimate. Imports only pure modules so
 // `node --test` can load it directly.
-import type { AskedBy, CustomerVerification, GuardrailCheck, QuestionAnswerResponse } from '../types';
+import type { AskedBy, CompanyGuidance, CustomerVerification, GuardrailCheck, QuestionAnswerResponse } from '../types';
 import type { StageKey, StageStatus } from './explainer';
 import { STRONG_EVIDENCE_SCORE, evidencePercent, isRecordAnswer, searchedEvidence, topEvidencePercent } from './confidence.ts';
 
@@ -304,6 +304,21 @@ function guardrailsStep(result: QuestionAnswerResponse, ms: number | undefined, 
   return { key: 'validate', label: STEP_LABELS.validate, status, ms, lines: [result_line, ...checks.map(checkLine)] };
 }
 
+/** Company guidance searched next to the policy wording: which articles matched, and on which words. */
+export function guidanceLines(guidance?: CompanyGuidance | null): StepLine[] {
+  if (!guidance) return []; // answers recorded before guidance was searched
+  if (!guidance.searched) {
+    return [{ kind: 'text', text: 'Company guidance: not shown, because no policy answer was delivered' }];
+  }
+  if (!guidance.articles.length) return [{ kind: 'text', text: 'Company guidance: no article on this topic' }];
+  return [
+    { kind: 'text', text: `Company guidance: ${plural(guidance.articles.length, 'article')} matched` },
+    ...guidance.articles.map(
+      (a): StepLine => ({ kind: 'text', text: `${a.ref} · ${a.title} (matched: ${a.matched_on.join(', ')})` })
+    ),
+  ];
+}
+
 function portfolioSteps(result: QuestionAnswerResponse, input: ProcessInput): ProcessStep[] {
   const t = result.timings_ms || {};
   const found = result.portfolio?.scope !== 'not_found';
@@ -386,6 +401,8 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
       });
     }
   }
+
+  retrieveLines.push(...guidanceLines(r.company_guidance));
 
   const steps: ProcessStep[] = [
     verifyStep(result),

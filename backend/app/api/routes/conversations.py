@@ -54,6 +54,7 @@ from app.services.portfolio import (
     portfolio_payload,
     portfolio_suggestions,
 )
+from app.services.company_guidance import guidance_for_answer, with_guidance_status
 from app.services.customer_verification import verification_for_answer
 from app.services.loss_date import extract_loss_date, term_selection
 from app.services.multi_part import Part, PartAnswer, answer_endorsement, answer_records, combine, split_question
@@ -544,7 +545,6 @@ def submit_question(
         db.commit()
         raise
     latency_ms = int(round((time.perf_counter() - started) * 1000))
-    outcome = answer_outcome(ai_resp.status, ai_resp.guardrail_status)
 
     if factual_result and factual_result.found:
         fact_ev_count = len(factual_result.evidence)
@@ -564,6 +564,13 @@ def submit_question(
         merged_evidence = ai_resp.evidence
         merged_citations = [c.model_dump() for c in ai_resp.citations]
     final_answer = _with_term_note(final_answer, term_choice)
+    # Company guidance is shown beside the policy answer, never inside it.
+    guidance, guidance_check = guidance_for_answer(
+        question_text, policy, final_answer, ai_resp.status != "insufficient_evidence", db
+    )
+    guardrail_checks = list(ai_resp.guardrail_checks) + ([guidance_check] if guidance_check else [])
+    guardrail_status = with_guidance_status(ai_resp.guardrail_status, guidance_check)
+    outcome = answer_outcome(ai_resp.status, guardrail_status)
 
     # 3. Persist Evidence Ledger entry
     ledger_entry = LedgerService.record_entry(
@@ -577,13 +584,13 @@ def submit_question(
         final_answer=final_answer,
         citations=merged_citations,
         confidence=ai_resp.confidence,
-        guardrail_status=ai_resp.guardrail_status,
+        guardrail_status=guardrail_status,
         suggested_questions=ai_resp.suggested_questions,
         db=db,
         employee_id=conv.employee_id,
         **_asker_fields(employee),
         outcome=outcome,
-        guardrail_checks=[c.model_dump() for c in ai_resp.guardrail_checks],
+        guardrail_checks=[c.model_dump() for c in guardrail_checks],
         model_used=ai_resp.model_used,
         provider=ai_resp.provider,
         is_fallback=ai_resp.is_fallback,
@@ -595,6 +602,7 @@ def submit_question(
             "interpretation": ai_resp.interpretation or interpretation,
             "customer_verification": verification_for_answer(conv.id, question_text, policy),
             "term_selection": term_choice,
+            "company_guidance": guidance,
         },
     )
 
@@ -618,8 +626,8 @@ def submit_question(
         confidence=ai_resp.confidence,
         status=ai_resp.status,
         suggested_questions=ai_resp.suggested_questions,
-        guardrail_status=ai_resp.guardrail_status,
-        guardrail_checks=ai_resp.guardrail_checks,
+        guardrail_status=guardrail_status,
+        guardrail_checks=guardrail_checks,
         outcome=outcome,
         model_used=ai_resp.model_used,
         provider=ai_resp.provider,
@@ -629,6 +637,7 @@ def submit_question(
             **ai_resp.retrieval,
             "customer_verification": verification_for_answer(conv.id, question_text, policy),
             "term_selection": term_choice,
+            "company_guidance": guidance,
         },
         timings_ms=ai_resp.timings_ms,
         latency_ms=latency_ms,
@@ -726,6 +735,10 @@ def _answer_multi_part(
     if ai_resp is not None:
         guardrail_checks.extend(ai_resp.guardrail_checks)
     guardrail_status = ai_resp.guardrail_status if ai_resp is not None and ai_resp.guardrail_status in ("flagged", "failed") else "passed"
+    guidance, guidance_check = guidance_for_answer(question_text, policy, answer_text, found, db)
+    if guidance_check:
+        guardrail_checks.append(guidance_check)
+    guardrail_status = with_guidance_status(guardrail_status, guidance_check)
     outcome = answer_outcome(status_value, guardrail_status)
     confidence = ai_resp.confidence if ai_resp is not None else ("high" if found else "none")
     model_used = ai_resp.model_used if ai_resp is not None else "none (records)"
@@ -740,6 +753,7 @@ def _answer_multi_part(
         "interpretation": interpretation,
         "customer_verification": verification_for_answer(conv.id, question_text, policy),
         "term_selection": term_choice,
+        "company_guidance": guidance,
     }
     grounding_ctx = ai_resp.grounding_context if ai_resp is not None else "Answered from the policy records and attached forms."
     latency_ms = int(round((time.perf_counter() - started) * 1000))
@@ -846,7 +860,6 @@ def _answer_factual_question(
     db.refresh(question_record)
 
     latency_ms = int(round((time.perf_counter() - started) * 1000))
-    outcome = "answered" if found else "insufficient_evidence"
 
     guardrail_checks = [
         GuardrailCheck(
@@ -855,6 +868,11 @@ def _answer_factual_question(
             detail="Directly retrieved and verified from core policy schedule records in PostgreSQL.",
         )
     ]
+    guidance, guidance_check = guidance_for_answer(question_text, policy, answer_text, found, db)
+    if guidance_check:
+        guardrail_checks.append(guidance_check)
+    guardrail_status = with_guidance_status("passed", guidance_check)
+    outcome = answer_outcome(question_record.status, guardrail_status)
 
     retrieval = {
         "answer_type": "factual_lookup",
@@ -863,6 +881,7 @@ def _answer_factual_question(
         "interpretation": interpretation,
         "customer_verification": verification_for_answer(conv.id, question_text, policy),
         "term_selection": term_choice,
+        "company_guidance": guidance,
     }
 
     ledger_entry = LedgerService.record_entry(
@@ -876,7 +895,7 @@ def _answer_factual_question(
         final_answer=answer_text,
         citations=[c.model_dump() for c in citations],
         confidence="high" if found else "none",
-        guardrail_status="passed",
+        guardrail_status=guardrail_status,
         suggested_questions=suggestions,
         db=db,
         employee_id=conv.employee_id,
@@ -902,7 +921,7 @@ def _answer_factual_question(
         confidence="high" if found else "none",
         status=question_record.status,
         suggested_questions=suggestions,
-        guardrail_status="passed",
+        guardrail_status=guardrail_status,
         guardrail_checks=guardrail_checks,
         outcome=outcome,
         model_used="none (records)",

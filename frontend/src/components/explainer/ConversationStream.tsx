@@ -23,6 +23,7 @@ import { askerName, fullWhen } from '../../lib/conversations';
 import { answerConfidence, confidenceExplanation, isRecordAnswer } from '../../lib/confidence';
 import type { AuditTarget } from './AIProcessPanel';
 import { AnswerText } from './AnswerText';
+import { CompanyGuidanceBox } from './CompanyGuidanceBox';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
 import {
   checkLabel,
@@ -407,6 +408,8 @@ function AnswerCard({
             </div>
           </div>
         )}
+
+        {!insufficient && <CompanyGuidanceBox guidance={r.company_guidance} />}
 
         {result.is_fallback && (
           <p className="mt-2.5 rounded-md bg-slate-50 px-2.5 py-1.5 text-[11px] text-[#64748B]">

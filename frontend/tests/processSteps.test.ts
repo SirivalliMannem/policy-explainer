@@ -317,3 +317,53 @@ test('a several-facts answer lists each part and its source, and record facts ar
     { kind: 'passage', form: 'HO 00 03', page: 9, score: 15, percent: 100 },
   ]);
 });
+
+const guidanceArticle = {
+  ref: 'G1',
+  document_id: 'doc-1',
+  title: 'Water backup and sump overflow cover',
+  collection: 'Homeowners — what it covers',
+  kind: 'product_article',
+  body: 'Water that backs up through sewers or drains…',
+  spoken: 'That one is an add-on…',
+  matched_on: ['backup', 'sewer', 'basement'],
+  version: '1',
+  approved_by: 'Product & Service Content',
+};
+
+test('company guidance is listed in the retrieve step with the words it matched on', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: { ...answer().retrieval, company_guidance: { searched: true, articles: [guidanceArticle] } },
+      guardrail_checks: [
+        ...answer().guardrail_checks,
+        {
+          name: 'guidance_not_overriding_form',
+          status: 'passed',
+          detail: 'Guidance does not override the form: the policy answer cites only policy forms and records; 1 guidance article is shown separately.',
+        },
+      ],
+    }),
+  });
+  const retrieve = step(steps, 'retrieve').lines;
+  assert.deepEqual(retrieve.slice(-2), [
+    { kind: 'text', text: 'Company guidance: 1 article matched' },
+    { kind: 'text', text: 'G1 · Water backup and sump overflow cover (matched: backup, sewer, basement)' },
+  ]);
+  const guardrails = step(steps, 'validate');
+  assert.equal(guardrails.status, 'done');
+  assert.ok(
+    guardrails.lines.some((l) => l.kind === 'check' && l.ok && l.text.startsWith('Guidance does not override the form'))
+  );
+});
+
+test('no matching article, a withheld answer, and older answers each say so', () => {
+  const lines = (company_guidance: unknown) =>
+    step(buildProcessSteps({ result: answer({ retrieval: { ...answer().retrieval, company_guidance } as never }) }), 'retrieve').lines;
+  assert.deepEqual(lines({ searched: true, articles: [] }).at(-1), { kind: 'text', text: 'Company guidance: no article on this topic' });
+  assert.deepEqual(lines({ searched: false, articles: [] }).at(-1), {
+    kind: 'text',
+    text: 'Company guidance: not shown, because no policy answer was delivered',
+  });
+  assert.ok(!lines(undefined).some((l) => 'text' in l && l.text.startsWith('Company guidance')));
+});
