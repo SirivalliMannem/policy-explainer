@@ -36,6 +36,22 @@ class QuestionResolveRequest(BaseModel):
     conversation_id: Optional[str] = None
 
 
+class VerifiedCustomer(BaseModel):
+    customer_id: str
+    name: str
+    account_number: Optional[str] = None
+
+
+class CustomerVerification(BaseModel):
+    """Whether the customer a question refers to exists in the records and is identified uniquely."""
+
+    status: str  # verified | ambiguous | not_found | not_named
+    matched_on: Optional[str] = None
+    reference: Optional[str] = None
+    customers: list[VerifiedCustomer] = []
+    message: str = ""
+
+
 class QuestionResolution(BaseModel):
     """Outcome of resolving a policy reference from a question."""
 
@@ -54,5 +70,10 @@ class QuestionResolution(BaseModel):
     # The assistant's reply for conversation / off_topic messages, with example questions to continue.
     reply: Optional[str] = None
     suggestions: list[str] = []
+    # True when an ambiguous match is several policies of ONE customer: the question is answered for
+    # each of them together. Matches across different customers are still asked about.
+    answer_all: bool = False
+    # Step 1 of answering: the customer, verified before any policy information is retrieved.
+    customer_verification: Optional[CustomerVerification] = None
     # The employee's recently checked policies, offered when a question names no policy.
     suggested_policies: list[PolicyContextCandidate] = []

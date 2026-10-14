@@ -23,6 +23,7 @@ class Conversation(Base):
     employee_id: Mapped[str] = mapped_column(String(100), default="emp_demo_01", index=True)
     policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     # Archived conversations are hidden from their owner's lists, never deleted; their ledger

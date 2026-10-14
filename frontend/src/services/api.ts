@@ -139,6 +139,13 @@ export const apiClient = {
       ...options,
     }),
 
+  patch: <T>(endpoint: string, body?: unknown, options?: RequestOptions) =>
+    request<T>(endpoint, {
+      method: 'PATCH',
+      body: body ? JSON.stringify(body) : undefined,
+      ...options,
+    }),
+
   delete: <T>(endpoint: string, options?: RequestOptions) =>
     request<T>(endpoint, { method: 'DELETE', ...options }),
 };
@@ -280,13 +287,15 @@ export async function clearConversationContext(
   );
 }
 
+/** `policyId` answers for one of a customer's several matching policies without changing the context. */
 export async function submitQuestion(
   conversationId: string,
-  question: string
+  question: string,
+  policyId?: string
 ): Promise<QuestionAnswerResponse> {
   return apiClient.post<QuestionAnswerResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
-    { question },
+    policyId ? { question, policy_id: policyId } : { question },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
 }
@@ -301,6 +310,26 @@ export async function listConversations(
 /** Hide a conversation from the employee's lists. Nothing is deleted; The Record keeps every answer. */
 export async function archiveConversation(conversationId: string): Promise<{ conversation_id: string; is_archived: boolean }> {
   return apiClient.post(`/api/conversations/${encodeURIComponent(conversationId)}/archive`, {});
+}
+
+/** Rename a conversation by setting a custom title. */
+export async function renameConversation(
+  conversationId: string,
+  title: string
+): Promise<ConversationResponse> {
+  return apiClient.patch<ConversationResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}`,
+    { title }
+  );
+}
+
+/** Delete a conversation by hiding it from employee's lists, respecting evidence ledger audit retention. */
+export async function deleteConversation(
+  conversationId: string
+): Promise<{ conversation_id: string; is_archived: boolean }> {
+  return apiClient.delete<{ conversation_id: string; is_archived: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationId)}`
+  );
 }
 
 export async function getConversationMessages(conversationId: string): Promise<ConversationMessageRecord[]> {

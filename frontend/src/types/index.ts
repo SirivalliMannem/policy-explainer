@@ -173,7 +173,20 @@ export interface QuestionResolution {
    * Both are answered by `reply`; nothing is retrieved or recorded.
    */
   intent: 'policy' | 'portfolio' | 'conversation' | 'off_topic';
-  matched_on?: 'policy_number' | 'customer_name' | 'surname' | 'first_name' | null;
+  matched_on?:
+    | 'policy_number'
+    | 'claim_number'
+    | 'account_number'
+    | 'email'
+    | 'phone'
+    | 'vin'
+    | 'plate'
+    | 'address'
+    | 'vehicle'
+    | 'customer_name'
+    | 'surname'
+    | 'first_name'
+    | null;
   reference?: string | null;
   policy?: PolicyContextCandidate | null;
   candidates: PolicyContextCandidate[];
@@ -183,6 +196,9 @@ export interface QuestionResolution {
   suggestions?: string[];
   /** The employee's recently checked policies, offered when the question names no policy. */
   suggested_policies?: PolicyContextCandidate[];
+  /** Ambiguous, but every candidate belongs to one customer: answer the question for each. */
+  answer_all?: boolean;
+  customer_verification?: CustomerVerification | null;
 }
 
 export interface CitationItem {
@@ -223,6 +239,15 @@ export interface GuardrailCheck {
   detail: string;
 }
 
+/** Step 1 of answering: whether the question's customer is in the records and identified uniquely. */
+export interface CustomerVerification {
+  status: 'verified' | 'ambiguous' | 'not_found' | 'not_named' | string;
+  matched_on?: string | null;
+  reference?: string | null;
+  customers: { customer_id: string; name: string; account_number?: string | null }[];
+  message: string;
+}
+
 export interface RetrievalSummary {
   query_terms?: string[];
   coverages_searched?: number;
@@ -234,6 +259,10 @@ export interface RetrievalSummary {
   duplicates_removed?: number;
   used_previous_question?: boolean;
   interpretation?: Interpretation | null;
+  /** "factual_lookup": values read straight from the policy records; "portfolio": customer/book records. */
+  answer_type?: string;
+  /** How the answer's customer was verified, recorded with the answer. */
+  customer_verification?: CustomerVerification | null;
 }
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
@@ -326,6 +355,7 @@ export interface ConversationResponse {
   conversation_id: string;
   employee_id: string;
   status: string;
+  title?: string | null;
   created_at: string;
   updated_at: string;
   policy_context?: Pick<

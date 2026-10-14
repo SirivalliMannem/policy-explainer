@@ -1,9 +1,10 @@
 """Resolve which policy a free-text question is about.
 
-An employee may name a policy number ("HO-2847-1193"), a policyholder ("Margaret Chen"), only a
-surname ("Chen"), or nothing at all ("What is the deductible?"). Resolution is deterministic and
-database-backed, and it never guesses: when more than one policy fits, the candidates are
-returned so the employee can choose.
+An employee may name a policy number ("HO-2847-1193"), a claim or account number, the customer's
+email or phone, a vehicle (VIN, plate, make and model), an address, a policyholder ("Margaret
+Chen"), only a surname ("Chen"), or nothing at all ("What is the deductible?"). Resolution is
+deterministic and database-backed, and it never guesses: when more than one policy fits, the
+candidates are returned (and answered together when they belong to one customer).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from sqlalchemy import func, literal
 from sqlalchemy.orm import Session
 
 from app.models.policy import CoreAccount, CorePolicy
+from app.services.policy_identifiers import STRONG_FINDERS, WEAK_FINDERS, IdentifierMatch
 
 POLICY_NUMBER_PATTERN = re.compile(r"\b(HO|PA)[-\s]?(\d{4})(?:[-\s](\d{4}))?\b", re.IGNORECASE)
 CAPITALISED_WORD = re.compile(r"\b([A-Z][a-zA-Z\-]{2,})(?:'s|’s)?\b")
@@ -57,7 +59,9 @@ AUTO_HINTS = (
 @dataclass
 class ResolutionResult:
     status: str  # resolved | ambiguous | not_found | no_reference
-    matched_on: Optional[str] = None  # policy_number | customer_name | surname
+    # policy_number | claim_number | account_number | email | phone | vin | plate | address | vehicle
+    # | customer_name | surname | first_name
+    matched_on: Optional[str] = None
     reference: Optional[str] = None
     policy: Optional[CorePolicy] = None
     candidates: list[CorePolicy] = field(default_factory=list)
@@ -137,6 +141,30 @@ def name_words(text: str) -> list[str]:
     return found
 
 
+def _from_identifier(found: IdentifierMatch, text: str) -> ResolutionResult:
+    """Turn the policies an identifier points to into a resolution, as for a named customer."""
+    reference = found.reference
+    if not found.policies:
+        return ResolutionResult(
+            status="not_found", matched_on=found.matched_on, reference=reference,
+            message=f"No policy on file matches {reference}.",
+        )
+    if found.exact_term and len(found.policies) == 1:
+        return ResolutionResult(status="resolved", matched_on=found.matched_on, reference=reference, policy=found.policies[0])
+    choices = _choose(found.policies, text)
+    # An address names a property: without a hint about a car, it means the home insured there.
+    if found.matched_on == "address" and len(choices) > 1 and not line_hint(text):
+        homes = [p for p in choices if p.line_of_business == "homeowners"]
+        if homes:
+            choices = homes
+    if len(choices) > 1:
+        return ResolutionResult(
+            status="ambiguous", matched_on=found.matched_on, reference=reference, candidates=choices,
+            message=f"{reference} matches more than one policy.",
+        )
+    return ResolutionResult(status="resolved", matched_on=found.matched_on, reference=reference, policy=choices[0])
+
+
 def resolve_policy_from_question(question: str, db: Session) -> ResolutionResult:
     """Resolve the policy a question refers to, if it refers to one."""
     text = (question or "").strip()
@@ -166,8 +194,26 @@ def resolve_policy_from_question(question: str, db: Session) -> ResolutionResult
             )
         return ResolutionResult(status="resolved", matched_on="policy_number", reference=reference, policy=terms[0])
 
-    # 2-3. Policyholder named by full name or surname.
+    # 2. Claim or account number, email, phone, VIN or plate: each belongs to one policy or customer.
+    for finder in STRONG_FINDERS:
+        found = finder(text, db)
+        if found:
+            return _from_identifier(found, text)
+
+    # 3. Address or vehicle make/model. Households share an address and makes repeat, so when the
+    # question also names someone, only that person's policies count ("Elena's Toyota" is not
+    # Daniel's Toyota); if none of theirs match, the name decides.
     accounts, matched_on = find_accounts(text, db)
+    named = {a.id for a in accounts}
+    for finder in WEAK_FINDERS:
+        found = finder(text, db)
+        if found and found.policies:
+            if named:
+                found.policies = [p for p in found.policies if p.account_id in named]
+            if found.policies:
+                return _from_identifier(found, text)
+
+    # 4. Policyholder named by full name or surname.
     if not accounts:
         return ResolutionResult(status="no_reference", message="The question does not name a policy or policyholder.")
 

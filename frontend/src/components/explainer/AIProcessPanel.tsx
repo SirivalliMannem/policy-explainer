@@ -57,12 +57,13 @@ function Line({ line }: { line: StepLine }) {
             <span className="font-mono">{line.form}</span>
             {line.page ? <span className="text-muted-foreground"> · p.{line.page}</span> : null}
           </span>
-          <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
-            <span className="block h-full rounded-full bg-orange-btn" style={{ width: `${Math.round(line.ratio * 100)}%` }} />
+          <span className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+            <span className="block h-full rounded-full bg-orange-btn" style={{ width: `${line.percent}%` }} />
           </span>
-          <span className="w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+          <span className="w-[5.5rem] shrink-0 text-right font-mono text-[11px] text-muted-foreground">
             <span className="sr-only">relevance score </span>
             {line.score.toFixed(1)}
+            <span className="sr-only">, evidence confidence</span> · <span className="font-semibold text-espresso">{line.percent}%</span>
           </span>
         </li>
       );
@@ -78,6 +79,25 @@ function Line({ line }: { line: StepLine }) {
             <span className="sr-only">{line.ok ? 'Passed: ' : 'Warning: '}</span>
             {line.text}
           </span>
+        </li>
+      );
+    case 'result':
+      return (
+        <li
+          className={`flex items-start gap-1.5 rounded-md px-2 py-1.5 text-[11.5px] font-semibold ${
+            line.tone === 'passed'
+              ? 'bg-emerald-50 text-emerald-800'
+              : line.tone === 'failed'
+              ? 'bg-red-50 text-red-700'
+              : 'bg-amber-50 text-amber-800'
+          }`}
+        >
+          {line.tone === 'passed' ? (
+            <Check className="mt-0.5 h-3 w-3 shrink-0" strokeWidth={3} aria-hidden="true" />
+          ) : (
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          )}
+          <span>{line.text}</span>
         </li>
       );
     case 'warning':

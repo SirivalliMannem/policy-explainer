@@ -25,8 +25,12 @@ from app.services.policy_resolver import (
     resolve_policy_from_question,
 )
 from app.services import small_talk
+from app.services import customer_verification
 
 router = APIRouter(prefix="/api/policy-resolution", tags=["policy-resolution"])
+
+# Matched exactly on a record, never on interpreted wording.
+EXACT_IDENTIFIERS = {"policy_number", "claim_number", "account_number", "email", "phone", "vin", "plate"}
 
 
 from app.services.authorization import validate_employee_authorization
@@ -190,9 +194,16 @@ def resolve_policy_from_question_text(
         remember(conversation.id, question, interpretation)
     understood = understood_text(question, interpretation)
 
-    result = resolve_policy_from_question(understood, db)
-    if result.status == "no_reference" and understood != question:
-        result = resolve_policy_from_question(question, db)
+    # Exact identifiers are read from what the employee typed: the interpreter may rewrite them
+    # ("margaret.chen@example.com" became "Margaret Chen"), and a rewritten claim number, VIN or
+    # phone would match the wrong record or none. Names and loose wording use the understood text.
+    typed = resolve_policy_from_question(question, db)
+    if typed.matched_on in EXACT_IDENTIFIERS:
+        result = typed
+    else:
+        result = resolve_policy_from_question(understood, db) if understood != question else typed
+        if result.status == "no_reference" and understood != question:
+            result = typed
 
     # When an active policy is selected and no other customer is named, resolve questions
     # referring to that customer's other policies (e.g. "What about her auto policy?", "her other policy").
@@ -238,6 +249,12 @@ def resolve_policy_from_question_text(
                     message=f"{active.account.name} has {len(others)} other policies that could apply.",
                 )
 
+    # Step 1: the customer must exist in the records and be identified uniquely before any policy
+    # information is retrieved. The answer, when given, records how its customer was verified.
+    verification = customer_verification.verify_customer(result, understood, interpretation, active, db)
+    if conversation:
+        customer_verification.remember(conversation.id, question, verification)
+
     intent = "portfolio" if asks_about_portfolio(question, interpretation, has_selected_policy=bool(active)) else "policy"
     reply: Optional[small_talk.Reply] = None
     suggested: list[CorePolicy] = []
@@ -254,6 +271,8 @@ def resolve_policy_from_question_text(
         reply=reply.text if reply else None,
         suggestions=reply.suggestions if reply else [],
         suggested_policies=[_to_candidate(p) for p in suggested],
+        customer_verification=verification,
+        answer_all=result.status == "ambiguous" and len({p.account_id for p in result.candidates}) == 1,
         interpretation=interpretation,
         matched_on=result.matched_on,
         reference=result.reference,

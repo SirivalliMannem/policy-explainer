@@ -220,7 +220,7 @@ export function describeError(err: unknown): FriendlyError {
 // AI process stages
 // ==========================================
 
-export type StageKey = 'context' | 'retrieve' | 'ground' | 'generate' | 'validate' | 'deliver';
+export type StageKey = 'verify' | 'context' | 'retrieve' | 'ground' | 'generate' | 'citations' | 'validate' | 'deliver';
 export type StageStatus = 'waiting' | 'processing' | 'completed' | 'failed' | 'attention' | 'skipped';
 
 export interface StageState {
@@ -244,10 +244,12 @@ export interface ProcessState {
 
 export function freshStages(): Record<StageKey, StageState> {
   return {
+    verify: { status: 'waiting' },
     context: { status: 'waiting' },
     retrieve: { status: 'waiting' },
     ground: { status: 'waiting' },
     generate: { status: 'waiting' },
+    citations: { status: 'waiting' },
     validate: { status: 'waiting' },
     deliver: { status: 'waiting' },
   };

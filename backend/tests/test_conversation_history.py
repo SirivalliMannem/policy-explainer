@@ -213,3 +213,42 @@ def test_ledger_records_the_askers_identity(monkeypatch):
     assert (entry["agent"], entry["agent_name"], entry["agent_role"]) == (emp, "Agent Gamma", "manager")
     # Ledger entries are permanent audit records: this one is archived away, not removed.
     client.post(f"/api/conversations/{conv}/archive", headers=me)
+
+
+def test_rename_conversation(seeded, no_ai):
+    """PATCH /api/conversations/{id} updates title, reflects in history list, and matches search."""
+    conv = seeded["conv_a"]
+    owner = headers(seeded["emp_a"])
+
+    res = client.patch(f"/api/conversations/{conv}", json={"title": "Custom Water Backup Analysis"}, headers=owner)
+    assert res.status_code == 200
+    assert res.json()["title"] == "Custom Water Backup Analysis"
+
+    convs = listed(seeded["emp_a"])
+    assert any(c["title"] == "Custom Water Backup Analysis" for c in convs)
+
+    # Search matches custom renamed title
+    matched = listed(seeded["emp_a"], search="Custom Water")
+    assert len(matched) == 1 and matched[0]["conversation_id"] == conv
+
+
+def test_delete_conversation_soft_deletes_and_retains_ledger(seeded, no_ai):
+    """DELETE /api/conversations/{id} hides conversation while preserving evidence ledger records."""
+    conv = seeded["conv_a"]
+    owner = headers(seeded["emp_a"])
+
+    res = client.delete(f"/api/conversations/{conv}", headers=owner)
+    assert res.status_code == 200
+    assert res.json()["is_archived"] is True
+
+    # Hidden from employee's recent list
+    assert listed(seeded["emp_a"]) == []
+
+    # Ledger audit entries preserved intact
+    db = SessionLocal()
+    try:
+        assert db.query(EvidenceLedger).filter(EvidenceLedger.conversation_id == conv).count() == 2
+    finally:
+        db.close()
+    for entry_id in seeded["entries"][:2]:
+        assert client.get(f"/api/ledger/{entry_id}").status_code == 200

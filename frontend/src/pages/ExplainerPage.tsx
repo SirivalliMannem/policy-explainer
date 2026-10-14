@@ -30,14 +30,27 @@ import {
   describeError,
   freshStages,
   interpretedText,
+  lineLabel,
 } from '../lib/explainer';
 import { notifyConversationsChanged } from '../lib/conversations';
+import { groupPolicyAnswers } from '../lib/answerGroups';
+
+/** Most policies one question is answered for at once; more than this, the employee chooses. */
+const MAX_ANSWER_ALL = 4;
 
 const MATCH_LABEL: Record<string, string> = {
   policy_number: 'policy number',
   customer_name: 'policyholder name',
   surname: 'surname',
   first_name: 'first name',
+  claim_number: 'claim number',
+  account_number: 'account number',
+  email: 'email address',
+  phone: 'phone number',
+  vin: 'VIN',
+  plate: 'license plate',
+  address: 'address',
+  vehicle: 'vehicle',
 };
 
 /** Wide enough for the chat column and the docked AI process panel side by side. */
@@ -182,7 +195,15 @@ export function ExplainerPage() {
   /** Stages 2–6: submit to the backend, which answers it (AI service or policy records) and records the Evidence Ledger. */
   // The backend answers in one request, so stages 2–6 are reported together when it returns: step 2
   // shows as in progress until then, and every value shown afterwards is the one the pipeline measured.
-  const runPipeline = async (question: string, convId: string, contextDetail: string) => {
+  // `forPolicy` answers for one of a customer's matching policies (labelled), leaving the context as it is.
+  // `verified` is how the customer was confirmed when the employee chose them (a candidate or a switch).
+  const runPipeline = async (
+    question: string,
+    convId: string,
+    contextDetail: string,
+    forPolicy?: PolicyContextCandidate,
+    verified?: string
+  ) => {
     // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
     openPanel({ mode: 'live' }, null);
     setProcess((prev) => ({
@@ -191,11 +212,16 @@ export function ExplainerPage() {
       result: null,
       question,
       contextDetail,
-      stages: { ...freshStages(), context: { status: 'completed', detail: contextDetail }, retrieve: { status: 'processing' } },
+      stages: {
+        ...freshStages(),
+        verify: verified ? { status: 'completed', detail: verified } : prev.stages.verify,
+        context: { status: 'completed', detail: contextDetail },
+        retrieve: { status: 'processing' },
+      },
     }));
 
     try {
-      const result = await submitQuestion(convId, question);
+      const result = await submitQuestion(convId, question, forPolicy?.policy_id);
       setProcess((prev) => ({
         ...prev,
         phase: 'completed',
@@ -203,7 +229,7 @@ export function ExplainerPage() {
         askedBy: result.asked_by ?? prev.askedBy,
         askedAt: result.asked_at ?? prev.askedAt,
       }));
-      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result });
+      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result, labelled: Boolean(forPolicy) });
     } catch (err) {
       const friendly = describeError(err);
       failProcess(friendly);
@@ -254,7 +280,7 @@ export function ExplainerPage() {
       askedBy: me(),
       askedAt,
       contextDetail: null,
-      stages: { ...freshStages(), context: { status: 'processing' } },
+      stages: { ...freshStages(), verify: { status: 'processing' } },
     });
     try {
       let convId: string;
@@ -301,6 +327,44 @@ export function ExplainerPage() {
         setProcess(IDLE_PROCESS);
         return;
       }
+
+      // Step 1: verify the customer before any policy information is retrieved. A customer who is not
+      // in the records, or a name several customers share, stops here and the employee is asked.
+      const verification = resolution.customer_verification;
+      if (verification && (verification.status === 'not_found' || verification.status === 'ambiguous')) {
+        const notFound = verification.status === 'not_found';
+        const pending = pendingQuestionRef.current;
+        pendingQuestionRef.current = pending && looksLikeReply(text) ? pending : text;
+        setProcess((prev) => ({
+          ...prev,
+          phase: 'needs_input',
+          stages: { ...prev.stages, verify: { status: notFound ? 'failed' : 'attention', detail: verification.message } },
+        }));
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: notFound
+            ? `${verification.message} Please check the spelling, or give a policy number, claim number, email or phone number.`
+            : `${verification.message} Which customer did you mean?`,
+          suggestions: notFound ? [] : verification.customers.map((c) => c.name),
+        });
+        openPanel({ mode: 'live' }, null);
+        return;
+      }
+      setProcess((prev) => ({
+        ...prev,
+        stages: {
+          ...prev.stages,
+          verify:
+            verification?.status === 'verified'
+              ? { status: 'completed', detail: verification.message }
+              : resolution.intent === 'portfolio'
+              ? { status: 'skipped', detail: 'Not needed: the question is about the book of business, not one customer.' }
+              : { status: 'attention', detail: verification?.message || 'The question does not name a customer yet.' },
+          context: { status: 'processing' },
+        },
+      }));
 
       const understood = interpretedText(resolution.interpretation);
       const understoodNote = understood ? ` · understood as “${understood}”` : '';
@@ -365,6 +429,36 @@ export function ExplainerPage() {
         contextDetail = `${resolved.customer_name} · ${resolved.policy_number} — matched on ${
           MATCH_LABEL[resolution.matched_on || ''] || 'reference'
         }${understoodNote}`;
+      } else if (
+        resolution.status === 'ambiguous' &&
+        resolution.answer_all &&
+        resolution.candidates.length <= MAX_ANSWER_ALL &&
+        // Another customer's policies still go through the switch confirmation below.
+        (!current || resolution.candidates.every((c) => c.customer_id === current.customer_id))
+      ) {
+        // Several policies of one customer: answer the question for each, labelled by policy number.
+        const pending = pendingQuestionRef.current;
+        if (pending && isBareReference(text, resolution)) question = pending;
+        pendingQuestionRef.current = null;
+        const policies = resolution.candidates;
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: `${policies[0].customer_name} has ${policies.length} policies that match: ${policies
+            .map((c) => `${c.policy_number} (${lineLabel(c.line_of_business)})`)
+            .join(' and ')}. Here is the answer for each.`,
+          suggestions: [],
+        });
+        for (const policy of policies) {
+          await runPipeline(
+            question,
+            convId,
+            `${policy.customer_name} · ${policy.policy_number} — ${policies.indexOf(policy) + 1} of ${policies.length} matching policies${understoodNote}`,
+            policy
+          );
+        }
+        return;
       } else if (resolution.status === 'ambiguous') {
         if (current && resolution.candidates.some((c) => c.policy_id === current.policy_id)) {
           contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
@@ -434,7 +528,13 @@ export function ExplainerPage() {
         setIsWorking(true);
         try {
           const convId = await ensureConversation();
-          await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number}`);
+          await runPipeline(
+            pending,
+            convId,
+            `${candidate.customer_name} · ${candidate.policy_number}`,
+            undefined,
+            `${candidate.customer_name}, chosen by the employee.`
+          );
         } finally {
           busyRef.current = false;
           setIsWorking(false);
@@ -467,7 +567,13 @@ export function ExplainerPage() {
       });
       notifyConversationsChanged();
       if (pending) {
-        await runPipeline(pending, convId, `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`);
+        await runPipeline(
+          pending,
+          convId,
+          `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`,
+          undefined,
+          `${candidate.customer_name}, chosen by the employee.`
+        );
       } else {
         setProcess(IDLE_PROCESS);
       }
@@ -531,7 +637,9 @@ export function ExplainerPage() {
         await runPipeline(
           pendingQuestion,
           convId,
-          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`
+          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`,
+          undefined,
+          `${targetPolicy.customer_name}, confirmed by the employee when switching customers.`
         );
       } else {
         setProcess(IDLE_PROCESS);
@@ -625,15 +733,18 @@ export function ExplainerPage() {
     }
     const records = await getConversationMessages(convId);
     const restored: ChatMessage[] = [];
-    for (const record of records) {
-      restored.push({
-        kind: 'user',
-        id: nextId('user'),
-        time: timeOf(record.created_at),
-        text: record.question,
-        askedBy: record.asked_by,
-        askedAt: record.created_at,
-      });
+    // A question answered for each of a customer's policies shows once, with its labelled answers.
+    for (const { record, startsQuestion, inGroup } of groupPolicyAnswers(records)) {
+      if (startsQuestion) {
+        restored.push({
+          kind: 'user',
+          id: nextId('user'),
+          time: timeOf(record.created_at),
+          text: record.question,
+          askedBy: record.asked_by,
+          askedAt: record.created_at,
+        });
+      }
       if (record.answer) {
         restored.push({
           kind: 'answer',
@@ -641,6 +752,7 @@ export function ExplainerPage() {
           time: timeOf(record.created_at),
           question: record.question,
           result: record.answer,
+          labelled: inGroup,
         });
       } else if (record.status === 'failed') {
         restored.push({

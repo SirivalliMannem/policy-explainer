@@ -154,6 +154,7 @@ def list_conversations(
     groups = [
         g for g in grouped.values()
         if not needle
+        or (getattr(g["conv"], "title", None) and needle in g["conv"].title.lower())
         or needle in g["first"].question.lower()
         or needle in conversation_title(g["first"].question).lower()
     ]
@@ -199,10 +200,16 @@ def list_conversations(
             customers = ((latest_entry.retrieval or {}).get("portfolio") or {}).get("customers") or []
             customer_name = ", ".join(customers) or None
 
+        title = (
+            conv.title.strip()
+            if getattr(conv, "title", None) and conv.title.strip()
+            else conversation_title(g["first"].question, customer_name, policy.policy_number if policy else None)
+        )
+
         items.append(
             ConversationSummary(
                 conversation_id=conv.id,
-                title=conversation_title(g["first"].question, customer_name, policy.policy_number if policy else None),
+                title=title,
                 created_at=conv.created_at,
                 last_activity_at=latest.created_at,
                 question_count=len(questions),
