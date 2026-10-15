@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 AI_SERVICE_TIMEOUT_SECONDS = 45.0
 # Interpretation is one short model call (8s provider timeout, no rate-limit retry) with a rules fallback.
 INTERPRET_TIMEOUT_SECONDS = 15.0
+# A plain-language explanation is one short model call (15s provider timeout, no rate-limit retry).
+PLAIN_LANGUAGE_TIMEOUT_SECONDS = 25.0
 
 
 class AIServiceClient:
@@ -92,6 +94,25 @@ class AIServiceClient:
         except httpx.HTTPError as exc:
             logger.warning("AI service interpret unavailable: %s", type(exc).__name__)
         return None
+
+    def plain_language(self, heading: str, form_number: str, text: str) -> dict:
+        """Ask the AI service to explain one clause in plain words.
+
+        Never raises: when the AI service cannot be reached the result says the explanation is
+        unavailable, so nothing is invented.
+        """
+        try:
+            with httpx.Client(timeout=PLAIN_LANGUAGE_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{self.base_url}/api/explain/plain-language",
+                    json={"heading": heading, "form_number": form_number, "text": text},
+                )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning("AI service plain-language returned HTTP %s", resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("AI service plain-language unavailable: %s", type(exc).__name__)
+        return {"status": "unavailable", "reason": "The AI service is not reachable right now. Try again in a moment."}
 
 
 # Global singleton client instance

@@ -26,6 +26,7 @@ export function AppLayout() {
 
   const getPageTitle = (path: string): string => {
     if (path.includes('/dashboard')) return 'Enterprise Dashboard';
+    if (path.includes('/audit-log')) return 'Audit Log';
     if (path.includes('/explainer')) return 'Policy Explainer';
     if (path.includes('/settings')) return 'Settings';
     if (path.includes('/help')) return 'Help & Documentation';

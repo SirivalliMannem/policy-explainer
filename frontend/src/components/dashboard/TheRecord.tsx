@@ -57,7 +57,7 @@ function Select({
   );
 }
 
-/** "The Record": every recorded policy answer, from the Evidence Ledger. */
+/** The Audit Log: every recorded policy answer, from the Evidence Ledger. */
 export function TheRecord() {
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
   const [filters, setFilters] = useState<LedgerFilters | null>(null);
@@ -68,7 +68,7 @@ export function TheRecord() {
   const [searchParams, setSearchParams] = useSearchParams();
   const sectionRef = useRef<HTMLElement | null>(null);
 
-  // "View in The Record" links here with ?entry=<ledger id>: open that entry and bring the Record into view.
+  // "View in the Audit Log" links here with ?entry=<ledger id>: open that entry and bring the Record into view.
   const linkedEntry = searchParams.get('entry');
   useEffect(() => {
     if (!linkedEntry) return;
@@ -164,7 +164,7 @@ export function TheRecord() {
         <div>
           <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#F97316]">Evidence Ledger</span>
           <h2 id="the-record-title" className="mt-0.5 text-2xl font-bold tracking-tight text-[#0F2A43]">
-            The Record
+            Audit Log
           </h2>
           <p className="mt-0.5 max-w-2xl text-[13px] text-[#64748B]">
             Every policy question, answer, source, model decision, guardrail result, and outcome is traceable.

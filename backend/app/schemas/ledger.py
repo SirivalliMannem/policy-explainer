@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 from pydantic import BaseModel
 
+from app.schemas.dashboard import AttentionResolution
 from app.schemas.explainer import CitationItem, EvidenceItemSchema, GuardrailCheck
 
 
@@ -82,3 +83,5 @@ class LedgerDetail(LedgerRow):
     fallback_reason: Optional[str] = None
     retrieval: dict[str, Any] = {}
     timings_ms: dict[str, int] = {}
+    # How a person resolved this flagged question in Needs attention, when they have.
+    resolution: Optional[AttentionResolution] = None

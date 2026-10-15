@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ExternalLink, Loader2, MessageSquare, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ExternalLink, Loader2, MessageSquare, X } from 'lucide-react';
 import { getLedgerEntry } from '../../services/api';
 import { currentEmployee } from '../../services/auth';
 import { roleLabel } from '../../lib/conversations';
@@ -90,7 +90,7 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
       >
         <div className="flex items-start justify-between gap-3 border-b border-[#E2E8F0] px-5 py-4 sm:px-6">
           <div className="min-w-0">
-            <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[#F97316]">The Record · entry</span>
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[#F97316]">Audit Log · entry</span>
             <h3 className="mt-1 text-[15px] font-bold leading-snug text-[#0F2A43]">{entry?.question ?? 'Loading…'}</h3>
             {entry && <p className="mt-0.5 font-mono text-[10.5px] text-[#94A3B8]">{entry.id}</p>}
           </div>
@@ -124,6 +124,24 @@ export function LedgerDetailDrawer({ entryId, onClose }: { entryId: string | nul
                 <GuardrailStatusBadge status={entry.guardrail_status} />
                 <span className="ml-auto text-[11px] text-[#64748B]">{formatDateTime(entry.created_at)}</span>
               </div>
+
+              {entry.resolution && (
+                <div role="note" className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[12.5px] text-emerald-900">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <div>
+                    <p className="font-semibold">Resolved in Needs attention: {entry.resolution.action_label}</p>
+                    <p className="mt-0.5 text-emerald-800">
+                      By {entry.resolution.resolved_by_name || entry.resolution.resolved_by}
+                      {entry.resolution.resolved_by_name && (
+                        <span className="font-mono text-[11px]"> · {entry.resolution.resolved_by}</span>
+                      )}
+                      {' · '}
+                      {formatDateTime(entry.resolution.resolved_at)}
+                    </p>
+                    {entry.resolution.note && <p className="mt-1 text-emerald-900">{entry.resolution.note}</p>}
+                  </div>
+                </div>
+              )}
 
               {entry.retrieval.interpretation && (
                 <Section title="Question understanding">

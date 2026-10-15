@@ -1,7 +1,9 @@
 import { APP_CONFIG } from '../config';
 import { currentEmployee } from './auth';
 import type {
+  AttentionResolution,
   AttentionResponse,
+  PlainLanguageExplanation,
   BillingItem,
   ClaimItem,
   ContextCheckResponse,
@@ -169,6 +171,16 @@ export async function getDashboardStats(
 }
 
 /** Flagged and unanswered questions in the range, grouped by question, with their causes. */
+/** Resolve a flagged question with one of the actions offered for it. */
+export async function resolveAttention(body: {
+  entry_id: string;
+  action: string;
+  note?: string;
+  new_entry_id?: string | null;
+}): Promise<AttentionResolution> {
+  return apiClient.post<AttentionResolution>('/api/dashboard/attention/resolve', body);
+}
+
 export async function getNeedsAttention(
   timeRange: 'today' | '7d' | '30d' = '7d'
 ): Promise<AttentionResponse> {
@@ -341,6 +353,11 @@ export async function getConversationMessages(conversationId: string): Promise<C
 // ==========================================
 // Sources & Evidence Ledger
 // ==========================================
+
+/** Ask the language model to explain one cited clause in plain words (labelled as an AI explanation). */
+export async function explainClausePlainly(clauseId: string): Promise<PlainLanguageExplanation> {
+  return apiClient.post<PlainLanguageExplanation>(`/api/sources/clause/${encodeURIComponent(clauseId)}/plain-language`, {});
+}
 
 export async function getSource(sourceType: string, sourceId: string): Promise<SourceDocument> {
   return apiClient.get<SourceDocument>(

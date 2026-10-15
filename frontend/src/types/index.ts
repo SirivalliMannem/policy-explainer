@@ -541,6 +541,33 @@ export interface AttentionItem {
     clauses_searched: number;
     citations: string[];
   };
+  /** A next step written from the flag reason. */
+  suggestion?: string;
+  /** The actions that resolve this flag. */
+  actions?: AttentionAction[];
+}
+
+/** One way to resolve a flagged question. "reask" opens the chat; it resolves once the new answer is grounded. */
+export interface AttentionAction {
+  key: string;
+  label: string;
+  description: string;
+  kind: 'resolve' | 'reask' | string;
+}
+
+/** A person's decision on a flagged question; the ledger entries it covers are never changed. */
+export interface AttentionResolution {
+  id: string;
+  question: string;
+  reason: AttentionReason | string;
+  action: string;
+  action_label: string;
+  note: string;
+  latest_entry_id: string;
+  resolved_by: string;
+  resolved_by_name?: string | null;
+  resolved_by_role?: string | null;
+  resolved_at: string;
 }
 
 export interface AttentionCause {
@@ -560,6 +587,8 @@ export interface AttentionResponse {
   flagged_total: number;
   /** Distinct flagged questions; items may be capped below this. */
   questions_flagged: number;
+  /** Flagged questions in the range already resolved by a person. */
+  questions_resolved?: number;
   items: AttentionItem[];
   causes: AttentionCause[];
 }
@@ -633,6 +662,19 @@ export interface LedgerDetail extends LedgerRow {
   fallback_reason?: string | null;
   retrieval: RetrievalSummary;
   timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
+  /** How a person resolved this flagged question in Needs attention. */
+  resolution?: AttentionResolution | null;
+}
+
+/** An AI explanation of one cited clause: never approved wording, never a coverage decision. */
+export interface PlainLanguageExplanation {
+  source_id: string;
+  status: 'explained' | 'unavailable' | string;
+  explanation: string;
+  model_used?: string | null;
+  provider?: string | null;
+  reason?: string | null;
+  approved_plain_language?: string | null;
 }
 
 export interface LedgerQuery {

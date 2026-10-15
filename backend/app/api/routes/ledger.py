@@ -27,6 +27,7 @@ from app.schemas.ledger import (
     LedgerSummary,
 )
 from app.services.ledger.ledger_service import answer_outcome
+from app.services.attention import resolution_for_entry, resolution_payload
 from app.services.confidence import confidence_percent
 
 router = APIRouter(prefix="/api/ledger", tags=["evidence-ledger"])
@@ -237,4 +238,5 @@ def get_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
         fallback_reason=entry.fallback_reason,
         retrieval=entry.retrieval or {},
         timings_ms=entry.timings_ms or {},
+        resolution=resolution_payload(resolved) if (resolved := resolution_for_entry(entry, db)) else None,
     )

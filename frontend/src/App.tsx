@@ -6,6 +6,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ExplainerPage } from './pages/ExplainerPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { HelpPage } from './pages/HelpPage';
+import { AuditLogPage } from './pages/AuditLogPage';
 import { getSession } from './services/auth';
 
 /** Workspace pages need a signed-in session; without one, go to the login page. */
@@ -38,6 +39,7 @@ export function App() {
         >
           <Route index element={<Navigate to="/app/explainer" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="audit-log" element={<AuditLogPage />} />
           {/* The Policy Explainer opens on the chat. One persistent conversation screen for all three
               URLs, so asking the first question (which moves the URL to /c/:id) does not remount it. */}
           <Route path="explainer" element={<ExplainerPage />}>

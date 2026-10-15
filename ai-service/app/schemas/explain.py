@@ -111,3 +111,19 @@ class ExplainResponse(BaseModel):
     retrieval: dict[str, Any] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     interpretation: Optional[InterpretationSchema] = None
+
+
+class PlainLanguageRequest(BaseModel):
+    """One cited clause to explain in plain words."""
+
+    heading: str = ""
+    form_number: str = ""
+    text: str = Field(..., min_length=1)
+
+
+class PlainLanguageResponse(BaseModel):
+    status: str  # explained | unavailable
+    explanation: str = ""
+    model_used: Optional[str] = None
+    provider: Optional[str] = None
+    reason: Optional[str] = None

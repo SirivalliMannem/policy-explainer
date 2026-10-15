@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ChevronDown, ChevronUp, FileText, FileX2, Loader2, X } from 'lucide-react';
-import { getSource } from '../../services/api';
-import type { SourceDocument, SourcePassage, SourceTarget } from '../../types';
+import { AlertCircle, ChevronDown, ChevronUp, FileText, FileX2, Loader2, Sparkles, X } from 'lucide-react';
+import { explainClausePlainly, getSource } from '../../services/api';
+import type { PlainLanguageExplanation, SourceDocument, SourcePassage, SourceTarget } from '../../types';
 import { describeError } from '../../lib/explainer';
 
 interface SourceViewerProps {
@@ -59,13 +59,54 @@ function Meta({ label, value }: { label: string; value?: string | number | null 
   );
 }
 
+type PlainState = { loading: boolean; result?: PlainLanguageExplanation; error?: string };
+
+/** "Explain in plain words": the language model's reading of one cited clause, labelled as such. */
+function PlainWords({ state }: { state?: PlainState }) {
+  if (!state || state.loading) {
+    return state?.loading ? (
+      <p className="mt-2.5 flex items-center gap-1.5 border-t border-[#FDBA74]/60 pt-2 text-[12px] text-[#64748B]">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-[#7C3AED]" /> Explaining this clause in plain words…
+      </p>
+    ) : null;
+  }
+  const result = state.result;
+  if (state.error || !result || result.status !== 'explained') {
+    return (
+      <p className="mt-2.5 border-t border-[#FDBA74]/60 pt-2 text-[12px] text-[#64748B]">
+        {state.error || result?.reason || 'A plain-language explanation is not available right now.'}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-2.5 rounded-lg border border-[#DDD6FE] bg-[#F5F3FF] px-3 py-2">
+      <span className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#6D28D9]">
+        <Sparkles className="h-3 w-3" aria-hidden="true" /> AI explanation · not approved wording
+      </span>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-[#334155]">{result.explanation}</p>
+      <p className="mt-1 text-[10.5px] text-[#64748B]">
+        Written by the language model from this clause only{result.model_used ? ` (${result.model_used})` : ''}. The cited
+        wording above is what applies; this does not say whether any loss is covered.
+      </p>
+    </div>
+  );
+}
+
 export function SourceViewer({ target, onClose }: SourceViewerProps) {
   const [doc, setDoc] = useState<SourceDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<'text' | 'pdf'>('text');
   const [showSimilar, setShowSimilar] = useState(false);
+  const [plain, setPlain] = useState<Record<string, PlainState>>({});
   const citedRef = useRef<HTMLDivElement | null>(null);
+
+  const explain = (sourceId: string) => {
+    setPlain((p) => ({ ...p, [sourceId]: { loading: true } }));
+    explainClausePlainly(sourceId)
+      .then((result) => setPlain((p) => ({ ...p, [sourceId]: { loading: false, result } })))
+      .catch((err) => setPlain((p) => ({ ...p, [sourceId]: { loading: false, error: describeError(err).message } })));
+  };
 
   useEffect(() => {
     if (!target) return;
@@ -74,6 +115,7 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
     setError(null);
     setTab('text');
     setShowSimilar(false);
+    setPlain({});
     setLoading(true);
     getSource(target.sourceType, target.sourceId)
       .then((d) => active && setDoc(d))
@@ -253,6 +295,18 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                             Cited
                           </span>
                         )}
+                        {p.is_cited && !plain[p.source_id]?.result?.explanation && (
+                          <button
+                            type="button"
+                            onClick={() => explain(p.source_id)}
+                            disabled={plain[p.source_id]?.loading}
+                            className="ml-auto inline-flex items-center gap-1 rounded-md border border-[#C4B5FD] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#6D28D9] transition-colors hover:bg-[#F5F3FF] disabled:opacity-60 cursor-pointer"
+                            title="Ask the language model to explain this clause in plain words"
+                          >
+                            <Sparkles className="h-3 w-3" aria-hidden="true" />
+                            {plain[p.source_id] && !plain[p.source_id].loading ? 'Try again' : 'Explain in plain words'}
+                          </button>
+                        )}
                       </div>
                       <p className={`font-serif text-[13.5px] leading-relaxed ${p.is_cited ? 'text-[#1E293B]' : 'text-[#475569]'}`}>
                         {p.text}
@@ -265,6 +319,7 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                           <p className="mt-0.5 text-[12.5px] leading-relaxed text-[#334155]">{p.plain_language}</p>
                         </div>
                       )}
+                      {p.is_cited && <PlainWords state={plain[p.source_id]} />}
                     </div>
 );
                     return (

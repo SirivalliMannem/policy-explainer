@@ -1,13 +1,21 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, ArrowUp } from 'lucide-react';
-import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionResolution, SourceTarget } from '../types';
+import type {
+  AskedBy,
+  EvidenceItem,
+  PolicyContextCandidate,
+  QuestionAnswerResponse,
+  QuestionResolution,
+  SourceTarget,
+} from '../types';
 import {
   ApiError,
   clearConversationContext,
   createConversation,
   getConversation,
   getConversationMessages,
+  resolveAttention,
   resolvePolicyContext,
   resolvePolicyFromQuestion,
   setConversationContext,
@@ -138,6 +146,8 @@ export function ExplainerPage() {
   const conversationRef = useRef<string | null>(null);
   const policyRef = useRef<PolicyContextCandidate | null>(null);
   const pendingQuestionRef = useRef<string | null>(null);
+  // A flagged question opened from Needs attention to ask again; resolved by the first grounded answer.
+  const reaskRef = useRef<{ entryId: string; action: string } | null>(null);
   const busyRef = useRef(false);
   const panelOpenerRef = useRef<HTMLElement | null>(null);
   const idRef = useRef(0);
@@ -231,12 +241,34 @@ export function ExplainerPage() {
         askedAt: result.asked_at ?? prev.askedAt,
       }));
       push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result, labelled: Boolean(forPolicy) });
+      resolveReasked(result);
     } catch (err) {
       const friendly = describeError(err);
       failProcess(friendly);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
     }
     notifyConversationsChanged();
+  };
+
+  /** A flagged question opened from Needs attention ("Ask again"): resolved by the first grounded answer. */
+  const resolveReasked = (result: QuestionAnswerResponse) => {
+    const pending = reaskRef.current;
+    if (!pending || !result.ledger_id || result.outcome !== 'answered') return;
+    reaskRef.current = null;
+    resolveAttention({ entry_id: pending.entryId, action: pending.action, new_entry_id: result.ledger_id })
+      .then(() =>
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: 'This answer is grounded, so the flagged question is now resolved in Needs attention.',
+          suggestions: [],
+        })
+      )
+      .catch((err) => {
+        reaskRef.current = pending; // not recorded: the next grounded answer tries again
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: 'Not resolved in Needs attention', text: describeError(err).message });
+      });
   };
 
   /** Clear the conversation view before opening another conversation or starting a new one. */
@@ -246,6 +278,7 @@ export function ExplainerPage() {
     setMessages([]);
     setActivePolicy(null);
     pendingQuestionRef.current = null;
+    reaskRef.current = null;
     setFeatureTab(null);
     setHighlight(null);
     setSourceTarget(null);
@@ -803,8 +836,25 @@ export function ExplainerPage() {
     conversationRef.current = routeConversationId ?? null;
     if (!routeConversationId) {
       newVisitRef.current = location.key;
-      const state = (location.state || {}) as { initialQuestion?: string };
-      if (state.initialQuestion) {
+      const state = (location.state || {}) as {
+        initialQuestion?: string;
+        reask?: { question: string; entryId: string; action: string };
+      };
+      if (state.reask) {
+        // From Needs attention: the question is put in the composer to be rephrased, not asked as is.
+        navigate(location.pathname, { replace: true, state: null });
+        reaskRef.current = { entryId: state.reask.entryId, action: state.reask.action };
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text:
+            'This question was flagged in Needs attention. Rephrase it in policy terms (a peril, a coverage, a form, or the policy number) and ask it. When the answer is grounded, the flagged question is marked resolved.',
+          suggestions: [],
+        });
+        setInput(state.reask.question);
+        inputRef.current?.focus();
+      } else if (state.initialQuestion) {
         navigate(location.pathname, { replace: true, state: null });
         handleAsk(state.initialQuestion);
       } else {
@@ -939,7 +989,7 @@ export function ExplainerPage() {
                 </button>
               </div>
               <p className="mt-2 text-center text-[11px] text-[#94A3B8]">
-                Answers come from the policy wording, cite their sources and are recorded in The Record.
+                Answers come from the policy wording, cite their sources and are recorded in the Audit Log.
               </p>
             </form>
           </div>

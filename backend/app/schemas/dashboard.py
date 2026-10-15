@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DashboardMetrics(BaseModel):
@@ -72,6 +72,15 @@ class AttentionSources(BaseModel):
     citations: List[str] = []
 
 
+class AttentionAction(BaseModel):
+    """One way to resolve a flagged question."""
+    key: str
+    label: str
+    description: str
+    # "resolve": resolves at once; "reask": opens the chat, resolved when the new answer is grounded.
+    kind: str = "resolve"
+
+
 class AttentionItem(BaseModel):
     """One flagged question, grouped across every time it was asked in the range."""
     question: str
@@ -86,6 +95,9 @@ class AttentionItem(BaseModel):
     last_asked_at: datetime
     latest_entry_id: str
     sources: AttentionSources
+    # What a person could do next, written from the flag reason, and the actions that resolve it.
+    suggestion: str = ""
+    actions: List[AttentionAction] = []
 
 
 class AttentionCause(BaseModel):
@@ -102,5 +114,30 @@ class AttentionResponse(BaseModel):
     answers_total: int
     flagged_total: int
     questions_flagged: int
+    # Flagged questions in the range already resolved by a person (not in the queue).
+    questions_resolved: int = 0
     items: List[AttentionItem]
     causes: List[AttentionCause]
+
+
+class AttentionResolveRequest(BaseModel):
+    """Resolve the flagged question whose latest ledger entry is entry_id."""
+    entry_id: str
+    action: str
+    note: str = Field("", max_length=2000)
+    # For a re-asked question: the ledger entry of the new, grounded answer.
+    new_entry_id: Optional[str] = None
+
+
+class AttentionResolution(BaseModel):
+    id: str
+    question: str
+    reason: str
+    action: str
+    action_label: str
+    note: str = ""
+    latest_entry_id: str
+    resolved_by: str
+    resolved_by_name: Optional[str] = None
+    resolved_by_role: Optional[str] = None
+    resolved_at: datetime

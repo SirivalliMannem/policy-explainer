@@ -2,18 +2,30 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
+from app.models.attention import AttentionResolution
+from app.services.authorization import UNAUTHORIZED_ROLES
 from app.services.recent_questions import recent_questions
-from app.services.attention import needs_attention
+from app.services.attention import (
+    ACTIONS,
+    flag_reason,
+    needs_attention,
+    question_key,
+    resolution_for_entry,
+    resolution_payload,
+)
 from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CoreForm, CorePolicy
 from app.schemas.dashboard import (
     ActivityDataPoint,
+    AttentionResolution as AttentionResolutionSchema,
+    AttentionResolveRequest,
     AttentionResponse,
     DashboardMetrics,
     DashboardResponse,
@@ -262,3 +274,61 @@ def get_needs_attention(
     """Flagged and unanswered questions in the range, grouped by question, plus their causes."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     return needs_attention(db, _window_start(time_range, now), time_range)
+
+
+@router.post("/attention/resolve", response_model=AttentionResolutionSchema, status_code=status.HTTP_201_CREATED)
+def resolve_attention(
+    payload: AttentionResolveRequest,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Resolve a flagged question with one of the actions offered for its flag reason.
+
+    The resolution is recorded with who made it and when; the ledger entries are never changed.
+    """
+    # The same check that guards policy access: no new permission is introduced.
+    if (employee.role or "").strip().lower() in UNAUTHORIZED_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee is not authorized to resolve flagged questions")
+
+    entry = db.get(EvidenceLedger, payload.entry_id)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ledger entry not found")
+    reason = flag_reason(entry)
+    if reason is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This answer is not flagged; there is nothing to resolve")
+    allowed = {key: kind for key, _, _, kind in ACTIONS[reason]}
+    if payload.action not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"'{payload.action}' does not resolve a '{reason}' flag; use one of: {', '.join(allowed)}",
+        )
+    if resolution_for_entry(entry, db) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This question has already been resolved")
+
+    note = payload.note.strip()
+    if allowed[payload.action] == "reask":
+        # Resolved only by a grounded answer to the question asked again.
+        new_entry = db.get(EvidenceLedger, payload.new_entry_id) if payload.new_entry_id else None
+        if new_entry is None or new_entry.created_at < entry.created_at:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Asking again resolves the question only with the new answer's ledger entry")
+        if flag_reason(new_entry) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The new answer is flagged too, so the question stays in the queue")
+        note = (note + " " if note else "") + f"Asked again as \u201c{new_entry.question.strip()}\u201d; grounded answer {new_entry.id}."
+
+    row = AttentionResolution(
+        question_key=question_key(entry.question),
+        policy_id=entry.policy_id,
+        question=entry.question.strip(),
+        reason=reason,
+        action=payload.action,
+        note=note,
+        latest_entry_id=entry.id,
+        resolved_by=employee.id,
+        resolved_by_name=employee.name if employee.identified else None,
+        resolved_by_role=employee.role,
+        resolved_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return resolution_payload(row)

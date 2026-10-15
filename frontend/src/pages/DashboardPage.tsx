@@ -13,9 +13,7 @@ import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { getDashboardStats } from '../services/api';
 import { DashboardResponse } from '../types';
-import { TheRecord } from '../components/dashboard/TheRecord';
 import { MetricIllustration } from '../components/dashboard/MetricIllustration';
-import { EvidenceQualityPanel } from '../components/dashboard/EvidenceQualityPanel';
 import { NeedsAttention } from '../components/dashboard/NeedsAttention';
 
 interface ActivityTooltipProps {
@@ -196,8 +194,8 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* 2. FOUR METRIC CARDS (EQUAL HEIGHT, EQUAL WIDTH) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 items-stretch">
+      {/* 2. METRIC CARDS (EQUAL HEIGHT, EQUAL WIDTH) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 items-stretch">
         {/* Card 1: Questions Answered */}
         <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
           <div className="flex items-start justify-between gap-3">
@@ -249,64 +247,11 @@ export function DashboardPage() {
             )}
           </div>
         </div>
-
-        {/* Card 3: Evidence Coverage */}
-        <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
-                Evidence Coverage
-              </span>
-              {isInitialLoading ? (
-                <Skeleton className="h-8 w-20 mt-2" />
-              ) : (
-                <div className="text-3xl font-display font-normal text-espresso mt-2">
-                  {data?.metrics.evidence_coverage ?? 0}%
-                </div>
-              )}
-            </div>
-            <MetricIllustration kind="coverage" value={data?.metrics.evidence_coverage ?? 0} />
-          </div>
-          <div className="mt-4 pt-3 border-t border-border/50 text-xs text-muted-foreground">
-            {isInitialLoading ? (
-              <Skeleton className="h-4 w-36" />
-            ) : (
-              <span>Answers backed by policy citations</span>
-            )}
-          </div>
-        </div>
-
-        {/* Card 4: Low Confidence */}
-        <div className="h-full flex flex-col justify-between rounded-xl border border-border bg-card p-5 sm:p-6 shadow-card transition-shadow hover:shadow-dropdown">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
-                Low Confidence
-              </span>
-              {isInitialLoading ? (
-                <Skeleton className="h-8 w-14 mt-2" />
-              ) : (
-                <div className="text-3xl font-display font-normal text-espresso mt-2">
-                  {data?.metrics.low_confidence ?? 0}
-                </div>
-              )}
-            </div>
-            <MetricIllustration kind="lowConfidence" />
-          </div>
-          <div className="mt-4 pt-3 border-t border-border/50 text-xs text-muted-foreground">
-            {isInitialLoading ? (
-              <Skeleton className="h-4 w-36" />
-            ) : (
-              <span>Queries flagged for specialist review</span>
-            )}
-          </div>
-        </div>
       </div>
 
-      {/* 3 & 4. POLICY QUESTIONS ACTIVITY + EVIDENCE QUALITY (IMMEDIATELY BELOW METRIC CARDS) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        {/* Left: Policy Questions Activity Chart (8 cols) */}
-        <div className="lg:col-span-8 min-w-0 h-full flex flex-col justify-between rounded-xl border border-border bg-card p-6 shadow-card">
+      {/* 3. POLICY QUESTIONS ACTIVITY (FULL WIDTH) */}
+      <div>
+        <div className="min-w-0 h-full flex flex-col justify-between rounded-xl border border-border bg-card p-6 shadow-card">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-border/50 min-h-[58px]">
             <div>
               <div className="flex items-center gap-2">
@@ -456,16 +401,10 @@ export function DashboardPage() {
             </span>
           </div>
         </div>
-
-        {/* Right: Evidence Quality (4 cols, EQUAL HEIGHT) */}
-        <EvidenceQualityPanel quality={data?.evidence_quality} isLoading={isInitialLoading} />
       </div>
 
-      {/* 5. NEEDS ATTENTION */}
+      {/* 4. NEEDS ATTENTION */}
       <NeedsAttention timeRange={timeRange} refreshKey={refreshCount} />
-
-      {/* 7. EVIDENCE LEDGER — THE RECORD */}
-      <TheRecord />
     </div>
   );
 }

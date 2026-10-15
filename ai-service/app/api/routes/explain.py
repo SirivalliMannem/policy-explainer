@@ -4,8 +4,16 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.schemas.explain import ExplainRequest, ExplainResponse, InterpretationSchema, InterpretRequest
+from app.schemas.explain import (
+    ExplainRequest,
+    ExplainResponse,
+    InterpretationSchema,
+    InterpretRequest,
+    PlainLanguageRequest,
+    PlainLanguageResponse,
+)
 from app.services.explainer_pipeline import ExplainerPipeline
+from app.services.plain_language import explain_clause
 from app.services.understanding import QueryInterpreter
 
 router = APIRouter(prefix="/api/explain", tags=["explain"])
@@ -46,3 +54,9 @@ def interpret_question(
         previous_question=(payload.previous_question or "").strip() or None,
         mode=mode,
     ).to_dict()
+
+
+@router.post("/plain-language", response_model=PlainLanguageResponse)
+def plain_language(payload: PlainLanguageRequest):
+    """Explain one cited clause in plain words, from its own text only. Never decides coverage."""
+    return explain_clause(payload.heading, payload.form_number, payload.text).__dict__
