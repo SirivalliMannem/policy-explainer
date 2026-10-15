@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from sqlalchemy.orm import Session
 
+from app.services.retrieval.semantic_index import clause_text, semantic_index
 from app.models.policy import (
     Clause,
     CoreBilling,
@@ -46,6 +47,44 @@ STOP_WORDS = {
     "with", "would", "you", "your", "cover", "coverage", "covered",
     "damage", "damages", "loss", "losses",
 }
+
+
+# Meaning-based search (see semantic_index.py). A clause counts as a meaning match when its
+# similarity to the question stands at least MEANING_MIN_LIFT above the question's baseline and
+# within MEANING_BAND of the best match; at most MEANING_MAX distinct clauses are taken this way.
+# Its score scales with that lift: MEANING_FULL_LIFT scores the strong-evidence threshold.
+MEANING_MIN_LIFT = 0.12
+MEANING_BAND = 0.05
+MEANING_MAX = 3
+MEANING_FULL_LIFT = 0.18
+STRONG_EVIDENCE_SCORE = 12.0  # the same threshold as explainer_pipeline.STRONG_EVIDENCE_SCORE
+MEANING_SCORE_CAP = 15.0
+BOTH_BONUS = 2.0
+
+
+def meaning_points(lifts: dict[str, float], clauses: list) -> dict[str, float]:
+    """Scores for the clauses whose meaning stands out for the question, by clause id."""
+    if not lifts:
+        return {}
+    by_text: dict[str, float] = {}
+    for clause in clauses:
+        lift = lifts.get(clause.id)
+        if lift is not None:
+            text = clause_text(clause)
+            by_text[text] = max(lift, by_text.get(text, lift))
+    best = max(by_text.values(), default=0.0)
+    chosen = sorted(
+        (t for t, lift in by_text.items() if lift >= MEANING_MIN_LIFT and lift >= best - MEANING_BAND),
+        key=lambda t: -by_text[t],
+    )[:MEANING_MAX]
+    points: dict[str, float] = {}
+    for clause in clauses:
+        text = clause_text(clause)
+        if text in chosen:
+            points[clause.id] = round(
+                min(STRONG_EVIDENCE_SCORE * by_text[text] / MEANING_FULL_LIFT, MEANING_SCORE_CAP), 1
+            )
+    return points
 
 
 POLICY_NUMBER_REFERENCE = re.compile(r"\b(?:HO|PA)[-\s]?\d{4}(?:[-\s]\d{4})?\b", re.IGNORECASE)
@@ -271,6 +310,16 @@ class EvidenceRetriever:
         all_candidate_clauses = [(c, True) for c in customer_clauses] + [(c, False) for c in product_clauses]
         stats["clauses_searched"] = len(all_candidate_clauses)
 
+        # Meaning-based search over the same clauses, alongside the word match below.
+        candidate_clauses = [c for c, _ in all_candidate_clauses]
+        lifts = semantic_index.lifts(q_clean, candidate_clauses, db.query(Clause).all()) if q_clean else None
+        meaning = meaning_points(lifts or {}, candidate_clauses)
+        stats["meaning_search"] = {
+            "status": "used" if lifts is not None else "unavailable",
+            "model": semantic_index.model_name,
+            **({} if lifts is not None else {"reason": semantic_index.unavailable_reason or "no question text"}),
+        }
+
         for clause, is_customer_form in all_candidate_clauses:
             clause_keywords = set(k.lower() for k in (clause.keywords or []))
             heading_tokens = _tokenize(clause.heading)
@@ -315,6 +364,15 @@ class EvidenceRetriever:
                 elif "04 95" in clause.form_number:
                     score += 8.0
 
+            # Meaning match: the clause is about what the question describes, whatever words it uses.
+            word_score = score
+            meaning_score = meaning.get(clause.id, 0.0)
+            if meaning_score:
+                score = max(word_score, meaning_score) + (BOTH_BONUS if word_score >= 3.0 else 0.0)
+            matched_by = (
+                "words and meaning" if meaning_score and word_score >= 3.0 else "meaning" if meaning_score else "words"
+            )
+
             # PE-02 Ranking Rule: customer's own form outranks generic product wording
             if score >= 3.0:
                 if is_customer_form:
@@ -337,6 +395,8 @@ class EvidenceRetriever:
                             "scope": clause.scope,
                             "clause_type": clause.clause_type,
                             "pattern_code": clause.pattern_code,
+                            "matched_by": matched_by,
+                            **({"meaning_lift": round(lifts[clause.id], 3)} if lifts and clause.id in lifts and meaning_score else {}),
                         },
                     )
                 )
@@ -478,4 +538,8 @@ class EvidenceRetriever:
             if len(deduped) >= limit:
                 break
 
+        if "meaning_search" in stats:
+            kinds = [item.metadata.get("matched_by") for item in deduped if item.source_type == "clause"]
+            stats["meaning_search"]["found_by_meaning"] = kinds.count("meaning")
+            stats["meaning_search"]["words_and_meaning"] = kinds.count("words and meaning")
         return deduped, stats

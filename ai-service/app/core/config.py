@@ -42,6 +42,13 @@ class Settings:
     # "rules" (deterministic only, no extra model call) or "off".
     QUERY_INTERPRETER: str = os.getenv("QUERY_INTERPRETER", "auto")
 
+    # Meaning-based clause search alongside word match: a small local embedding model (no API key).
+    # "on" (default) or "off". The model is downloaded once into SEMANTIC_CACHE_DIR
+    # (default ai-service/.model_cache); without it, search uses word match only.
+    SEMANTIC_SEARCH: str = os.getenv("SEMANTIC_SEARCH", "on")
+    SEMANTIC_MODEL: str = os.getenv("SEMANTIC_MODEL", "BAAI/bge-small-en-v1.5")
+    SEMANTIC_CACHE_DIR: str = os.getenv("SEMANTIC_CACHE_DIR", "")
+
     # Legacy compatibility aliases
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "")

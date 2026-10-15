@@ -199,6 +199,7 @@ export interface QuestionResolution {
   /** Ambiguous, but every candidate belongs to one customer: answer the question for each. */
   answer_all?: boolean;
   customer_verification?: CustomerVerification | null;
+  term_selection?: TermSelection | null;
 }
 
 export interface CitationItem {
@@ -229,6 +230,17 @@ export interface EvidenceItem {
   relevance_score?: number | null;
   evidence_index?: number | null;
   scope?: EvidenceScope | string | null;
+  /** Clauses only: how the search found it. */
+  matched_by?: 'words' | 'meaning' | 'words and meaning' | string | null;
+}
+
+/** The meaning-based clause search that runs alongside word match. */
+export interface MeaningSearch {
+  status: 'used' | 'unavailable' | string;
+  model?: string;
+  reason?: string;
+  found_by_meaning?: number;
+  words_and_meaning?: number;
 }
 
 export type GuardrailCheckStatus = 'passed' | 'warning' | 'failed';
@@ -248,6 +260,22 @@ export interface CustomerVerification {
   message: string;
 }
 
+/** The policy term in force on the date of loss a question gives (or why none was). */
+export interface TermSelection {
+  status: 'matched' | 'no_term' | string;
+  loss_date: string;
+  date_text: string;
+  is_loss: boolean;
+  year_assumed: boolean;
+  policy_number: string;
+  policy_id?: string;
+  term_number?: number;
+  effective_date?: string;
+  expiration_date?: string;
+  term_status?: string;
+  message: string;
+}
+
 export interface RetrievalSummary {
   query_terms?: string[];
   coverages_searched?: number;
@@ -263,6 +291,35 @@ export interface RetrievalSummary {
   answer_type?: string;
   /** How the answer's customer was verified, recorded with the answer. */
   customer_verification?: CustomerVerification | null;
+  /** The term in force on the question's date of loss, recorded with the answer. */
+  term_selection?: TermSelection | null;
+  /** A several-facts question: each part, and the source it was answered from. */
+  parts?: { label: string; question: string; source: 'records' | 'forms' | 'wording' | string; found: boolean }[];
+  /** Meaning-based clause search alongside word match. */
+  meaning_search?: MeaningSearch | null;
+  /** Company guidance articles searched next to the policy wording, shown apart from the answer. */
+  company_guidance?: CompanyGuidance | null;
+}
+
+/** One approved company article, shown exactly as stored and cited as [G1], [G2]. */
+export interface GuidanceArticle {
+  ref: string;
+  document_id: string;
+  title: string;
+  collection: string;
+  kind: string;
+  body: string;
+  spoken: string;
+  matched_on: string[];
+  version: string;
+  approved_by: string;
+}
+
+export interface CompanyGuidance {
+  /** False when no policy answer was delivered, so guidance was not offered. */
+  searched: boolean;
+  articles: GuidanceArticle[];
+  reason?: string;
 }
 
 export type AnswerOutcome = 'answered' | 'needs_review' | 'insufficient_evidence';
@@ -544,6 +601,8 @@ export interface LedgerRow {
   provider?: string | null;
   is_fallback?: boolean | null;
   confidence: string;
+  /** Share of the confidence criteria met (same rule as the chat badge); null where it does not apply. */
+  confidence_percent?: number | null;
   guardrail_status: string;
   outcome: AnswerOutcome | string;
   reviewer?: string | null;

@@ -2,15 +2,22 @@
 // Every value comes from the pipeline's own response or the evidence ledger; nothing is estimated
 // except the token figure, which is labelled as an estimate. Imports only pure modules so
 // `node --test` can load it directly.
-import type { AskedBy, CustomerVerification, GuardrailCheck, QuestionAnswerResponse } from '../types';
+import type {
+  AskedBy,
+  CompanyGuidance,
+  CustomerVerification,
+  GuardrailCheck,
+  MeaningSearch,
+  QuestionAnswerResponse,
+} from '../types';
 import type { StageKey, StageStatus } from './explainer';
-import { STRONG_EVIDENCE_SCORE, evidencePercent, isRecordAnswer, topEvidencePercent } from './confidence.ts';
+import { evidencePercent, isRecordAnswer, searchedEvidence, topEvidencePercent } from './confidence.ts';
 
 export type StepStatus = 'pending' | 'running' | 'done' | 'warning' | 'failed' | 'skipped';
 
 export type StepLine =
   | { kind: 'text'; text: string; mono?: string }
-  | { kind: 'passage'; form: string; page?: number | null; score: number; percent: number }
+  | { kind: 'passage'; form: string; page?: number | null; score: number; percent: number; matchedBy?: string | null }
   | { kind: 'check'; ok: boolean; text: string }
   | { kind: 'result'; tone: 'passed' | 'failed' | 'attention'; text: string }
   | { kind: 'warning'; text: string }
@@ -78,6 +85,42 @@ export interface ProcessInput {
   askedBy?: AskedBy | null;
   /** How the policy was identified in this session ("matched on policy number"), when known. */
   contextDetail?: string | null;
+  /** The customer verification made for the question in progress (live runs). */
+  verification?: CustomerVerification | null;
+}
+
+/** What a customer was matched on, in words. */
+const MATCHED_ON: Record<string, string> = {
+  customer_name: 'customer name',
+  surname: 'surname',
+  first_name: 'first name',
+  policy_number: 'policy number',
+  claim_number: 'claim number',
+  account_number: 'account number',
+  email: 'email address',
+  phone: 'phone number',
+  vin: 'VIN',
+  plate: 'license plate',
+  address: 'address',
+  vehicle: 'vehicle',
+  loss_date: 'date of loss',
+  selected_policy: 'the selected policy',
+  conversation: 'the customer already selected in this conversation',
+};
+
+/** Verified: the customer, then where they were found in the records, then their account ID. */
+function verificationLines(v: CustomerVerification): StepLine[] {
+  if (v.status !== 'verified' || !v.customers.length) {
+    return [{ kind: 'result', tone: v.status === 'not_found' ? 'failed' : 'attention', text: v.message }];
+  }
+  const customer = v.customers[0];
+  const on = MATCHED_ON[v.matched_on ?? ''] ?? (v.matched_on ? v.matched_on.replace(/_/g, ' ') : 'the question');
+  const showReference = v.reference && v.matched_on !== 'conversation' && v.reference !== customer.name;
+  return [
+    { kind: 'result', tone: 'passed', text: `Verified: ${customer.name}` },
+    { kind: 'text', text: `Found in the customer records, matched on ${on}${showReference ? ` (${v.reference})` : ''}` },
+    { kind: 'text', text: 'Account ID ', mono: customer.account_number || customer.customer_id },
+  ];
 }
 
 const LIVE_STATUS: Record<StageStatus, StepStatus> = {
@@ -96,7 +139,8 @@ function liveSteps(stages: Record<StageKey, LiveStage>, input: ProcessInput): Pr
     const status = LIVE_STATUS[stage.status];
     const lines: StepLine[] = [];
     if (key === 'verify' && status === 'done') {
-      if (stage.detail) lines.push({ kind: 'result', tone: 'passed', text: `Verified: ${stage.detail}` });
+      if (input.verification?.status === 'verified') lines.push(...verificationLines(input.verification));
+      else if (stage.detail) lines.push({ kind: 'result', tone: 'passed', text: `Verified: ${stage.detail}` });
     } else if (key === 'context' && status === 'done') {
       if (stage.detail) lines.push({ kind: 'text', text: stage.detail });
       lines.push(asker(input.askedBy));
@@ -133,31 +177,31 @@ function verifyStep(result: QuestionAnswerResponse): ProcessStep {
       lines: [{ kind: 'text', text: 'Customer verification was not recorded for this answer.' }],
     };
   }
-  const lines: StepLine[] = [];
-  if (v.status === 'verified') {
-    lines.push({ kind: 'result', tone: 'passed', text: `Verified: ${v.message}` });
-    for (const c of v.customers) {
-      lines.push({ kind: 'text', text: `${c.name}${c.account_number ? ' · ' : ''}`, mono: c.account_number ?? undefined });
-    }
-  } else {
-    lines.push({ kind: 'result', tone: v.status === 'not_found' ? 'failed' : 'attention', text: v.message });
-  }
-  return { key: 'verify', label: STEP_LABELS.verify, status: v.status === 'verified' ? 'done' : 'warning', lines };
+  return { key: 'verify', label: STEP_LABELS.verify, status: v.status === 'verified' ? 'done' : 'warning', lines: verificationLines(v) };
 }
 
 function contextLines(result: QuestionAnswerResponse, input: ProcessInput): StepLine[] {
   const lines: StepLine[] = [];
-  if (input.contextDetail) {
-    lines.push({ kind: 'text', text: input.contextDetail });
-  } else if (result.answer_type === 'portfolio') {
+  if (result.answer_type === 'portfolio') {
     lines.push({ kind: 'text', text: 'Portfolio lookup · answered from policy records' });
   } else if (result.policy_context) {
     lines.push({
       kind: 'text',
       text: `Policy ${result.policy_context.policy_number} · ${result.policy_context.customer_name}`,
     });
+  } else if (input.contextDetail) {
+    lines.push({ kind: 'text', text: input.contextDetail });
   } else {
     lines.push({ kind: 'text', text: 'Policy: not recorded' });
+  }
+  // The term in force on the question's date of loss (or why none was).
+  const term = result.retrieval?.term_selection;
+  if (term && !input.contextDetail?.includes(term.message)) {
+    lines.push(
+      term.status === 'matched'
+        ? { kind: 'result', tone: 'passed', text: term.message }
+        : { kind: 'result', tone: 'attention', text: term.message }
+    );
   }
   lines.push(asker(input.askedBy ?? result.asked_by));
   return lines;
@@ -210,7 +254,7 @@ function citationsStep(result: QuestionAnswerResponse, noAnswer: boolean): Proce
     kind: 'result',
     tone: ok ? 'passed' : verified ? 'attention' : 'failed',
     text: ok
-      ? `Verified: ${plural(verified, 'citation')} match the retrieved evidence.`
+      ? `Verified: ${plural(verified, 'citation')} ${verified === 1 ? 'matches' : 'match'} the retrieved evidence.`
       : verified
       ? `Needs attention: ${plural(verified, 'citation')} verified, but not every citation check passed.`
       : 'Failed: no citation could be matched to the retrieved evidence.',
@@ -258,9 +302,44 @@ function guardrailsStep(result: QuestionAnswerResponse, ms: number | undefined, 
     result_line = { kind: 'result', tone: 'attention', text: `Needs attention: ${names(attention)}.` };
   } else {
     status = 'done';
-    result_line = { kind: 'result', tone: 'passed', text: `Passed: all ${plural(checks.length, 'guardrail check')} passed.` };
+    result_line = {
+      kind: 'result',
+      tone: 'passed',
+      text: checks.length === 1 ? 'Passed: the guardrail check passed.' : `Passed: all ${plural(checks.length, 'guardrail check')} passed.`,
+    };
   }
   return { key: 'validate', label: STEP_LABELS.validate, status, ms, lines: [result_line, ...checks.map(checkLine)] };
+}
+
+/** Meaning-based search alongside word match: what it added, or why it did not run. */
+export function meaningLines(meaning?: MeaningSearch | null): StepLine[] {
+  if (!meaning) return []; // answers recorded before meaning search existed
+  if (meaning.status !== 'used') {
+    return [{ kind: 'warning', text: `Meaning search unavailable${meaning.reason ? ` (${meaning.reason})` : ''}: word match only` }];
+  }
+  const byMeaning = meaning.found_by_meaning ?? 0;
+  const both = meaning.words_and_meaning ?? 0;
+  if (!byMeaning && !both) return [{ kind: 'text', text: 'Meaning search: no passage stood out by meaning' }];
+  const parts = [
+    byMeaning ? `${plural(byMeaning, 'passage')} found by meaning only` : '',
+    both ? `${plural(both, 'passage')} matched by words and meaning` : '',
+  ].filter(Boolean);
+  return [{ kind: 'text', text: `Meaning search: ${parts.join(', ')}` }];
+}
+
+/** Company guidance searched next to the policy wording: which articles matched, and on which words. */
+export function guidanceLines(guidance?: CompanyGuidance | null): StepLine[] {
+  if (!guidance) return []; // answers recorded before guidance was searched
+  if (!guidance.searched) {
+    return [{ kind: 'text', text: 'Company guidance: not shown, because no policy answer was delivered' }];
+  }
+  if (!guidance.articles.length) return [{ kind: 'text', text: 'Company guidance: no article on this topic' }];
+  return [
+    { kind: 'text', text: `Company guidance: ${plural(guidance.articles.length, 'article')} matched` },
+    ...guidance.articles.map(
+      (a): StepLine => ({ kind: 'text', text: `${a.ref} · ${a.title} (matched: ${a.matched_on.join(', ')})` })
+    ),
+  ];
 }
 
 function portfolioSteps(result: QuestionAnswerResponse, input: ProcessInput): ProcessStep[] {
@@ -299,6 +378,18 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
   const noEvidence = result.status === 'insufficient_evidence' || result.evidence.length === 0;
 
   const retrieveLines: StepLine[] = [];
+  // A several-facts question: each part and where it was answered from.
+  const PART_SOURCE: Record<string, string> = {
+    records: 'read from the policy records',
+    forms: 'read from the attached forms',
+    wording: 'clause search and the language model',
+  };
+  (r.parts ?? []).forEach((part, i) => {
+    retrieveLines.push({
+      kind: 'text',
+      text: `Part ${i + 1} · ${part.label}: ${PART_SOURCE[part.source] ?? part.source}${part.found ? '' : ' (not found)'}`,
+    });
+  });
   if (records) {
     retrieveLines.push({ kind: 'result', tone: 'passed', text: 'Evidence confidence: exact record match. Values were read from the policy’s own records.' });
   } else if (r.clauses_searched !== undefined || r.forms_searched !== undefined) {
@@ -307,6 +398,7 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
       kind: 'text',
       text: `Searched ${plural(passages, 'passage')} across ${plural(r.forms_searched ?? 0, 'form')}`,
     });
+    retrieveLines.push(...meaningLines(r.meaning_search));
   } else {
     retrieveLines.push({ kind: 'text', text: 'Search counts not recorded for this answer.' });
   }
@@ -315,14 +407,13 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
   } else {
     const top = topEvidencePercent(result);
     if (!records && top !== null) {
-      const topScore = Math.max(...result.evidence.map((e) => e.relevance_score ?? 0));
       retrieveLines.push({
         kind: 'result',
         tone: top >= 100 ? 'passed' : 'attention',
-        text: `Evidence confidence: ${top}%. The strongest passage scores ${topScore.toFixed(1)} against the strong-evidence threshold of ${STRONG_EVIDENCE_SCORE}.`,
+        text: `Evidence confidence: ${top}%`,
       });
     }
-    for (const item of result.evidence) {
+    for (const item of searchedEvidence(result.evidence)) {
       if (records || item.relevance_score === null || item.relevance_score === undefined) continue;
       retrieveLines.push({
         kind: 'passage',
@@ -330,9 +421,12 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
         page: item.page,
         score: item.relevance_score,
         percent: evidencePercent(item.relevance_score) ?? 0,
+        ...(item.matched_by ? { matchedBy: item.matched_by } : {}),
       });
     }
   }
+
+  retrieveLines.push(...guidanceLines(r.company_guidance));
 
   const steps: ProcessStep[] = [
     verifyStep(result),

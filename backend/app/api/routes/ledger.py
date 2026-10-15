@@ -27,6 +27,7 @@ from app.schemas.ledger import (
     LedgerSummary,
 )
 from app.services.ledger.ledger_service import answer_outcome
+from app.services.confidence import confidence_percent
 
 router = APIRouter(prefix="/api/ledger", tags=["evidence-ledger"])
 
@@ -93,6 +94,14 @@ def _row(entry: EvidenceLedger, policy: Optional[CorePolicy], account: Optional[
         provider=entry.provider,
         is_fallback=entry.is_fallback,
         confidence=entry.confidence,
+        confidence_percent=confidence_percent(
+            entry.confidence,
+            (entry.retrieval or {}).get("answer_type"),
+            entry.retrieved_evidence or [],
+            entry.citations or [],
+            entry.guardrail_checks or [],
+            entry.guardrail_status,
+        ),
         guardrail_status=entry.guardrail_status,
         outcome=_outcome(entry),
         # No review workflow exists yet, so no reviewer is ever recorded.

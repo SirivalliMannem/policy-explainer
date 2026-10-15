@@ -1,5 +1,5 @@
 import { ApiError } from '../services/api';
-import type { AskedBy, CitationItem, EvidenceItem, Interpretation, QuestionAnswerResponse } from '../types';
+import type { AskedBy, CitationItem, CustomerVerification, EvidenceItem, Interpretation, QuestionAnswerResponse } from '../types';
 
 // ==========================================
 // Labels & formatting
@@ -240,6 +240,8 @@ export interface ProcessState {
   askedBy?: AskedBy | null;
   askedAt?: string | null;
   contextDetail?: string | null;
+  /** The customer verification made for this question (step 1). */
+  verification?: CustomerVerification | null;
 }
 
 export function freshStages(): Record<StageKey, StageState> {

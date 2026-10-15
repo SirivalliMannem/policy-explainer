@@ -14,7 +14,8 @@ export function OutcomeBadge({ outcome }: { outcome: string }) {
   );
 }
 
-export function ConfidenceBadge({ confidence }: { confidence: string }) {
+/** "HIGH (100%)": the level, with the share of confidence criteria met when the backend gives one. */
+export function ConfidenceBadge({ confidence, percent }: { confidence: string; percent?: number | null }) {
   const style =
     confidence === 'high'
       ? 'text-emerald-700'
@@ -22,6 +23,9 @@ export function ConfidenceBadge({ confidence }: { confidence: string }) {
       ? 'text-amber-700'
       : 'text-[#64748B]';
   return (
-    <span className={`whitespace-nowrap text-[10.5px] font-bold uppercase tracking-wider ${style}`}>{confidence}</span>
+    <span className={`whitespace-nowrap text-[10.5px] font-bold uppercase tracking-wider ${style}`}>
+      {confidence}
+      {percent !== null && percent !== undefined ? ` (${percent}%)` : ''}
+    </span>
   );
 }

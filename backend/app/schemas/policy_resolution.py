@@ -73,6 +73,9 @@ class QuestionResolution(BaseModel):
     # True when an ambiguous match is several policies of ONE customer: the question is answered for
     # each of them together. Matches across different customers are still asked about.
     answer_all: bool = False
+    # When the question gives a date of loss: the term in force that day (status matched), or why
+    # none was (status no_term). The answer then uses that term and says which one it used.
+    term_selection: Optional[dict[str, Any]] = None
     # Step 1 of answering: the customer, verified before any policy information is retrieved.
     customer_verification: Optional[CustomerVerification] = None
     # The employee's recently checked policies, offered when a question names no policy.

@@ -135,6 +135,18 @@ test('several matching customers wait for the employee at verification', () => {
   assert.ok(steps.slice(1).every((s) => s.status === 'pending'), 'nothing after verification runs');
 });
 
+test('a live run shows the verified customer the same way', () => {
+  const steps = buildProcessSteps({
+    verification,
+    stages: stages({ verify: { status: 'completed', detail: verification.message }, context: { status: 'processing' } }),
+  });
+  assert.deepEqual(step(steps, 'verify').lines.map((l) => ('text' in l ? l.text : '')), [
+    'Verified: Margaret Chen',
+    'Found in the customer records, matched on policy number (HO-2847-1193)',
+    'Account ID ',
+  ]);
+});
+
 test('while running, only real values are shown', () => {
   const steps = buildProcessSteps({
     askedBy: asker,
@@ -158,11 +170,16 @@ test('a stored answer shows the recorded verification, evidence confidence, cita
   const steps = buildProcessSteps({ result: answer() });
   const verify = step(steps, 'verify');
   assert.equal(verify.status, 'done');
-  assert.deepEqual(results(verify), [{ kind: 'result', tone: 'passed', text: `Verified: ${verification.message}` }]);
+  // Verified customer, then where they were found in the records, then their account ID.
+  assert.deepEqual(verify.lines, [
+    { kind: 'result', tone: 'passed', text: 'Verified: Margaret Chen' },
+    { kind: 'text', text: 'Found in the customer records, matched on policy number (HO-2847-1193)' },
+    { kind: 'text', text: 'Account ID ', mono: 'ACCT-100241' },
+  ]);
 
   const retrieve = step(steps, 'retrieve');
   assert.deepEqual(results(retrieve), [
-    { kind: 'result', tone: 'passed', text: 'Evidence confidence: 100%. The strongest passage scores 24.0 against the strong-evidence threshold of 12.' },
+    { kind: 'result', tone: 'passed', text: 'Evidence confidence: 100%' },
   ]);
   assert.deepEqual(retrieve.lines.filter((l) => l.kind === 'passage'), [
     { kind: 'passage', form: 'HO 04 95', page: 1, score: 24, percent: 100 },
@@ -259,4 +276,133 @@ test('details missing from older stored answers say so instead of inventing valu
   assert.deepEqual(step(steps, 'generate').lines[0], { kind: 'text', text: 'Model: not recorded' });
   assert.ok(step(steps, 'deliver').lines.some((l) => l.kind === 'warning'));
   assert.deepEqual(step(steps, 'context').lines.at(-1), { kind: 'text', text: 'Asked by: not recorded' });
+});
+
+test('a dated question shows the term in force on the loss date in the policy step', () => {
+  const message = 'Using term 1 of HO-2847-1193 (March 1, 2025 – March 1, 2026), the term in force on the loss date, November 3, 2025.';
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: {
+        customer_verification: verification,
+        term_selection: { status: 'matched', loss_date: '2025-11-03', date_text: '2025-11-03', is_loss: true, year_assumed: false, policy_number: 'HO-2847-1193', term_number: 1, message },
+      },
+    }),
+  });
+  assert.deepEqual(results(step(steps, 'context')), [{ kind: 'result', tone: 'passed', text: message }]);
+});
+
+test('a several-facts answer lists each part and its source, and record facts are not scored passages', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: {
+        answer_type: 'multi_part',
+        customer_verification: verification,
+        parts: [
+          { label: 'Deductible', question: 'What is the wind deductible', source: 'records', found: true },
+          { label: 'What the policy wording says', question: 'does it cover hail', source: 'wording', found: true },
+        ],
+      },
+      evidence: [
+        { source_type: 'coverage', source_id: 'cov', content: 'Windstorm or Hail — 2%', relevance_score: 1, scope: 'policy_record' },
+        { source_type: 'clause', source_id: 'c1', form_number: 'HO 00 03', page: 9, content: 'Hail…', relevance_score: 15 },
+      ],
+    }),
+  });
+  const retrieve = step(steps, 'retrieve');
+  assert.deepEqual(retrieve.lines.slice(0, 2), [
+    { kind: 'text', text: 'Part 1 · Deductible: read from the policy records' },
+    { kind: 'text', text: 'Part 2 · What the policy wording says: clause search and the language model' },
+  ]);
+  assert.deepEqual(retrieve.lines.filter((l) => l.kind === 'passage'), [
+    { kind: 'passage', form: 'HO 00 03', page: 9, score: 15, percent: 100 },
+  ]);
+});
+
+const guidanceArticle = {
+  ref: 'G1',
+  document_id: 'doc-1',
+  title: 'Water backup and sump overflow cover',
+  collection: 'Homeowners — what it covers',
+  kind: 'product_article',
+  body: 'Water that backs up through sewers or drains…',
+  spoken: 'That one is an add-on…',
+  matched_on: ['backup', 'sewer', 'basement'],
+  version: '1',
+  approved_by: 'Product & Service Content',
+};
+
+test('company guidance is listed in the retrieve step with the words it matched on', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: { ...answer().retrieval, company_guidance: { searched: true, articles: [guidanceArticle] } },
+      guardrail_checks: [
+        ...answer().guardrail_checks,
+        {
+          name: 'guidance_not_overriding_form',
+          status: 'passed',
+          detail: 'Guidance does not override the form: the policy answer cites only policy forms and records; 1 guidance article is shown separately.',
+        },
+      ],
+    }),
+  });
+  const retrieve = step(steps, 'retrieve').lines;
+  assert.deepEqual(retrieve.slice(-2), [
+    { kind: 'text', text: 'Company guidance: 1 article matched' },
+    { kind: 'text', text: 'G1 · Water backup and sump overflow cover (matched: backup, sewer, basement)' },
+  ]);
+  const guardrails = step(steps, 'validate');
+  assert.equal(guardrails.status, 'done');
+  assert.ok(
+    guardrails.lines.some((l) => l.kind === 'check' && l.ok && l.text.startsWith('Guidance does not override the form'))
+  );
+});
+
+test('no matching article, a withheld answer, and older answers each say so', () => {
+  const lines = (company_guidance: unknown) =>
+    step(buildProcessSteps({ result: answer({ retrieval: { ...answer().retrieval, company_guidance } as never }) }), 'retrieve').lines;
+  assert.deepEqual(lines({ searched: true, articles: [] }).at(-1), { kind: 'text', text: 'Company guidance: no article on this topic' });
+  assert.deepEqual(lines({ searched: false, articles: [] }).at(-1), {
+    kind: 'text',
+    text: 'Company guidance: not shown, because no policy answer was delivered',
+  });
+  assert.ok(!lines(undefined).some((l) => 'text' in l && l.text.startsWith('Company guidance')));
+});
+
+test('meaning search: passages found by meaning are tagged, and the retrieve step says what it added', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      retrieval: {
+        ...answer().retrieval,
+        meaning_search: { status: 'used', model: 'BAAI/bge-small-en-v1.5', found_by_meaning: 1, words_and_meaning: 1 },
+      },
+      evidence: [
+        { source_type: 'clause', source_id: 'c1', form_number: 'HO 00 03', page: 7, content: '…', relevance_score: 18.1, matched_by: 'meaning' },
+        { source_type: 'clause', source_id: 'c2', form_number: 'HO 00 03', page: 19, content: '…', relevance_score: 14, matched_by: 'words and meaning' },
+      ],
+    }),
+  });
+  const lines = step(steps, 'retrieve').lines;
+  assert.ok(
+    lines.some((l) => l.kind === 'text' && l.text === 'Meaning search: 1 passage found by meaning only, 1 passage matched by words and meaning')
+  );
+  assert.deepEqual(
+    lines.filter((l) => l.kind === 'passage').map((l) => (l.kind === 'passage' ? l.matchedBy : null)),
+    ['meaning', 'words and meaning']
+  );
+});
+
+test('meaning search unavailable or finding nothing says so; older answers show nothing', () => {
+  const lines = (meaning_search: unknown) =>
+    step(buildProcessSteps({ result: answer({ retrieval: { ...answer().retrieval, meaning_search } as never }) }), 'retrieve').lines;
+  assert.ok(
+    lines({ status: 'unavailable', reason: 'switched off (SEMANTIC_SEARCH=off)' }).some(
+      (l) => l.kind === 'warning' && l.text === 'Meaning search unavailable (switched off (SEMANTIC_SEARCH=off)): word match only'
+    )
+  );
+  assert.ok(
+    lines({ status: 'used', found_by_meaning: 0, words_and_meaning: 0 }).some(
+      (l) => l.kind === 'text' && l.text === 'Meaning search: no passage stood out by meaning'
+    )
+  );
+  assert.ok(!lines(undefined).some((l) => 'text' in l && l.text.startsWith('Meaning search')));
 });

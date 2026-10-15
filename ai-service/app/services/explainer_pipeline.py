@@ -210,6 +210,7 @@ class ExplainerPipeline:
                 relevance_score=item.relevance_score,
                 evidence_index=index,
                 scope=_evidence_scope(item),
+                matched_by=item.metadata.get("matched_by") if item.source_type == "clause" else None,
             )
             for index, item in enumerate(evidence, start=1)
         ]

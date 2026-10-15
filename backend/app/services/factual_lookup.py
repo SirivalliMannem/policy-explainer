@@ -42,7 +42,8 @@ FACTUAL_BILLING_PATTERN = re.compile(
 FACTUAL_CLAIM_STATUS_PATTERN = re.compile(
     r"\b(?:claim\s+status|status\s+of\s+(?:the\s+|my\s+)?claim|is\s+(?:the\s+|my\s+)?claim\s+open|is\s+(?:the\s+|my\s+)?claim\s+closed"
     r"|claim\b[^.?!]{0,40}\b(?:still\s+)?(?:open|closed|settled|pending|resolved)"
-    r"|where\s+(?:is|are)\s+(?:the\s+|my\s+|this\s+)?claims?)\b",
+    r"|where\s+(?:is|are)\s+(?:the\s+|my\s+|this\s+)?claims?"
+    r"|(?:open|pending|active|any|existing)\s+claims?|claims?\s+(?:on\s+(?:file|record|this\s+policy)|filed))\b",
     re.IGNORECASE,
 )
 FACTUAL_ADJUSTER_PATTERN = re.compile(

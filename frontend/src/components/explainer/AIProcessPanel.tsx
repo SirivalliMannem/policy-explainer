@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowUpRight, Check, Circle, FileText, Loader2, Minus, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Circle, FileText, Loader2, Minus, X } from 'lucide-react';
 import type { AskedBy, QuestionAnswerResponse } from '../../types';
 import type { ProcessState } from '../../lib/explainer';
 import { citationLine, distinctSources, sourceKindLabel, sourceTitle } from '../../lib/explainer';
@@ -56,6 +56,14 @@ function Line({ line }: { line: StepLine }) {
           <span className="min-w-0 flex-1 truncate">
             <span className="font-mono">{line.form}</span>
             {line.page ? <span className="text-muted-foreground"> · p.{line.page}</span> : null}
+            {line.matchedBy && line.matchedBy !== 'words' && (
+              <span
+                className="ml-1.5 rounded border border-[#BFDBFE] bg-[#F0F7FF] px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-[#1D4ED8]"
+                title={line.matchedBy === 'meaning' ? 'Found by meaning; no words in common with the question' : 'Matched by words and by meaning'}
+              >
+                {line.matchedBy === 'meaning' ? 'meaning' : 'words + meaning'}
+              </span>
+            )}
           </span>
           <span className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
             <span className="block h-full rounded-full bg-orange-btn" style={{ width: `${line.percent}%` }} />
@@ -174,6 +182,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /** Sources, guardrail result and audit record, shown once an answer is complete. */
 function AnswerRecord({ result, askedBy, askedAt }: { result: QuestionAnswerResponse; askedBy?: AskedBy | null; askedAt?: string | null }) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const sources = distinctSources(result.citations, result.evidence);
   const policy = result.policy_context
     ? `${result.policy_context.policy_number} · ${result.policy_context.customer_name}`
@@ -182,36 +191,51 @@ function AnswerRecord({ result, askedBy, askedAt }: { result: QuestionAnswerResp
     : 'Not recorded';
   return (
     <>
-      <Section title={`Sources cited (${sources.length})`}>
-        {sources.length === 0 ? (
-          <p className="text-[12.5px] text-muted-foreground">This answer cites no sources.</p>
-        ) : (
-          <ol className="space-y-3">
-            {sources.map(({ key, evidence }, i) => (
-              <li key={key} className="rounded-lg border border-border bg-[#F8FAFC] p-3">
-                <div className="flex items-start gap-2">
-                  <span className="mt-px inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-orange-btn px-1.5 text-[10.5px] font-bold text-white">
-                    {i + 1}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-[12.5px] font-semibold text-espresso">{sourceTitle(evidence)}</div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-1 font-mono text-[11px] text-muted-foreground">
-                      <FileText className="h-3 w-3" aria-hidden="true" />
-                      {citationLine(evidence) || sourceKindLabel(evidence.source_type)}
-                      {evidence.section && <span>· {evidence.section}</span>}
+      <section className="border-t border-border px-5 py-4">
+        <button
+          type="button"
+          onClick={() => setSourcesOpen((prev) => !prev)}
+          aria-expanded={sourcesOpen}
+          className="flex w-full items-center justify-between text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn rounded cursor-pointer"
+        >
+          <h3 className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-orange-btn">
+            {`Sources cited (${sources.length})`}
+          </h3>
+          <ChevronDown
+            className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${
+              sourcesOpen ? 'rotate-180' : ''
+            }`}
+            aria-hidden="true"
+          />
+        </button>
+        {sourcesOpen && (
+          <div className="mt-3">
+            {sources.length === 0 ? (
+              <p className="text-[12.5px] text-muted-foreground">This answer cites no sources.</p>
+            ) : (
+              <ol className="space-y-3">
+                {sources.map(({ key, evidence }, i) => (
+                  <li key={key} className="rounded-lg border border-border bg-[#F8FAFC] p-3">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-px inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-orange-btn px-1.5 text-[10.5px] font-bold text-white">
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-[12.5px] font-semibold text-espresso">{sourceTitle(evidence)}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1 font-mono text-[11px] text-muted-foreground">
+                          <FileText className="h-3 w-3" aria-hidden="true" />
+                          {citationLine(evidence) || sourceKindLabel(evidence.source_type)}
+                          {evidence.section && <span>· {evidence.section}</span>}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-                {evidence.content && (
-                  <blockquote className="mt-2 border-l-2 border-[#FDBA74] pl-2.5 font-serif text-[12.5px] leading-relaxed text-espresso">
-                    {evidence.content.length > 420 ? `${evidence.content.slice(0, 420)}…` : evidence.content}
-                  </blockquote>
-                )}
-              </li>
-            ))}
-          </ol>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
         )}
-      </Section>
+      </section>
 
       <Section title="Guardrail result">
         <dl>
@@ -356,6 +380,7 @@ export function AIProcessPanel({
     stages: history ? null : process.stages,
     askedBy,
     contextDetail: history ? null : process.contextDetail,
+    verification: history ? null : process.verification,
   });
   const complete = Boolean(result);
   const title = history ? 'How this was answered' : liveTitle(process.phase);
@@ -378,10 +403,10 @@ export function AIProcessPanel({
       <aside
         role="complementary"
         aria-labelledby="ai-process-title"
-        className="h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-out motion-reduce:transition-none"
+        className="h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-300 ease-out motion-reduce:transition-none"
         style={{ width: shown ? PANEL_WIDTH : 0 }}
       >
-        <div className="flex h-full flex-col border-l border-[#E2E8F0] bg-white" style={{ width: PANEL_WIDTH }}>
+        <div className="flex h-full min-h-0 flex-col overflow-hidden border-l border-[#E2E8F0] bg-white" style={{ width: PANEL_WIDTH }}>
           {body}
         </div>
       </aside>
@@ -392,7 +417,7 @@ export function AIProcessPanel({
     <aside
       role="complementary"
       aria-labelledby="ai-process-title"
-      className={`fixed inset-y-0 right-0 z-40 flex w-full max-w-[440px] flex-col bg-white shadow-[-12px_0_32px_rgba(15,42,67,0.18)] transition-transform duration-300 ease-out motion-reduce:transition-none ${
+      className={`fixed inset-y-0 right-0 z-40 flex h-full max-h-screen w-full max-w-[440px] flex-col overflow-hidden bg-white shadow-[-12px_0_32px_rgba(15,42,67,0.18)] transition-transform duration-300 ease-out motion-reduce:transition-none ${
         shown ? 'translate-x-0' : 'translate-x-full'
       }`}
     >
@@ -422,7 +447,7 @@ function PanelBody({
 }) {
   return (
     <>
-      <div className="flex items-start justify-between gap-3 border-b border-border px-5 pb-3 pt-4">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-5 pb-3 pt-4">
         <div className="min-w-0">
           <h2 id="ai-process-title" className="flex items-center gap-2 font-display text-lg text-espresso">
             {live && !complete && steps.some((s) => s.status === 'running') && (
