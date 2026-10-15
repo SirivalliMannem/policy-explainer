@@ -72,15 +72,6 @@ class AttentionSources(BaseModel):
     citations: List[str] = []
 
 
-class AttentionAction(BaseModel):
-    """One way to resolve a flagged question."""
-    key: str
-    label: str
-    description: str
-    # "resolve": resolves at once; "reask": opens the chat, resolved when the new answer is grounded.
-    kind: str = "resolve"
-
-
 class AttentionItem(BaseModel):
     """One flagged question, grouped across every time it was asked in the range."""
     question: str
@@ -95,9 +86,11 @@ class AttentionItem(BaseModel):
     last_asked_at: datetime
     latest_entry_id: str
     sources: AttentionSources
-    # What a person could do next, written from the flag reason, and the actions that resolve it.
-    suggestion: str = ""
-    actions: List[AttentionAction] = []
+    # The stored analysis (classification, verified suggestions, what is missing); None until analysed.
+    analysis: Optional[dict] = None
+    analysis_entry_id: Optional[str] = None
+    # Set when this item is a re-asked question that was flagged again: {entry_id, question}.
+    rerun_of: Optional[dict] = None
 
 
 class AttentionCause(BaseModel):
@@ -121,12 +114,15 @@ class AttentionResponse(BaseModel):
 
 
 class AttentionResolveRequest(BaseModel):
-    """Resolve the flagged question whose latest ledger entry is entry_id."""
+    """Close the flagged item whose latest ledger entry is entry_id.
+
+    asked_suggestion: ask one of the stored, verified suggestions (question must match it).
+    edited_and_asked: ask an edited question. dismissed: close it, with a reason (required).
+    """
     entry_id: str
     action: str
-    note: str = Field("", max_length=2000)
-    # For a re-asked question: the ledger entry of the new, grounded answer.
-    new_entry_id: Optional[str] = None
+    question: Optional[str] = Field(None, max_length=500)
+    reason: Optional[str] = Field(None, max_length=2000)
 
 
 class AttentionResolution(BaseModel):
@@ -137,7 +133,23 @@ class AttentionResolution(BaseModel):
     action_label: str
     note: str = ""
     latest_entry_id: str
+    new_question: Optional[str] = None
+    new_entry_id: Optional[str] = None
     resolved_by: str
     resolved_by_name: Optional[str] = None
     resolved_by_role: Optional[str] = None
     resolved_at: datetime
+
+
+class NewAnswer(BaseModel):
+    """The answer to the question asked to close an item."""
+    ledger_id: str
+    conversation_id: str
+    outcome: str
+    # Flagged again: it appears in the queue as a new item marked as a re-run of the original.
+    flagged: bool
+
+
+class AttentionResolveResponse(BaseModel):
+    resolution: AttentionResolution
+    new_answer: Optional[NewAnswer] = None

@@ -1,15 +1,17 @@
 """Questions that need a person: flagged or unanswered entries in the evidence ledger.
 
-Everything here is derived from recorded answers. A person resolves a flagged question by choosing
-one of the actions offered for its flag reason; the resolution is recorded in attention_resolution
-and the ledger entries are never changed. A resolved question leaves the queue until it is asked
-again.
+Everything here is derived from recorded answers and their stored analysis (attention_analysis,
+written once when the answer was flagged). An item is closed by asking a verified suggestion or an
+edited question as a new question, or by dismissing it with a reason. The closure is recorded in
+attention_resolution and covers every repeat of the question up to the one closed; the flagged
+ledger entries themselves are never changed. A re-asked question that is flagged again appears as a
+new item marked as a re-run of the original; the original is never reopened.
 """
 from __future__ import annotations
 
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -18,7 +20,6 @@ from app.models.attention import AttentionResolution
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.dashboard import (
-    AttentionAction,
     AttentionResolution as AttentionResolutionSchema,
     AttentionCause,
     AttentionItem,
@@ -37,37 +38,23 @@ REASONS: dict[str, tuple[str, str]] = {
 
 _PUNCT = re.compile(r"[^\w\s-]")
 
-# reason -> the actions that resolve it: (key, label, description, kind).
-ACTIONS: dict[str, list[tuple[str, str, str, str]]] = {
-    "no_evidence": [
-        ("confirmed_not_covered", "Confirm not covered by the policy wording",
-         "The forms do not address this. Record that, so the customer can be told the policy is silent on it.", "resolve"),
-        ("referred_underwriting", "Refer to underwriting",
-         "Hand the question to underwriting to decide whether cover exists.", "resolve"),
-        ("reasked", "Ask again with a clearer question",
-         "Open the chat with this question to rephrase it in policy terms. Resolved once the new answer is grounded.", "reask"),
-    ],
-    "guardrail_flagged": [
-        ("approved_after_review", "Approve answer after review",
-         "You checked the answer against the cited wording and it is correct.", "resolve"),
-        ("rejected_escalated", "Reject answer and escalate",
-         "The answer must not be relied on; a specialist will answer the customer.", "resolve"),
-    ],
-    "customer_not_found": [
-        ("confirmed_not_on_file", "Confirm customer not on file",
-         "The person asked about has no policy with us.", "resolve"),
-        ("reasked", "Ask again with the policy number",
-         "Open the chat and ask with the policy number. Resolved once the new answer is grounded.", "reask"),
-    ],
-    "low_confidence": [
-        ("confirmed_correct", "Confirm answer is correct",
-         "You checked the answer against the cited wording and it holds.", "resolve"),
-        ("escalated_specialist", "Escalate to a specialist",
-         "The evidence is too weak to rely on; a specialist will review it.", "resolve"),
-    ],
+# How an item was closed. The first four are the current actions; the rest label closures recorded
+# before suggestion-based resolving, which stay in the log as they were.
+ACTION_LABELS = {
+    "asked_suggestion": "Asked a suggestion",
+    "edited_and_asked": "Edited and asked",
+    "added_edition": "Added the missing edition",
+    "dismissed": "Dismissed as out of scope",
+    "confirmed_not_covered": "Confirmed not covered by the policy wording",
+    "referred_underwriting": "Referred to underwriting",
+    "reasked": "Asked again",
+    "approved_after_review": "Approved after review",
+    "rejected_escalated": "Rejected and escalated",
+    "confirmed_not_on_file": "Confirmed customer not on file",
+    "confirmed_correct": "Confirmed answer is correct",
+    "escalated_specialist": "Escalated to a specialist",
 }
-
-ACTION_LABELS = {key: label for actions in ACTIONS.values() for key, label, _, _ in actions}
+ASK_ACTIONS = ("asked_suggestion", "edited_and_asked")
 
 
 def _outcome(entry: EvidenceLedger) -> str:
@@ -120,40 +107,21 @@ def _group_key(entry: EvidenceLedger) -> tuple[str, str]:
     return question_key(entry.question), entry.policy_id or ""
 
 
-def _suggestion(entry: EvidenceLedger, reason: str, policy_number: Optional[str]) -> str:
-    """A next step written from what the record shows; nothing is inferred beyond it."""
-    retrieval = entry.retrieval or {}
-    if reason == "no_evidence":
-        terms = list(retrieval.get("query_terms") or [])[:5]
-        searched = (retrieval.get("clauses_searched") or 0) + (retrieval.get("coverages_searched") or 0)
-        where = f" on {policy_number}" if policy_number else ""
-        found = "None of " + ", ".join(f"\u201c{t}\u201d" for t in terms) + " matched" if terms else "Nothing matched"
-        return (
-            f"{found} in the {searched} clauses and coverages searched{where}. If the customer means something the "
-            "policy names (a peril, a coverage, a form), ask again in those terms; if not, confirm that the policy "
-            "wording does not address it."
-        )
-    if reason == "guardrail_flagged":
-        failed = [c.get("name", "").replace("_", " ") for c in (entry.guardrail_checks or [])
-                  if isinstance(c, dict) and c.get("status") == "failed"]
-        checks = ", ".join(f for f in failed if f) or "a safety check"
-        return (
-            f"The answer failed {checks}. Read it against its cited sources (Open record): approve it if it is "
-            "correct, otherwise reject it so a specialist answers the customer."
-        )
-    if reason == "customer_not_found":
-        return "The policyholder named in the question is not on file. Check the spelling, or ask again with the policy number."
-    return (
-        "The answer was given on weak evidence. Check it against the cited wording (Open record) and confirm it, "
-        "or escalate it to a specialist."
+def _closed_until(db: Session) -> dict[tuple[str, str], datetime]:
+    """For each question, the time of the latest repeat a closure covers: repeats asked up to then
+    are closed; anything asked later (a re-run, or the question asked again) is a new item."""
+    rows = (
+        db.query(AttentionResolution, EvidenceLedger.created_at)
+        .outerjoin(EvidenceLedger, EvidenceLedger.id == AttentionResolution.latest_entry_id)
+        .all()
     )
-
-
-def _latest_resolutions(db: Session) -> dict[tuple[str, str], AttentionResolution]:
-    latest: dict[tuple[str, str], AttentionResolution] = {}
-    for row in db.query(AttentionResolution).order_by(AttentionResolution.resolved_at.asc()).all():
-        latest[(row.question_key, row.policy_id or "")] = row
-    return latest
+    until: dict[tuple[str, str], datetime] = {}
+    for resolution, closed_entry_at in rows:
+        key = (resolution.question_key, resolution.policy_id or "")
+        cutoff = closed_entry_at or resolution.resolved_at
+        if key not in until or cutoff > until[key]:
+            until[key] = cutoff
+    return until
 
 
 def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 50) -> AttentionResponse:
@@ -166,7 +134,7 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
         .all()
     )
 
-    resolutions = _latest_resolutions(db)
+    closed_until = _closed_until(db)
     groups: dict[tuple[str, str], dict] = {}
     cause_counts: Counter = Counter()
     unmatched_terms: Counter = Counter()
@@ -178,9 +146,8 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
         if reason is None:
             continue
         key = _group_key(entry)
-        resolution = resolutions.get(key)
-        if resolution is not None and resolution.resolved_at >= entry.created_at:
-            resolved_groups.add(key)  # resolved after this was asked: not in the queue
+        if key in closed_until and entry.created_at <= closed_until[key]:
+            resolved_groups.add(key)  # covered by a closure: not in the queue
             continue
         cause_counts[reason] += 1
         retrieval = entry.retrieval or {}
@@ -200,11 +167,14 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
         group["last"] = entry.created_at
         # Rows are oldest first, so the latest occurrence wins for display.
         group["item"] = (entry, policy, account, reason)
+        if entry.attention_analysis:
+            group["analysis"] = (entry.id, entry.attention_analysis)
 
     items = []
     for group in groups.values():
         entry, policy, account, reason = group["item"]
         retrieval = entry.retrieval or {}
+        analysed = group.get("analysis")
         items.append(
             AttentionItem(
                 question=entry.question.strip(),
@@ -225,8 +195,10 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
                     clauses_searched=retrieval.get("clauses_searched") or 0,
                     citations=[_citation_label(c) for c in (entry.citations or []) if isinstance(c, dict)][:4],
                 ),
-                suggestion=_suggestion(entry, reason, policy.policy_number if policy else None),
-                actions=[AttentionAction(key=k, label=label, description=d, kind=kind) for k, label, d, kind in ACTIONS[reason]],
+                # Stored when the answer was flagged; read only, never computed on load.
+                analysis=analysed[1] if analysed else None,
+                analysis_entry_id=analysed[0] if analysed else None,
+                rerun_of=retrieval.get("rerun_of"),
             )
         )
     # Newest first: the most recently asked question leads the list.
@@ -265,17 +237,73 @@ def flag_reason(entry: EvidenceLedger) -> Optional[str]:
 
 
 def resolution_for_entry(entry: EvidenceLedger, db: Session) -> Optional[AttentionResolution]:
-    """The first resolution recorded for this entry's question after it was asked."""
+    """The closure that covers this entry: the first one recorded for its question whose closed
+    repeat was asked at or after this entry."""
     key, policy_id = _group_key(entry)
-    query = db.query(AttentionResolution).filter(
-        AttentionResolution.question_key == key,
-        AttentionResolution.resolved_at >= entry.created_at,
+    query = (
+        db.query(AttentionResolution)
+        .outerjoin(EvidenceLedger, EvidenceLedger.id == AttentionResolution.latest_entry_id)
+        .filter(AttentionResolution.question_key == key, EvidenceLedger.created_at >= entry.created_at)
     )
     if policy_id:
         query = query.filter(AttentionResolution.policy_id == policy_id)
     else:
         query = query.filter(AttentionResolution.policy_id.is_(None))
     return query.order_by(AttentionResolution.resolved_at.asc()).first()
+
+
+def record_closure(
+    entry: EvidenceLedger,
+    action: str,
+    employee,
+    db: Session,
+    note: str = "",
+    new_question: Optional[str] = None,
+    new_entry_id: Optional[str] = None,
+) -> AttentionResolution:
+    """Close a flagged item (and every earlier repeat of it). The ledger entry is not modified."""
+    row = AttentionResolution(
+        question_key=question_key(entry.question),
+        policy_id=entry.policy_id,
+        question=entry.question.strip(),
+        reason=_reason(entry) or "",
+        action=action,
+        note=(note or "").strip(),
+        new_question=new_question,
+        new_entry_id=new_entry_id,
+        latest_entry_id=entry.id,
+        resolved_by=employee.id,
+        resolved_by_name=employee.name if getattr(employee, "identified", False) else None,
+        resolved_by_role=employee.role,
+        resolved_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def latest_in_group(entry: EvidenceLedger, db: Session) -> EvidenceLedger:
+    """The most recent flagged repeat of the entry's question, so a closure covers all repeats."""
+    key, policy_id = _group_key(entry)
+    query = db.query(EvidenceLedger).filter(EvidenceLedger.created_at >= entry.created_at)
+    query = query.filter(EvidenceLedger.policy_id == policy_id) if policy_id else query.filter(EvidenceLedger.policy_id.is_(None))
+    latest = entry
+    for candidate in query.order_by(EvidenceLedger.created_at.asc()).all():
+        if _group_key(candidate) == (key, policy_id) and _reason(candidate) is not None:
+            latest = candidate
+    return latest
+
+
+def resolution_log(db: Session, since: datetime, limit: int = 50) -> list[AttentionResolutionSchema]:
+    rows = (
+        db.query(AttentionResolution)
+        .filter(AttentionResolution.resolved_at >= since)
+        .order_by(AttentionResolution.resolved_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [resolution_payload(r) for r in rows]
 
 
 def resolution_payload(row: AttentionResolution) -> AttentionResolutionSchema:
@@ -287,6 +315,8 @@ def resolution_payload(row: AttentionResolution) -> AttentionResolutionSchema:
         action_label=ACTION_LABELS.get(row.action, row.action.replace("_", " ")),
         note=row.note or "",
         latest_entry_id=row.latest_entry_id,
+        new_question=row.new_question,
+        new_entry_id=row.new_entry_id,
         resolved_by=row.resolved_by,
         resolved_by_name=row.resolved_by_name,
         resolved_by_role=row.resolved_by_role,

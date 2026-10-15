@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, ChevronDown, Lightbulb, Loader2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, History, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Skeleton } from '../ui/Skeleton';
 import { LedgerDetailDrawer } from './LedgerDetailDrawer';
-import { ApiError, getNeedsAttention, resolveAttention } from '../../services/api';
-import { describeError, relativeTime } from '../../lib/explainer';
-import type { AttentionAction, AttentionItem, AttentionReason, AttentionResponse } from '../../types';
+import { ApiError, getNeedsAttention, getResolutionLog } from '../../services/api';
+import { formatDateTime, relativeTime } from '../../lib/explainer';
+import type { AttentionItem, AttentionReason, AttentionResolution, AttentionResolveResponse, AttentionResponse } from '../../types';
+import { ResolveBox } from './ResolveBox';
 
 type Range = 'today' | '7d' | '30d';
 
@@ -47,124 +48,18 @@ function Pill({ value, label, hot = false }: { value: string | number; label: st
   );
 }
 
-/** Suggested next step and the actions that resolve this flagged question. */
-function ResolvePanel({
-  item,
-  onResolved,
-  onReask,
-}: {
-  item: AttentionItem;
-  onResolved: (label: string) => void;
-  onReask: (action: AttentionAction) => void;
-}) {
-  const [chosen, setChosen] = useState<AttentionAction | null>(null);
-  const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const actions = item.actions ?? [];
-
-  const confirm = async () => {
-    if (!chosen) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await resolveAttention({ entry_id: item.latest_entry_id, action: chosen.key, note: note.trim() });
-      onResolved(chosen.label);
-    } catch (err) {
-      setError(describeError(err).message);
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="rounded-xl border border-[#FDC9A0] bg-[#FFFBF7] p-4 text-[13px] leading-relaxed text-espresso">
-      <h5 className="mb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-orange-btn">RESOLVE</h5>
-      {item.suggestion && (
-        <p className="mb-3 flex items-start gap-2 rounded-lg bg-white px-3 py-2 text-[12.5px] text-[#334155]">
-          <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-btn" aria-hidden="true" />
-          <span>
-            <b className="font-semibold text-espresso">Suggested next step: </b>
-            {item.suggestion}
-          </span>
-        </p>
-      )}
-      <div role="radiogroup" aria-label="How to resolve this question" className="space-y-1.5">
-        {actions.map((action) => {
-          const selected = chosen?.key === action.key;
-          return (
-            <button
-              key={action.key}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => (action.kind === 'reask' ? onReask(action) : setChosen(action))}
-              className={`block w-full rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                selected ? 'border-orange-btn bg-[#FFF1E6]' : 'border-border bg-white hover:border-espresso'
-              }`}
-            >
-              <span className="block text-[12.5px] font-semibold text-espresso">
-                {action.label}
-                {action.kind === 'reask' && <span className="ml-1 text-orange-btn">→</span>}
-              </span>
-              <span className="block text-[11.5px] text-muted-foreground">{action.description}</span>
-            </button>
-          );
-        })}
-      </div>
-      {chosen && (
-        <div className="mt-3 space-y-2">
-          <label className="block text-[11.5px] font-semibold text-espresso" htmlFor={`note-${item.latest_entry_id}`}>
-            Note (optional)
-          </label>
-          <textarea
-            id={`note-${item.latest_entry_id}`}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            maxLength={2000}
-            rows={2}
-            placeholder="What you checked or decided, for the audit log"
-            className="w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[12.5px] text-espresso focus:border-orange-btn focus:outline-none"
-          />
-          {error && <p className="text-[12px] text-red-700">{error}</p>}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={confirm}
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-orange-btn bg-orange-btn px-3 py-1.5 text-[12.5px] font-semibold text-white transition-colors hover:bg-[#C2410C] disabled:opacity-60"
-            >
-              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Resolve: {chosen.label}
-            </button>
-            <button
-              type="button"
-              onClick={() => setChosen(null)}
-              disabled={saving}
-              className="rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] font-semibold text-espresso hover:border-espresso"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function QueueRow({
   item,
   open,
   onToggle,
   onOpenRecord,
-  onResolved,
-  onReask,
+  onClosed,
 }: {
   item: AttentionItem;
   open: boolean;
   onToggle: () => void;
   onOpenRecord: () => void;
-  onResolved: (label: string) => void;
-  onReask: (action: AttentionAction) => void;
+  onClosed: (result: AttentionResolveResponse, summary: string) => void;
 }) {
   const old = isOld(item);
   const s = item.sources;
@@ -181,6 +76,9 @@ function QueueRow({
       >
         <span className="min-w-0">
           <span className="block text-[14.5px] font-semibold leading-snug text-espresso">{item.question}</span>
+          {item.rerun_of && (
+            <span className="mt-0.5 block text-[11.5px] text-[#9A3D09]">re-run of “{item.rerun_of.question}”</span>
+          )}
           <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {item.policy_number && <code className="font-mono text-[11.5px] font-semibold text-espresso">{item.policy_number}</code>}
             {item.insured && <span>{item.insured}</span>}
@@ -256,7 +154,7 @@ function QueueRow({
               Open record
             </button>
           </div>
-          <ResolvePanel item={item} onResolved={onResolved} onReask={onReask} />
+          <ResolveBox item={item} onClosed={onClosed} />
         </div>
       )}
     </li>
@@ -269,15 +167,27 @@ function QueueRow({
  * comes back if it is asked again). Resolutions are recorded; ledger entries are never changed.
  */
 export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range; refreshKey?: number }) {
-  const navigate = useNavigate();
   const [data, setData] = useState<AttentionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState<string | null>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [record, setRecord] = useState<string | null>(null);
-  const [resolvedNote, setResolvedNote] = useState<string | null>(null);
+  const [resolvedNote, setResolvedNote] = useState<{ text: string; conversationId?: string } | null>(null);
   const [reload, setReload] = useState(0);
+  const [showLog, setShowLog] = useState(false);
+  const [log, setLog] = useState<AttentionResolution[] | null>(null);
+
+  useEffect(() => {
+    if (!showLog) return;
+    let cancelled = false;
+    getResolutionLog(timeRange)
+      .then((rows) => !cancelled && setLog(rows))
+      .catch(() => !cancelled && setLog([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [showLog, timeRange, reload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -309,11 +219,19 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
   const oldCount = items.filter(isOld).length;
   const repeatCount = items.filter((i) => i.times_asked > 1).length;
 
-  const markResolved = (item: AttentionItem, label: string) => {
-    // Leave the queue at once; the reload brings the counts up to date.
+  const markClosed = (item: AttentionItem, result: AttentionResolveResponse, summary: string) => {
+    // Leave the queue at once; the reload brings the counts (and any re-run item) up to date.
     setData((d) => (d ? { ...d, items: d.items.filter((i) => i.latest_entry_id !== item.latest_entry_id) } : d));
     setOpenKey(null);
-    setResolvedNote(`Resolved \u201c${item.question}\u201d: ${label}.`);
+    const answer = result.new_answer;
+    setResolvedNote({
+      text: answer
+        ? answer.flagged
+          ? `${summary}. Closed. The new answer was flagged too, so it is in the queue as a re-run.`
+          : `${summary}. Closed: the new answer is grounded.`
+        : `${summary}. Closed.`,
+      conversationId: answer?.conversation_id,
+    });
     setReload((n) => n + 1);
   };
 
@@ -358,7 +276,7 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
               ? `${data.questions_resolved} flagged ${data.questions_resolved === 1 ? 'question was' : 'questions were'} resolved; the rest of the ${data.answers_total} recorded answers were grounded in policy evidence.`
               : `Every one of ${data?.answers_total ?? 0} recorded answers was grounded in policy evidence.`}
           </p>
-          {resolvedNote && <p className="mt-2 text-xs font-semibold text-success">{resolvedNote}</p>}
+          {resolvedNote && <p className="mt-2 text-xs font-semibold text-success">{resolvedNote.text}</p>}
         </div>
       ) : (
         <div key="queue" className="animate-fade-in opacity-0">
@@ -370,7 +288,12 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
           </div>
           {resolvedNote && (
             <p role="status" className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-[12.5px] font-medium text-emerald-800">
-              <CheckCircle2 className="h-4 w-4 shrink-0" /> {resolvedNote}
+              <CheckCircle2 className="h-4 w-4 shrink-0" /> {resolvedNote.text}
+              {resolvedNote.conversationId && (
+                <Link to={`/app/explainer/c/${resolvedNote.conversationId}`} className="ml-auto font-semibold underline">
+                  Open the answer
+                </Link>
+              )}
             </p>
           )}
           <ul>
@@ -381,12 +304,7 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
                 open={openKey === item.latest_entry_id}
                 onToggle={() => setOpenKey((k) => (k === item.latest_entry_id ? null : item.latest_entry_id))}
                 onOpenRecord={() => setRecord(item.latest_entry_id)}
-                onResolved={(label) => markResolved(item, label)}
-                onReask={(action) =>
-                  navigate('/app/explainer/new', {
-                    state: { reask: { question: item.question, entryId: item.latest_entry_id, action: action.key } },
-                  })
-                }
+                onClosed={(result, summary) => markClosed(item, result, summary)}
               />
             ))}
           </ul>
@@ -402,6 +320,54 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
           </div>
         </div>
 
+      )}
+
+      {data && !failed && (
+        <div className="mt-4 border-t border-border pt-3">
+          <button
+            type="button"
+            onClick={() => setShowLog((v) => !v)}
+            aria-expanded={showLog}
+            className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-espresso hover:text-orange-btn"
+          >
+            <History className="h-4 w-4" /> Resolution log
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showLog ? 'rotate-180' : ''}`} />
+          </button>
+          {showLog && (
+            <div className="mt-2">
+              <p className="mb-2 text-[11.5px] text-muted-foreground">
+                Each closure is recorded here. The original flagged record is unchanged in the Audit Log.
+              </p>
+              {log === null ? (
+                <Skeleton className="h-10 w-full" />
+              ) : log.length === 0 ? (
+                <p className="text-[12.5px] text-muted-foreground">Nothing was closed {RANGE_LABEL[timeRange]}.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {log.map((r) => (
+                    <li key={r.id} className="py-2 text-[12.5px] text-espresso">
+                      <span className="font-semibold">{r.action_label}</span>
+                      <span className="text-muted-foreground"> · {formatDateTime(r.resolved_at)} · {r.resolved_by_name || 'Name not recorded'} </span>
+                      <span className="font-mono text-[11px] text-muted-foreground">{r.resolved_by}</span>
+                      <span className="block">“{r.question}”</span>
+                      {r.new_question && (
+                        <span className="block text-[#334155]">
+                          → asked “{r.new_question}”
+                          {r.new_entry_id && (
+                            <Link to={`/app/audit-log?entry=${encodeURIComponent(r.new_entry_id)}`} className="ml-1.5 font-semibold text-orange-btn hover:underline">
+                              new answer
+                            </Link>
+                          )}
+                        </span>
+                      )}
+                      {r.note && <span className="block text-muted-foreground">Reason: {r.note}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       <LedgerDetailDrawer entryId={record} onClose={() => setRecord(null)} />

@@ -19,6 +19,8 @@ AI_SERVICE_TIMEOUT_SECONDS = 45.0
 INTERPRET_TIMEOUT_SECONDS = 15.0
 # A plain-language explanation is one short model call (15s provider timeout, no rate-limit retry).
 PLAIN_LANGUAGE_TIMEOUT_SECONDS = 25.0
+# Attention analysis: one model call (15s) plus a retrieval for each of at most two candidates.
+ATTENTION_ANALYSIS_TIMEOUT_SECONDS = 45.0
 
 
 class AIServiceClient:
@@ -113,6 +115,21 @@ class AIServiceClient:
         except httpx.HTTPError as exc:
             logger.warning("AI service plain-language unavailable: %s", type(exc).__name__)
         return {"status": "unavailable", "reason": "The AI service is not reachable right now. Try again in a moment."}
+
+    def attention_analysis(self, question: str, policy_id: Optional[str], retrieval: dict, flag_reason: str) -> Optional[dict]:
+        """Analyse a flagged question (classification + verified alternatives). None when unreachable."""
+        try:
+            with httpx.Client(timeout=ATTENTION_ANALYSIS_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{self.base_url}/api/explain/attention-analysis",
+                    json={"question": question, "policy_id": policy_id, "retrieval": retrieval, "flag_reason": flag_reason},
+                )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning("AI service attention-analysis returned HTTP %s", resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("AI service attention-analysis unavailable: %s", type(exc).__name__)
+        return None
 
 
 # Global singleton client instance

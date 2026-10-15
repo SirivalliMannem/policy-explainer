@@ -1,7 +1,9 @@
 import { APP_CONFIG } from '../config';
 import { currentEmployee } from './auth';
 import type {
+  AttentionAnalysis,
   AttentionResolution,
+  AttentionResolveResponse,
   AttentionResponse,
   PlainLanguageExplanation,
   BillingItem,
@@ -171,14 +173,27 @@ export async function getDashboardStats(
 }
 
 /** Flagged and unanswered questions in the range, grouped by question, with their causes. */
-/** Resolve a flagged question with one of the actions offered for it. */
+/**
+ * Close a flagged item: ask a verified suggestion or an edited question as a new question
+ * (asked_suggestion / edited_and_asked), or dismiss it with a reason.
+ */
 export async function resolveAttention(body: {
   entry_id: string;
-  action: string;
-  note?: string;
-  new_entry_id?: string | null;
-}): Promise<AttentionResolution> {
-  return apiClient.post<AttentionResolution>('/api/dashboard/attention/resolve', body);
+  action: 'asked_suggestion' | 'edited_and_asked' | 'dismissed';
+  question?: string;
+  reason?: string;
+}): Promise<AttentionResolveResponse> {
+  return apiClient.post<AttentionResolveResponse>('/api/dashboard/attention/resolve', body);
+}
+
+/** Analyse a flagged question now (on request only; the dashboard never calls the model on load). */
+export async function analyzeAttention(entryId: string): Promise<AttentionAnalysis> {
+  return apiClient.post<AttentionAnalysis>(`/api/dashboard/attention/${encodeURIComponent(entryId)}/analyze`, {});
+}
+
+/** How flagged items were closed in the range, newest first. */
+export async function getResolutionLog(timeRange: 'today' | '7d' | '30d' = '7d'): Promise<AttentionResolution[]> {
+  return apiClient.get<AttentionResolution[]>('/api/dashboard/attention/resolutions', { params: { range: timeRange } });
 }
 
 export async function getNeedsAttention(

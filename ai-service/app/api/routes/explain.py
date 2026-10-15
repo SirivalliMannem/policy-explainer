@@ -9,10 +9,12 @@ from app.schemas.explain import (
     ExplainResponse,
     InterpretationSchema,
     InterpretRequest,
+    AttentionAnalysisRequest,
     PlainLanguageRequest,
     PlainLanguageResponse,
 )
 from app.services.explainer_pipeline import ExplainerPipeline
+from app.services.attention_analysis import analyze as analyze_attention
 from app.services.plain_language import explain_clause
 from app.services.understanding import QueryInterpreter
 
@@ -60,3 +62,11 @@ def interpret_question(
 def plain_language(payload: PlainLanguageRequest):
     """Explain one cited clause in plain words, from its own text only. Never decides coverage."""
     return explain_clause(payload.heading, payload.form_number, payload.text).__dict__
+
+
+@router.post("/attention-analysis")
+def attention_analysis(payload: AttentionAnalysisRequest, db: Session = Depends(get_db)):
+    """Classify a flagged question and propose alternatives; only candidates that find evidence are kept."""
+    return analyze_attention(
+        payload.question.strip(), (payload.policy_id or "").strip() or None, payload.retrieval, db, payload.flag_reason
+    )

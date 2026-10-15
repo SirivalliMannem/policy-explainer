@@ -541,18 +541,60 @@ export interface AttentionItem {
     clauses_searched: number;
     citations: string[];
   };
-  /** A next step written from the flag reason. */
-  suggestion?: string;
-  /** The actions that resolve this flag. */
-  actions?: AttentionAction[];
+  /** Stored when the answer was flagged (never computed on load); null until analysed. */
+  analysis?: AttentionAnalysis | null;
+  analysis_entry_id?: string | null;
+  /** This item is a re-asked question that was flagged again. */
+  rerun_of?: { entry_id: string; question: string } | null;
 }
 
-/** One way to resolve a flagged question. "reask" opens the chat; it resolves once the new answer is grounded. */
-export interface AttentionAction {
-  key: string;
-  label: string;
-  description: string;
-  kind: 'resolve' | 'reask' | string;
+/** A passage a suggestion found when it was run through the normal retrieval. */
+export interface AttentionPassage {
+  source_type: string;
+  source_id: string;
+  form_number?: string | null;
+  edition?: string | null;
+  page?: number | null;
+  section?: string | null;
+  heading?: string | null;
+  quote: string;
+  score: number;
+  /** Clauses only: the quote appears word for word in the stored source. */
+  quote_verified?: boolean | null;
+}
+
+/** A suggested question that was verified to find evidence. */
+export interface AttentionCandidate {
+  question: string;
+  relation: 'same' | 'related';
+  /** Related questions only: what it does not answer about the original. */
+  note?: string | null;
+  passages: AttentionPassage[];
+  top_score: number;
+}
+
+export type AttentionAnalysisType =
+  | 'typo'
+  | 'vague_wording'
+  | 'definition'
+  | 'coverage_no_evidence'
+  | 'missing_form_or_edition'
+  | 'out_of_scope';
+
+/** The stored analysis of a flagged question: the model classifies, code verifies and states facts. */
+export interface AttentionAnalysis {
+  status: 'ready' | 'failed' | string;
+  type?: AttentionAnalysisType | null;
+  category?: 'wrong_wording' | 'evidence_missing' | 'out_of_scope' | null;
+  reason?: string;
+  candidates?: AttentionCandidate[];
+  dropped_candidates?: number;
+  /** Built from stored facts (search counts, form editions), never from the model's wording. */
+  missing?: string | null;
+  original_search?: { query_terms?: string[]; coverages_searched?: number; forms_searched?: number; clauses_searched?: number };
+  upload_available?: boolean;
+  model_used?: string;
+  analyzed_at?: string;
 }
 
 /** A person's decision on a flagged question; the ledger entries it covers are never changed. */
@@ -564,6 +606,8 @@ export interface AttentionResolution {
   action_label: string;
   note: string;
   latest_entry_id: string;
+  new_question?: string | null;
+  new_entry_id?: string | null;
   resolved_by: string;
   resolved_by_name?: string | null;
   resolved_by_role?: string | null;
@@ -664,6 +708,11 @@ export interface LedgerDetail extends LedgerRow {
   timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
   /** How a person resolved this flagged question in Needs attention. */
   resolution?: AttentionResolution | null;
+}
+
+export interface AttentionResolveResponse {
+  resolution: AttentionResolution;
+  new_answer?: { ledger_id: string; conversation_id: string; outcome: string; flagged: boolean } | null;
 }
 
 /** An AI explanation of one cited clause: never approved wording, never a coverage decision. */

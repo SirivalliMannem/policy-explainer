@@ -12,13 +12,18 @@ from app.models.attention import AttentionResolution
 from app.services.authorization import UNAUTHORIZED_ROLES
 from app.services.recent_questions import recent_questions
 from app.services.attention import (
-    ACTIONS,
+    ASK_ACTIONS,
     flag_reason,
+    latest_in_group,
     needs_attention,
-    question_key,
+    record_closure,
     resolution_for_entry,
+    resolution_log,
     resolution_payload,
 )
+from app.services.attention_analysis import run_analysis
+from app.services.ledger.ledger_service import RERUN_OF
+from app.schemas.conversation import QuestionSubmitRequest
 from app.models.conversation import Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CoreForm, CorePolicy
@@ -26,7 +31,9 @@ from app.schemas.dashboard import (
     ActivityDataPoint,
     AttentionResolution as AttentionResolutionSchema,
     AttentionResolveRequest,
+    AttentionResolveResponse,
     AttentionResponse,
+    NewAnswer,
     DashboardMetrics,
     DashboardResponse,
     EvidenceQualityBreakdown,
@@ -276,59 +283,113 @@ def get_needs_attention(
     return needs_attention(db, _window_start(time_range, now), time_range)
 
 
-@router.post("/attention/resolve", response_model=AttentionResolutionSchema, status_code=status.HTTP_201_CREATED)
+def _check_role(employee: EmployeeUser) -> None:
+    # The same check that guards policy access: no new permission and no approval step.
+    if (employee.role or "").strip().lower() in UNAUTHORIZED_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee is not authorized to work the queue")
+
+
+def _flagged_entry(entry_id: str, db: Session) -> EvidenceLedger:
+    entry = db.get(EvidenceLedger, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ledger entry not found")
+    if flag_reason(entry) is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This answer is not flagged; there is nothing to resolve")
+    return entry
+
+
+@router.post("/attention/{entry_id}/analyze")
+def analyze_attention(
+    entry_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Analyse a flagged question now, on request (the dashboard itself never calls the model)."""
+    _check_role(employee)
+    entry = _flagged_entry(entry_id, db)
+    return run_analysis(entry, db)
+
+
+@router.get("/attention/resolutions", response_model=list[AttentionResolutionSchema])
+def get_resolution_log(
+    time_range: str = Query("7d", alias="range", pattern="^(today|7d|30d)$"),
+    db: Session = Depends(get_db),
+):
+    """How flagged items were closed in the range, newest first."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return resolution_log(db, _window_start(time_range, now))
+
+
+@router.post("/attention/resolve", response_model=AttentionResolveResponse, status_code=status.HTTP_201_CREATED)
 def resolve_attention(
     payload: AttentionResolveRequest,
     employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    """Resolve a flagged question with one of the actions offered for its flag reason.
+    """Close a flagged item.
 
-    The resolution is recorded with who made it and when; the ledger entries are never changed.
+    Asking a suggestion (or an edited question) runs it through the normal pipeline as a new question,
+    with its own ledger entry and guardrails, then closes the item and every repeat of it. Dismissing
+    closes it with the reason given. The flagged ledger entries are never modified.
     """
-    # The same check that guards policy access: no new permission is introduced.
-    if (employee.role or "").strip().lower() in UNAUTHORIZED_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee is not authorized to resolve flagged questions")
-
-    entry = db.get(EvidenceLedger, payload.entry_id)
-    if entry is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ledger entry not found")
-    reason = flag_reason(entry)
-    if reason is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This answer is not flagged; there is nothing to resolve")
-    allowed = {key: kind for key, _, _, kind in ACTIONS[reason]}
-    if payload.action not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"'{payload.action}' does not resolve a '{reason}' flag; use one of: {', '.join(allowed)}",
-        )
+    _check_role(employee)
+    entry = latest_in_group(_flagged_entry(payload.entry_id, db), db)
     if resolution_for_entry(entry, db) is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This question has already been resolved")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This question has already been closed")
 
-    note = payload.note.strip()
-    if allowed[payload.action] == "reask":
-        # Resolved only by a grounded answer to the question asked again.
-        new_entry = db.get(EvidenceLedger, payload.new_entry_id) if payload.new_entry_id else None
-        if new_entry is None or new_entry.created_at < entry.created_at:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Asking again resolves the question only with the new answer's ledger entry")
-        if flag_reason(new_entry) is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The new answer is flagged too, so the question stays in the queue")
-        note = (note + " " if note else "") + f"Asked again as \u201c{new_entry.question.strip()}\u201d; grounded answer {new_entry.id}."
+    if payload.action == "dismissed":
+        reason = (payload.reason or "").strip()
+        if not reason:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Dismissing needs a reason")
+        return AttentionResolveResponse(resolution=resolution_payload(record_closure(entry, "dismissed", employee, db, note=reason)))
 
-    row = AttentionResolution(
-        question_key=question_key(entry.question),
-        policy_id=entry.policy_id,
-        question=entry.question.strip(),
-        reason=reason,
-        action=payload.action,
-        note=note,
-        latest_entry_id=entry.id,
-        resolved_by=employee.id,
-        resolved_by_name=employee.name if employee.identified else None,
-        resolved_by_role=employee.role,
-        resolved_at=datetime.now(timezone.utc).replace(tzinfo=None),
-    )
-    db.add(row)
+    if payload.action not in ASK_ACTIONS:
+        detail = (
+            "No flow exists to add a form or edition, so an item cannot be closed that way"
+            if payload.action == "added_edition"
+            else f"Unknown action '{payload.action}'"
+        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+
+    question = " ".join((payload.question or "").split())
+    if not question:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A question to ask is required")
+    if payload.action == "asked_suggestion":
+        # Only a suggestion that was verified and stored can be asked as one.
+        stored = [
+            c.get("question")
+            for e in (entry, db.get(EvidenceLedger, payload.entry_id))
+            for c in ((e.attention_analysis or {}).get("candidates") or [])
+        ]
+        if question not in stored:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="That is not one of the verified suggestions")
+
+    # A new question in a new conversation of the person closing the item.
+    from app.api.routes.conversations import submit_question
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    conversation = Conversation(employee_id=employee.id, policy_id=entry.policy_id, status="active", created_at=now, updated_at=now)
+    db.add(conversation)
     db.commit()
-    db.refresh(row)
-    return resolution_payload(row)
+    db.refresh(conversation)
+    token = RERUN_OF.set({"entry_id": entry.id, "question": entry.question.strip()})
+    try:
+        answer = submit_question(
+            conversation.id, QuestionSubmitRequest(question=question, policy_id=entry.policy_id), employee, db
+        )
+    finally:
+        RERUN_OF.reset(token)
+
+    resolution = record_closure(
+        entry, payload.action, employee, db,
+        note=(payload.reason or ""), new_question=question, new_entry_id=answer.ledger_id,
+    )
+    return AttentionResolveResponse(
+        resolution=resolution_payload(resolution),
+        new_answer=NewAnswer(
+            ledger_id=answer.ledger_id,
+            conversation_id=conversation.id,
+            outcome=answer.outcome,
+            flagged=answer.outcome != "answered" or answer.confidence == "low",
+        ),
+    )

@@ -127,3 +127,13 @@ class PlainLanguageResponse(BaseModel):
     model_used: Optional[str] = None
     provider: Optional[str] = None
     reason: Optional[str] = None
+
+
+class AttentionAnalysisRequest(BaseModel):
+    """A flagged question to analyse for the Needs attention Resolve box."""
+
+    question: str = Field(..., min_length=1)
+    policy_id: Optional[str] = None
+    # The flagged answer's stored retrieval stats (terms and counts of what was searched).
+    retrieval: dict = Field(default_factory=dict)
+    flag_reason: str = "no_evidence"

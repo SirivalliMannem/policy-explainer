@@ -32,6 +32,9 @@ class AttentionResolution(Base):
     action: Mapped[str] = mapped_column(String(40))
     note: Mapped[str] = mapped_column(Text, default="", server_default="")
     latest_entry_id: Mapped[str] = mapped_column(String(36), index=True)
+    # The question asked to close the item and the ledger entry of its answer (asked actions only).
+    new_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_entry_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     resolved_by: Mapped[str] = mapped_column(String(100))
     resolved_by_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     resolved_by_role: Mapped[str | None] = mapped_column(String(60), nullable=True)
