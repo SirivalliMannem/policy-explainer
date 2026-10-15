@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Shield, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
+import { Shield, ChevronLeft, ChevronRight, ChevronUp, LogOut } from 'lucide-react';
 import { PRIMARY_NAV_ITEMS, SECONDARY_NAV_ITEMS } from '../../config';
 import { cn } from '../../lib/utils';
 import { Tooltip } from '../ui/Tooltip';
 import { Separator } from '../ui/Separator';
 import { ExplainerHistoryNav } from './ExplainerHistoryNav';
 import { clearSession, getSession } from '../../services/auth';
+import { roleLabel } from '../../lib/conversations';
 
 export interface SidebarProps {
   isCollapsed: boolean;
@@ -33,6 +34,25 @@ export function Sidebar({
       .join('')
       .slice(0, 2)
       .toUpperCase() || 'PE';
+
+  const role = session?.user.role;
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement | null>(null);
+
+  // The profile card closes on a click outside it or on Escape.
+  useEffect(() => {
+    if (!profileOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setProfileOpen(false);
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [profileOpen]);
 
   const handleLogout = () => {
     clearSession();
@@ -144,11 +164,6 @@ export function Sidebar({
 
           {/* Secondary Navigation */}
           <nav className="shrink-0 space-y-1">
-            {!isCollapsed && (
-              <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Support
-              </div>
-            )}
             {SECONDARY_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const linkContent = (
@@ -182,47 +197,82 @@ export function Sidebar({
           </nav>
         </div>
 
-        {/* Footer: signed-in employee and logout */}
+        {/* Footer: the signed-in employee; clicking opens their profile, with Log out beneath it. */}
         <Separator />
-        <div className="space-y-1 p-3">
-          <div
-            className={cn('flex items-center gap-3 rounded-lg p-2 select-none', isCollapsed && 'justify-center p-1')}
+        <div ref={profileRef} className="relative p-3">
+          {profileOpen && (
+            <div
+              role="dialog"
+              aria-label="Your profile"
+              className={cn(
+                'absolute z-50 w-64 rounded-xl border border-border bg-card p-4 shadow-dropdown animate-fade-in',
+                isCollapsed ? 'bottom-3 left-full ml-2' : 'bottom-full left-3 right-3 mb-2 w-auto'
+              )}
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-subtle border border-primary/20 text-sm font-semibold text-primary">
+                  {initials}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-navy">{displayName}</p>
+                  <p className="truncate text-[11.5px] text-muted-foreground">{roleLabel(role)}</p>
+                </div>
+              </div>
+              <dl className="mt-3 space-y-2 border-t border-border pt-3 text-[12px]">
+                <div>
+                  <dt className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">Employee ID</dt>
+                  <dd className="font-mono text-navy">{employeeId || 'Not recorded'}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">Email</dt>
+                  <dd className="truncate text-navy" title={email}>{email}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">Role</dt>
+                  <dd className="text-navy">{roleLabel(role)}</dd>
+                </div>
+              </dl>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="mt-3 flex w-full items-center gap-3 rounded-lg border-t border-border px-3 py-2 pt-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 cursor-pointer"
+              >
+                <LogOut className="h-4 w-4 shrink-0" />
+                <span>Log out</span>
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setProfileOpen((open) => !open)}
+            aria-expanded={profileOpen}
+            aria-haspopup="dialog"
+            aria-label={`Profile: ${displayName}`}
             title={isCollapsed ? `${displayName} · ${email}` : undefined}
+            className={cn(
+              'flex w-full items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer',
+              profileOpen && 'bg-muted',
+              isCollapsed && 'justify-center p-1'
+            )}
           >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-subtle border border-primary/20 text-xs font-semibold text-primary">
               {initials}
             </div>
             {!isCollapsed && (
-              <div className="flex flex-col overflow-hidden">
-                <span className="truncate text-xs font-semibold text-navy">{displayName}</span>
-                <span className="truncate text-[11px] text-muted-foreground">
-                  <span className="font-mono">{employeeId}</span> · {email}
-                </span>
-              </div>
+              <>
+                <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                  <span className="truncate text-xs font-semibold text-navy">{displayName}</span>
+                  <span className="truncate text-[11px] text-muted-foreground">
+                    <span className="font-mono">{employeeId}</span> · {email}
+                  </span>
+                </div>
+                <ChevronUp
+                  className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', !profileOpen && 'rotate-180')}
+                  aria-hidden="true"
+                />
+              </>
             )}
-          </div>
-
-          {isCollapsed ? (
-            <Tooltip content="Log out" position="right" className="w-full">
-              <button
-                type="button"
-                onClick={handleLogout}
-                aria-label="Log out"
-                className="flex w-full items-center justify-center rounded-lg px-2 py-2 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 cursor-pointer"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          ) : (
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 cursor-pointer"
-            >
-              <LogOut className="h-4 w-4 shrink-0" />
-              <span>Log out</span>
-            </button>
-          )}
+          </button>
         </div>
       </aside>
     </>

@@ -5,7 +5,6 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ExplainerPage } from './pages/ExplainerPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { HelpPage } from './pages/HelpPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { getSession } from './services/auth';
 
@@ -48,7 +47,6 @@ export function App() {
             <Route path="c/:conversationId" element={null} />
           </Route>
           <Route path="settings" element={<SettingsPage />} />
-          <Route path="help" element={<HelpPage />} />
         </Route>
 
         {/* Catch-all redirect to the login page */}

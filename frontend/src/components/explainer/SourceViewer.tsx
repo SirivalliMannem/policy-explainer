@@ -81,13 +81,10 @@ function PlainWords({ state }: { state?: PlainState }) {
   return (
     <div className="mt-2.5 rounded-lg border border-[#DDD6FE] bg-[#F5F3FF] px-3 py-2">
       <span className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#6D28D9]">
-        <Sparkles className="h-3 w-3" aria-hidden="true" /> AI explanation · not approved wording
+        <Sparkles className="h-3 w-3" aria-hidden="true" /> AI explanation
       </span>
       <p className="mt-1 text-[12.5px] leading-relaxed text-[#334155]">{result.explanation}</p>
-      <p className="mt-1 text-[10.5px] text-[#64748B]">
-        Written by the language model from this clause only{result.model_used ? ` (${result.model_used})` : ''}. The cited
-        wording above is what applies; this does not say whether any loss is covered.
-      </p>
+      <p className="mt-1 text-[10.5px] text-[#64748B]">Applied plain language for the cited clause.</p>
     </div>
   );
 }
@@ -311,14 +308,6 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                       <p className={`font-serif text-[13.5px] leading-relaxed ${p.is_cited ? 'text-[#1E293B]' : 'text-[#475569]'}`}>
                         {p.text}
                       </p>
-                      {p.is_cited && p.plain_language && (
-                        <div className="mt-2.5 border-t border-[#FDBA74]/60 pt-2">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider text-[#C2410C]">
-                            Approved plain-language explanation
-                          </span>
-                          <p className="mt-0.5 text-[12.5px] leading-relaxed text-[#334155]">{p.plain_language}</p>
-                        </div>
-                      )}
                       {p.is_cited && <PlainWords state={plain[p.source_id]} />}
                     </div>
 );
