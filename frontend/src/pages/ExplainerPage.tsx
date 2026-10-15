@@ -399,7 +399,7 @@ export function ExplainerPage() {
       // context, and they neither change the active context nor ask which policy to check.
       if (resolution.intent === 'portfolio') {
         const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
-        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records${understoodNote}`);
+        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records`);
         return;
       }
 
@@ -452,9 +452,7 @@ export function ExplainerPage() {
             answering: question !== text ? question : undefined,
           });
         }
-        contextDetail = `${resolved.customer_name} · ${resolved.policy_number} — matched on ${
-          MATCH_LABEL[resolution.matched_on || ''] || 'reference'
-        }${understoodNote}${termNote}`;
+        contextDetail = `Policy ${resolved.policy_number} · ${resolved.customer_name}`;
       } else if (
         resolution.status === 'ambiguous' &&
         resolution.answer_all &&
@@ -480,14 +478,14 @@ export function ExplainerPage() {
           await runPipeline(
             question,
             convId,
-            `${policy.customer_name} · ${policy.policy_number} — ${policies.indexOf(policy) + 1} of ${policies.length} matching policies${understoodNote}`,
+            `Policy ${policy.policy_number} · ${policy.customer_name}`,
             policy
           );
         }
         return;
       } else if (resolution.status === 'ambiguous') {
         if (current && resolution.candidates.some((c) => c.policy_id === current.policy_id)) {
-          contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
+          contextDetail = `Policy ${current.policy_number} · ${current.customer_name}`;
         } else {
           pendingQuestionRef.current = pendingQuestionRef.current ?? text;
           askForPolicy(
@@ -506,7 +504,7 @@ export function ExplainerPage() {
         );
         return;
       } else if (current) {
-        contextDetail = `Using active context · ${current.policy_number}${understoodNote}`;
+        contextDetail = `Policy ${current.policy_number} · ${current.customer_name}`;
       } else {
         pendingQuestionRef.current = text;
         const recent = resolution.suggested_policies ?? [];
@@ -557,7 +555,7 @@ export function ExplainerPage() {
           await runPipeline(
             pending,
             convId,
-            `${candidate.customer_name} · ${candidate.policy_number}`,
+            `Policy ${candidate.policy_number} · ${candidate.customer_name}`,
             undefined,
             `${candidate.customer_name}, chosen by the employee.`
           );
@@ -596,7 +594,7 @@ export function ExplainerPage() {
         await runPipeline(
           pending,
           convId,
-          `${candidate.customer_name} · ${candidate.policy_number} — selected by employee`,
+          `Policy ${candidate.policy_number} · ${candidate.customer_name}`,
           undefined,
           `${candidate.customer_name}, chosen by the employee.`
         );
@@ -663,7 +661,7 @@ export function ExplainerPage() {
         await runPipeline(
           pendingQuestion,
           convId,
-          `${targetPolicy.customer_name} · ${targetPolicy.policy_number} — confirmed customer switch by employee`,
+          `Policy ${targetPolicy.policy_number} · ${targetPolicy.customer_name}`,
           undefined,
           `${targetPolicy.customer_name}, confirmed by the employee when switching customers.`
         );
@@ -846,8 +844,8 @@ export function ExplainerPage() {
   };
 
   return (
-    <div className="flex min-h-0 w-full flex-1 bg-white">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="flex h-full min-h-0 w-full flex-1 bg-white overflow-hidden">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <PolicyContextBanner
           policy={activePolicy}
           isResolving={isResolving}
@@ -878,7 +876,7 @@ export function ExplainerPage() {
           </div>
         )}
 
-        <section aria-label="Conversation" className="flex min-h-0 flex-1 flex-col bg-[#FBFCFD]">
+        <section aria-label="Conversation" className="flex min-h-0 flex-1 flex-col bg-[#FBFCFD] overflow-hidden">
           {isLoadingHistory ? (
             <div className="mx-auto w-full max-w-[780px] flex-1 space-y-5 px-4 py-6" aria-label="Loading conversation">
               <Skeleton className="ml-auto h-12 w-2/3 rounded-2xl" />

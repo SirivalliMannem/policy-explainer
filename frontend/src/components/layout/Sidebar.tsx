@@ -54,7 +54,7 @@ export function Sidebar({
       {/* Sidebar container */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex h-screen shrink-0 flex-col border-r border-border bg-card transition-all duration-300 lg:sticky lg:top-0',
+          'fixed inset-y-0 left-0 z-40 flex h-full max-h-screen shrink-0 flex-col border-r border-border bg-card transition-all duration-300 lg:sticky lg:top-0',
           isCollapsed ? 'w-16' : 'w-64',
           isMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         )}

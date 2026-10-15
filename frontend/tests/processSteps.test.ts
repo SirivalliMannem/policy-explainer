@@ -179,7 +179,7 @@ test('a stored answer shows the recorded verification, evidence confidence, cita
 
   const retrieve = step(steps, 'retrieve');
   assert.deepEqual(results(retrieve), [
-    { kind: 'result', tone: 'passed', text: 'Evidence confidence: 100%. The strongest passage scores 24.0 against the strong-evidence threshold of 12.' },
+    { kind: 'result', tone: 'passed', text: 'Evidence confidence: 100%' },
   ]);
   assert.deepEqual(retrieve.lines.filter((l) => l.kind === 'passage'), [
     { kind: 'passage', form: 'HO 04 95', page: 1, score: 24, percent: 100 },

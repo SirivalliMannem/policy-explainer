@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
   Compass,
   Database,
@@ -263,6 +264,7 @@ function AnswerCard({
   onOpenSource: (item: EvidenceItem) => void;
   onOpenTab: ConversationStreamProps['onOpenTab'];
 }) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const insufficient = result.status === 'insufficient_evidence';
   const sources = distinctSources(result.citations, result.evidence);
   const citedCoverage = result.citations
@@ -360,52 +362,67 @@ function AnswerCard({
 
         {!insufficient && sources.length > 0 && (
           <div className="mt-3.5 border-t border-slate-100 pt-3">
-            <span className="mb-1.5 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B]">
-              {sources.length === 1 ? 'Source' : `Sources (${sources.length})`}
-            </span>
-            <ul className="space-y-1">
-              {sources.map(({ key, evidence }) => (
-                <li key={key}>
-                  <button
-                    type="button"
-                    onClick={() => onOpenSource(evidence)}
-                    title="Open this source"
-                    className="group flex w-full items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1 text-left transition-colors hover:border-[#FDBA74] hover:bg-[#FFF7ED] cursor-pointer"
-                  >
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#FDBA74] bg-[#FFF7ED] px-1.5 py-px font-mono text-[10.5px] font-semibold text-[#C2410C] group-hover:bg-[#F97316] group-hover:text-white">
-                      <FileText className="h-2.5 w-2.5" />
-                      {evidenceChipLabel(evidence)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#0F2A43]">
-                      {sourceTitle(evidence)}
-                    </span>
-                    <span className="shrink-0 text-[10.5px] text-[#94A3B8]">
-                      {sourceKindLabel(evidence.source_type)}
-                      {evidence.edition ? ` · Ed. ${evidence.edition}` : ''}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {citedCoverage && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onOpenTab('coverages', {
-                      type: 'coverage',
-                      id: (citedCoverage.title || '').replace(/^Coverage:\s*/, ''),
-                    })
-                  }
-                  className="inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] px-2.5 py-1 text-[11.5px] font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] cursor-pointer"
-                >
-                  View coverage <ExternalLink className="h-3 w-3" />
-                </button>
-              )}
-              <span className="ml-auto text-[10.5px] text-[#94A3B8]" title={result.fallback_reason || undefined}>
-                {modelLabel(result)}
-              </span>
-            </div>
+            <button
+              type="button"
+              onClick={() => setSourcesOpen((prev) => !prev)}
+              aria-expanded={sourcesOpen}
+              className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#64748B] hover:text-[#0F2A43] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] rounded cursor-pointer"
+            >
+              <span>{sources.length === 1 ? 'Source' : `Sources (${sources.length})`}</span>
+              <ChevronDown
+                className={`h-3 w-3 text-[#64748B] transition-transform duration-200 ${
+                  sourcesOpen ? 'rotate-180' : ''
+                }`}
+                aria-hidden="true"
+              />
+            </button>
+            {sourcesOpen && (
+              <>
+                <ul className="space-y-1">
+                  {sources.map(({ key, evidence }) => (
+                    <li key={key}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenSource(evidence)}
+                        title="Open this source"
+                        className="group flex w-full items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1 text-left transition-colors hover:border-[#FDBA74] hover:bg-[#FFF7ED] cursor-pointer"
+                      >
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#FDBA74] bg-[#FFF7ED] px-1.5 py-px font-mono text-[10.5px] font-semibold text-[#C2410C] group-hover:bg-[#F97316] group-hover:text-white">
+                          <FileText className="h-2.5 w-2.5" />
+                          {evidenceChipLabel(evidence)}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#0F2A43]">
+                          {sourceTitle(evidence)}
+                        </span>
+                        <span className="shrink-0 text-[10.5px] text-[#94A3B8]">
+                          {sourceKindLabel(evidence.source_type)}
+                          {evidence.edition ? ` · Ed. ${evidence.edition}` : ''}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {citedCoverage && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenTab('coverages', {
+                          type: 'coverage',
+                          id: (citedCoverage.title || '').replace(/^Coverage:\s*/, ''),
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] px-2.5 py-1 text-[11.5px] font-semibold text-[#0F2A43] transition-colors hover:border-[#F97316] hover:text-[#EA580C] cursor-pointer"
+                    >
+                      View coverage <ExternalLink className="h-3 w-3" />
+                    </button>
+                  )}
+                  <span className="ml-auto text-[10.5px] text-[#94A3B8]" title={result.fallback_reason || undefined}>
+                    {modelLabel(result)}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -614,7 +631,7 @@ export function ConversationStream({
 
   if (messages.length === 0 && !isWorking) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-5 py-10 sm:px-10">
+      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden px-5 py-10 sm:px-10">
         <div className="w-full max-w-[640px] text-center">
           <span className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0F2A43] shadow-sm">
             <Shield className="h-5 w-5 text-[#F97316]" />
@@ -645,7 +662,7 @@ export function ConversationStream({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+    <div className="flex-1 overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden px-4 py-5 sm:px-6">
       <div className="mx-auto max-w-[780px] space-y-5">
       {messages.map((msg) => {
         switch (msg.kind) {

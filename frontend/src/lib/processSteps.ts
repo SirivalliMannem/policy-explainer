@@ -11,7 +11,7 @@ import type {
   QuestionAnswerResponse,
 } from '../types';
 import type { StageKey, StageStatus } from './explainer';
-import { STRONG_EVIDENCE_SCORE, evidencePercent, isRecordAnswer, searchedEvidence, topEvidencePercent } from './confidence.ts';
+import { evidencePercent, isRecordAnswer, searchedEvidence, topEvidencePercent } from './confidence.ts';
 
 export type StepStatus = 'pending' | 'running' | 'done' | 'warning' | 'failed' | 'skipped';
 
@@ -182,15 +182,15 @@ function verifyStep(result: QuestionAnswerResponse): ProcessStep {
 
 function contextLines(result: QuestionAnswerResponse, input: ProcessInput): StepLine[] {
   const lines: StepLine[] = [];
-  if (input.contextDetail) {
-    lines.push({ kind: 'text', text: input.contextDetail });
-  } else if (result.answer_type === 'portfolio') {
+  if (result.answer_type === 'portfolio') {
     lines.push({ kind: 'text', text: 'Portfolio lookup · answered from policy records' });
   } else if (result.policy_context) {
     lines.push({
       kind: 'text',
       text: `Policy ${result.policy_context.policy_number} · ${result.policy_context.customer_name}`,
     });
+  } else if (input.contextDetail) {
+    lines.push({ kind: 'text', text: input.contextDetail });
   } else {
     lines.push({ kind: 'text', text: 'Policy: not recorded' });
   }
@@ -407,11 +407,10 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
   } else {
     const top = topEvidencePercent(result);
     if (!records && top !== null) {
-      const topScore = Math.max(...searchedEvidence(result.evidence).map((e) => e.relevance_score ?? 0));
       retrieveLines.push({
         kind: 'result',
         tone: top >= 100 ? 'passed' : 'attention',
-        text: `Evidence confidence: ${top}%. The strongest passage scores ${topScore.toFixed(1)} against the strong-evidence threshold of ${STRONG_EVIDENCE_SCORE}.`,
+        text: `Evidence confidence: ${top}%`,
       });
     }
     for (const item of searchedEvidence(result.evidence)) {
