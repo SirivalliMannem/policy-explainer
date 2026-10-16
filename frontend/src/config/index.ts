@@ -1,4 +1,4 @@
-import { LayoutDashboard, Sparkles, Settings, HelpCircle } from 'lucide-react';
+import { LayoutDashboard, Sparkles, Settings, ScrollText } from 'lucide-react';
 import { NavItem } from '../types';
 
 export const APP_CONFIG = {
@@ -19,6 +19,11 @@ export const PRIMARY_NAV_ITEMS: NavItem[] = [
     href: '/app/explainer',
     icon: Sparkles,
   },
+  {
+    title: 'Audit Log',
+    href: '/app/audit-log',
+    icon: ScrollText,
+  },
 ];
 
 export const SECONDARY_NAV_ITEMS: NavItem[] = [
@@ -26,10 +31,5 @@ export const SECONDARY_NAV_ITEMS: NavItem[] = [
     title: 'Settings',
     href: '/app/settings',
     icon: Settings,
-  },
-  {
-    title: 'Help',
-    href: '/app/help',
-    icon: HelpCircle,
   },
 ];

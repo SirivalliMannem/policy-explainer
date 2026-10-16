@@ -1,7 +1,7 @@
 // Run with `npm test`. Confidence percentages derived from the AI service's existing confidence rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answerConfidence, confidenceExplanation, evidencePercent, STRONG_EVIDENCE_SCORE } from '../src/lib/confidence.ts';
+import { answerConfidence, boundedPercent, confidenceExplanation, evidencePercent, STRONG_EVIDENCE_SCORE } from '../src/lib/confidence.ts';
 import type { QuestionAnswerResponse } from '../src/types/index.ts';
 
 function answer(overrides: Partial<QuestionAnswerResponse> = {}): QuestionAnswerResponse {
@@ -32,9 +32,9 @@ test('evidence percentage is the score against the strong-evidence threshold, ca
   assert.equal(evidencePercent(null), null);
 });
 
-test('an answer meeting every HIGH criterion is 100%', () => {
+test('an answer meeting every HIGH criterion shows the 98% ceiling, never 100%', () => {
   const c = answerConfidence(answer());
-  assert.equal(c?.percent, 100);
+  assert.equal(c?.percent, 98);
   assert.equal(confidenceExplanation(c!), '6 of 6 confidence criteria met.');
 });
 
@@ -50,9 +50,9 @@ test('LOW: a failed guardrail is listed as missed', () => {
   assert.match(confidenceExplanation(c!), /missing: guardrails passed/);
 });
 
-test('values read from the records: found, checked and cited is 100%', () => {
+test('values read from the records: found, checked and cited shows 98%', () => {
   const record = { retrieval: { answer_type: 'factual_lookup' }, evidence: [{ source_type: 'coverage', source_id: 'a', content: 'x', relevance_score: 1 }], citations: [{ source_id: 'a' }] };
-  assert.equal(answerConfidence(answer(record))?.percent, 100);
+  assert.equal(answerConfidence(answer(record))?.percent, 98);
   // Nothing found in the records: only the record check is met.
   const missing = answerConfidence(answer({ ...record, evidence: [], citations: [] }));
   assert.equal(missing?.percent, 33);
@@ -61,4 +61,10 @@ test('values read from the records: found, checked and cited is 100%', () => {
 test('portfolio answers, and answers without recorded checks, have no graded percentage', () => {
   assert.equal(answerConfidence(answer({ answer_type: 'portfolio' })), null);
   assert.equal(answerConfidence(answer({ guardrail_checks: [] })), null);
+});
+
+test('the answer percentage stays between 5% and 98%', () => {
+  assert.equal(boundedPercent(6, 6), 98);
+  assert.equal(boundedPercent(0, 6), 5);
+  assert.equal(boundedPercent(5, 6), 83);
 });

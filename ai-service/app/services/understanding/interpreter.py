@@ -327,6 +327,10 @@ class QueryInterpreter:
             full = best_name_match(stated, names, NAME_CUTOFF)
             if full and full not in holders:
                 holders.append(full)
+            elif not full and stated not in holders and stated.lower() in question.lower():
+                # A name typed in the question that is not on file is kept, so the customer can be
+                # reported as not found; a name the model introduced itself never is.
+                holders.append(stated)
 
         number = _text(data.get("policy_number"), 20)
         if number:

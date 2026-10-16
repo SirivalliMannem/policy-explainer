@@ -33,6 +33,12 @@ CONTENT_TERMS = re.compile(
     r"bill\w*|premium|pay\w*|wording|clause\w*|peril\w*|damage|dates?|effective|expiration|status)\b",
     re.IGNORECASE,
 )
+# "policies of X", "policies for X", "does X have": X with letters and digits, which is not a name word.
+NAMED_SUBJECT = re.compile(
+    r"\b(?:polic(?:y|ies)\s+(?:of|for)|does|do|has|have)\s+([A-Za-z]+\d[\w'-]*|\d+[A-Za-z][\w'-]*)",
+    re.IGNORECASE,
+)
+POLICY_NUMBER_IN_TEXT = re.compile(r"\b(?:HO|PA)[-\s]?\d{4}[-\s]?\d{4}\b", re.IGNORECASE)
 HOUSEHOLD_TERMS = re.compile(r"\b(?:household|family|spouse|husband|wife|partner)\b", re.IGNORECASE)
 EXPIRED_TERMS = re.compile(r"\b(?:expired|lapsed|cancell?ed|previous|prior|old)\b", re.IGNORECASE)
 
@@ -180,7 +186,7 @@ def portfolio_evidence(result: PortfolioResult) -> tuple[list[dict], list[dict]]
 def portfolio_suggestions(result: PortfolioResult) -> list[str]:
     """Follow-ups about the policies just listed."""
     if result.scope == "not_found":
-        return ["What policies do we have?"]
+        return []
     return [f"What does {p.policy_number} cover?" for p in result.policies[:3]]
 
 
@@ -191,10 +197,20 @@ def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
     scope = "customer" if accounts else "book"
 
     # A name was given but matches nobody: say so rather than answering for the whole book.
-    unmatched = name_words(text) if not accounts else []
+    from app.services.customer_verification import _named_people
+    unmatched = [p for p in _named_people(text, None) if not find_accounts(p, db)[0]] if not accounts else []
+    if not unmatched and not accounts:
+        unmatched = name_words(text)
+    if not unmatched and not accounts:
+        # "the policies of Sirivalli123": a subject that is not a plain name (it has digits) is still
+        # someone asked about; answering for the whole book would reveal every other customer.
+        subject = NAMED_SUBJECT.search(POLICY_NUMBER_IN_TEXT.sub(" ", text))
+        if subject:
+            unmatched = [subject.group(1)]
     if unmatched:
+        name_str = " ".join(unmatched)
         return PortfolioResult(
-            answer=f"No policyholder named {' '.join(unmatched)} is on file. Check the spelling or use a policy number.",
+            answer=f"I couldn't find a matching customer for '{name_str}'. Please verify the customer name or provide a valid policy number.",
             scope="not_found",
             customers=[],
             policies=[],

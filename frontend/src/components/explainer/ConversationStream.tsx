@@ -318,6 +318,22 @@ function AnswerCard({
 
         <InterpretedAs result={result} />
 
+        {r.answer_type === 'document' && r.document && (
+          <div className="mb-2.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-[#F0F7FF] px-2.5 py-1.5 text-[11.5px] text-[#1E3A5F]">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+            <span className="font-semibold">From the uploaded document</span>
+            <span className="truncate">· {r.document.filename}</span>
+            <span className="text-[#64748B]">
+              {r.policy_passages ? '· compared with the policy on file' : '· not the policy on file'}
+            </span>
+            {r.general_knowledge && (
+              <span className="basis-full text-[11px] text-[#475569]">
+                Sentences beginning “In general” are general insurance knowledge, not taken from the document or the policy.
+              </span>
+            )}
+          </div>
+        )}
+
         {result.outcome === 'needs_review' && (
           <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
             <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
@@ -328,7 +344,18 @@ function AnswerCard({
           </div>
         )}
 
-        {insufficient ? (
+        {insufficient && r.answer_type === 'document' ? (
+          <div className="flex items-start gap-2.5">
+            <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-[#F97316]" />
+            <p className="text-[13.5px] font-medium leading-relaxed text-[#0F2A43]">
+              {result.answer}
+              <span className="mt-1 block text-[12px] font-normal text-[#64748B]">
+                Searched {r.passages_searched ?? 0} passages of {r.document?.filename ?? 'the document'}; nothing answers this
+                question, so nothing is made up.
+              </span>
+            </p>
+          </div>
+        ) : insufficient ? (
           <div className="space-y-2.5">
             <div className="flex items-start gap-2.5">
               <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-[#F97316]" />

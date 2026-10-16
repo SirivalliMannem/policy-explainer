@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertCircle, ChevronLeft, ChevronRight, RefreshCw, Search, X } from 'lucide-react';
+import { AlertCircle, RefreshCw, Search, X } from 'lucide-react';
+import { Pagination } from '../ui/Pagination';
+import { PAGE_SIZE } from '../../lib/pagination';
 import { getLedger, getLedgerFilters, getLedgerSummary } from '../../services/api';
 import type { LedgerFilters, LedgerPage, LedgerQuery, LedgerSummary } from '../../types';
 import { describeError, formatDate, formatDateTime, formatMs, lineLabel } from '../../lib/explainer';
@@ -9,7 +11,6 @@ import { ConfidenceBadge, OutcomeBadge } from './RecordBadges';
 import { LedgerDetailDrawer } from './LedgerDetailDrawer';
 
 
-const PAGE_SIZE = 10;
 
 const DATE_RANGES: { value: string; label: string; days: number | null }[] = [
   { value: '', label: 'Any date', days: null },
@@ -57,7 +58,7 @@ function Select({
   );
 }
 
-/** "The Record": every recorded policy answer, from the Evidence Ledger. */
+/** The Audit Log: every recorded policy answer, from the Evidence Ledger. */
 export function TheRecord() {
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
   const [filters, setFilters] = useState<LedgerFilters | null>(null);
@@ -68,7 +69,7 @@ export function TheRecord() {
   const [searchParams, setSearchParams] = useSearchParams();
   const sectionRef = useRef<HTMLElement | null>(null);
 
-  // "View in The Record" links here with ?entry=<ledger id>: open that entry and bring the Record into view.
+  // "View in the Audit Log" links here with ?entry=<ledger id>: open that entry and bring the Record into view.
   const linkedEntry = searchParams.get('entry');
   useEffect(() => {
     if (!linkedEntry) return;
@@ -155,8 +156,6 @@ export function TheRecord() {
   };
 
   const total = page?.total ?? 0;
-  const from = total ? offset + 1 : 0;
-  const to = Math.min(offset + PAGE_SIZE, total);
 
   return (
     <section ref={sectionRef} className="scroll-mt-4 space-y-4" aria-labelledby="the-record-title">
@@ -164,7 +163,7 @@ export function TheRecord() {
         <div>
           <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#F97316]">Evidence Ledger</span>
           <h2 id="the-record-title" className="mt-0.5 text-2xl font-bold tracking-tight text-[#0F2A43]">
-            The Record
+            Audit Log
           </h2>
           <p className="mt-0.5 max-w-2xl text-[13px] text-[#64748B]">
             Every policy question, answer, source, model decision, guardrail result, and outcome is traceable.
@@ -387,30 +386,12 @@ export function TheRecord() {
           </table>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[#E2E8F0] px-4 py-2.5 text-[11.5px] text-[#64748B]">
-          <span>
-            {from}–{to} of {total} recorded answers
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={offset === 0 || loading}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-              aria-label="Previous page"
-              className="rounded-md border border-[#E2E8F0] p-1 disabled:opacity-40 enabled:hover:border-[#F97316] cursor-pointer"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              disabled={to >= total || loading}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-              aria-label="Next page"
-              className="rounded-md border border-[#E2E8F0] p-1 disabled:opacity-40 enabled:hover:border-[#F97316] cursor-pointer"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
+        <div className="border-t border-[#E2E8F0] px-4 py-2.5">
+          {total > 0 ? (
+            <Pagination total={total} offset={offset} pageSize={PAGE_SIZE} onChange={setOffset} noun="recorded answers" disabled={loading} />
+          ) : (
+            <span className="text-[11.5px] text-[#64748B]">0 recorded answers</span>
+          )}
         </div>
       </div>
 

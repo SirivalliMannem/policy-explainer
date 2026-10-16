@@ -54,3 +54,6 @@ class EvidenceLedger(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     timings_ms: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retrieval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Needs attention analysis of a flagged answer (added by migration 0002). Added data only: the
+    # recorded answer above is never changed.
+    attention_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)

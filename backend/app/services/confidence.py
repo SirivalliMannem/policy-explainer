@@ -13,6 +13,11 @@ from typing import Any, Optional
 # STRONG_EVIDENCE_SCORE in ai-service/app/services/explainer_pipeline.py.
 STRONG_EVIDENCE_SCORE = 12
 
+# No answer is shown as certain (100%) or as having no support at all (0%); same bounds as
+# MIN/MAX_CONFIDENCE_PERCENT in frontend/src/lib/confidence.ts.
+MIN_PERCENT = 5
+MAX_PERCENT = 98
+
 
 def _get(item: Any, key: str):
     return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
@@ -55,4 +60,4 @@ def confidence_percent(
             inline is not None and _get(inline, "status") == "passed",
             top >= STRONG_EVIDENCE_SCORE,
         ]
-    return round(sum(criteria) / len(criteria) * 100)
+    return min(MAX_PERCENT, max(MIN_PERCENT, round(sum(criteria) / len(criteria) * 100)))

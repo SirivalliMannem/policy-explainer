@@ -295,6 +295,15 @@ export interface RetrievalSummary {
   term_selection?: TermSelection | null;
   /** A several-facts question: each part, and the source it was answered from. */
   parts?: { label: string; question: string; source: 'records' | 'forms' | 'wording' | string; found: boolean }[];
+  /** Answers from an uploaded document: which document, and how many of its passages were searched. */
+  document?: { id: string; filename: string; unit: 'page' | 'section' | string; page_count: number } | null;
+  passages_searched?: number;
+  /** Passages of the conversation's policy on file given with the document, for comparison. */
+  policy_passages?: number;
+  /** The answer adds general insurance knowledge (sentences beginning "In general"), not from any source. */
+  general_knowledge?: boolean;
+  /** "summary": the plain-language explanation of the whole document; "question": a question about it. */
+  mode?: 'summary' | 'question' | string;
   /** Meaning-based clause search alongside word match. */
   meaning_search?: MeaningSearch | null;
   /** Company guidance articles searched next to the policy wording, shown apart from the answer. */
@@ -528,6 +537,8 @@ export interface AttentionItem {
   reason_label: string;
   detail: string;
   policy_number?: string | null;
+  /** The verified policy, so a suggestion is asked in a new conversation with the same context. */
+  policy_id?: string | null;
   insured?: string | null;
   line_of_business?: string | null;
   times_asked: number;
@@ -541,6 +552,80 @@ export interface AttentionItem {
     clauses_searched: number;
     citations: string[];
   };
+  /** Stored when the answer was flagged (never computed on load); null until analysed. */
+  analysis?: AttentionAnalysis | null;
+  analysis_entry_id?: string | null;
+  /** This item is a re-asked question that was flagged again. */
+  rerun_of?: { entry_id: string; question: string } | null;
+}
+
+/** A passage a suggestion found when it was run through the normal retrieval. */
+export interface AttentionPassage {
+  source_type: string;
+  source_id: string;
+  form_number?: string | null;
+  edition?: string | null;
+  page?: number | null;
+  section?: string | null;
+  heading?: string | null;
+  quote: string;
+  score: number;
+  /** Clauses only: the quote appears word for word in the stored source. */
+  quote_verified?: boolean | null;
+}
+
+/** A suggested question that was verified to find evidence. */
+export interface AttentionCandidate {
+  question: string;
+  relation: 'same' | 'related';
+  /** Related questions only: what it does not answer about the original. */
+  note?: string | null;
+  passages: AttentionPassage[];
+  top_score: number;
+}
+
+export type AttentionAnalysisType =
+  | 'typo'
+  | 'vague_wording'
+  | 'definition'
+  | 'coverage_no_evidence'
+  | 'missing_form_or_edition'
+  | 'out_of_scope'
+  | 'customer_not_found'
+  | 'policy_context_missing'
+  | 'other';
+
+/** The stored analysis of a flagged question: the model classifies, code verifies and states facts. */
+export interface AttentionAnalysis {
+  status: 'ready' | 'failed' | string;
+  type?: AttentionAnalysisType | null;
+  category?: 'wrong_wording' | 'evidence_missing' | 'out_of_scope' | 'customer_not_found' | 'policy_context_missing' | null;
+  reason?: string;
+  candidates?: AttentionCandidate[];
+  dropped_candidates?: number;
+  /** Built from stored facts (search counts, form editions), never from the model's wording. */
+  missing?: string | null;
+  original_search?: { query_terms?: string[]; coverages_searched?: number; forms_searched?: number; clauses_searched?: number };
+  upload_available?: boolean;
+  model_used?: string;
+  analyzed_at?: string;
+}
+
+/** A person's decision on a flagged question; the ledger entries it covers are never changed. */
+export interface AttentionResolution {
+  id: string;
+  question: string;
+  reason: AttentionReason | string;
+  action: string;
+  action_label: string;
+  note: string;
+  latest_entry_id: string;
+  new_question?: string | null;
+  new_entry_id?: string | null;
+  resolved_by: string;
+  resolved_by_name?: string | null;
+  resolved_by_role?: string | null;
+  resolved_at: string;
 }
 
 export interface AttentionCause {
@@ -560,6 +645,14 @@ export interface AttentionResponse {
   flagged_total: number;
   /** Distinct flagged questions; items may be capped below this. */
   questions_flagged: number;
+  /** Flagged questions in the range already resolved by a person. */
+  questions_resolved?: number;
+  /** The page of items: items are questions_flagged[offset : offset + limit]. */
+  offset?: number;
+  limit?: number;
+  /** Over the whole queue, not just this page. */
+  questions_waiting_over_day?: number;
+  questions_asked_repeatedly?: number;
   items: AttentionItem[];
   causes: AttentionCause[];
 }
@@ -633,6 +726,24 @@ export interface LedgerDetail extends LedgerRow {
   fallback_reason?: string | null;
   retrieval: RetrievalSummary;
   timings_ms: Partial<Record<'retrieval' | 'grounding' | 'generation' | 'validation', number>>;
+  /** How a person resolved this flagged question in Needs attention. */
+  resolution?: AttentionResolution | null;
+}
+
+export interface AttentionResolveResponse {
+  resolution: AttentionResolution;
+  new_answer?: { ledger_id: string; conversation_id: string; outcome: string; flagged: boolean } | null;
+}
+
+/** An AI explanation of one cited clause: never approved wording, never a coverage decision. */
+export interface PlainLanguageExplanation {
+  source_id: string;
+  status: 'explained' | 'unavailable' | string;
+  explanation: string;
+  model_used?: string | null;
+  provider?: string | null;
+  reason?: string | null;
+  approved_plain_language?: string | null;
 }
 
 export interface LedgerQuery {
@@ -646,4 +757,29 @@ export interface LedgerQuery {
   sort?: 'newest' | 'oldest' | 'slowest' | 'fastest';
   limit?: number;
   offset?: number;
+}
+
+/** A document uploaded into a conversation (only its extracted text is kept). */
+export interface DocumentInfo {
+  document_id: string;
+  conversation_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  page_count: number;
+  /** "page" for PDFs; "section" for Word and text files. */
+  unit: 'page' | 'section' | string;
+  char_count: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+/** The text of one page or section of an uploaded document. */
+export interface DocumentPage {
+  document_id: string;
+  filename: string;
+  unit: 'page' | 'section' | string;
+  page_number: number;
+  page_count: number;
+  text: string;
 }

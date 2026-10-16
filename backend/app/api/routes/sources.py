@@ -2,22 +2,30 @@
 
 The synthetic book stores policy wording as structured clause rows (form, edition, page, section,
 heading, text) rather than PDF files, so the viewer is given that structured representation and is
-told explicitly that no PDF exists. Nothing is generated here: every field comes from the seeded
-form library or the policy's own schedule.
+told explicitly that no PDF exists. Every field of a source comes from the seeded form library or
+the policy's own schedule; the one generated thing, an on-request plain-language explanation of a
+cited clause, is returned separately and labelled as an AI explanation.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
+import hashlib
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
+from app.services.ai_client import ai_client
+from app.services.authorization import UNAUTHORIZED_ROLES
 from app.models.policy import Clause, CoreBilling, CoreClaim, CoreCoverage, CoreForm, CorePolicy
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
+logger = logging.getLogger(__name__)
 
 
 class SourcePassage(BaseModel):
@@ -275,3 +283,53 @@ def get_source(source_type: str, source_id: str, db: Session = Depends(get_db)):
         )
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported source type '{source_type}'")
+
+
+class PlainLanguageExplanation(BaseModel):
+    """An AI explanation of one clause's wording. Never approved wording and never a coverage decision."""
+
+    source_id: str
+    status: str  # explained | unavailable
+    explanation: str = ""
+    model_used: Optional[str] = None
+    provider: Optional[str] = None
+    reason: Optional[str] = None
+    # The carrier's approved explanation, when one exists, so the two are never confused.
+    approved_plain_language: Optional[str] = None
+
+
+# Explanations are kept per clause wording, so the same clause is not sent to the model again.
+_EXPLAINED: dict[tuple[str, str], PlainLanguageExplanation] = {}
+
+
+@router.post("/clause/{clause_id}/plain-language", response_model=PlainLanguageExplanation)
+def explain_clause_plainly(
+    clause_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Explain a cited clause in plain words with the language model, from the clause's own text."""
+    if (employee.role or "").strip().lower() in UNAUTHORIZED_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee is not authorized to view policy wording")
+    clause = db.query(Clause).filter(Clause.id == clause_id).first()
+    if clause is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clause not found")
+
+    key = (clause.id, hashlib.sha1((clause.text or "").encode("utf-8")).hexdigest())
+    cached = _EXPLAINED.get(key)
+    if cached is not None:
+        return cached
+    result = ai_client.plain_language(clause.heading or "", clause.form_number or "", clause.text or "")
+    explanation = PlainLanguageExplanation(
+        source_id=clause.id,
+        status=result.get("status") or "unavailable",
+        explanation=result.get("explanation") or "",
+        model_used=result.get("model_used"),
+        provider=result.get("provider"),
+        reason=result.get("reason"),
+        approved_plain_language=clause.plain_language or None,
+    )
+    logger.info("Plain-language explanation for clause %s requested by %s: %s", clause.id, employee.id, explanation.status)
+    if explanation.status == "explained":
+        _EXPLAINED[key] = explanation  # an unavailable result is not kept, so a retry can succeed
+    return explanation

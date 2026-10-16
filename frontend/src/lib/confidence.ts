@@ -8,6 +8,19 @@ import type { QuestionAnswerResponse } from '../types';
 /** STRONG_EVIDENCE_SCORE in ai-service/app/services/explainer_pipeline.py: the score that counts as strong evidence. */
 export const STRONG_EVIDENCE_SCORE = 12;
 
+/**
+ * The answer percentage is kept between these bounds: no answer is shown as certain (100%) or as
+ * having no support at all (0%). Evidence percentages per passage are not bounded.
+ */
+export const MIN_CONFIDENCE_PERCENT = 5;
+export const MAX_CONFIDENCE_PERCENT = 98;
+
+/** The share of criteria met, as a percentage within the displayed bounds. */
+export function boundedPercent(met: number, total: number): number {
+  const raw = total ? Math.round((met / total) * 100) : 0;
+  return Math.min(MAX_CONFIDENCE_PERCENT, Math.max(MIN_CONFIDENCE_PERCENT, raw));
+}
+
 export interface ConfidenceCriterion {
   label: string;
   met: boolean;
@@ -50,7 +63,7 @@ function recordConfidence(result: QuestionAnswerResponse): AnswerConfidence {
     { label: 'Every value cites its record', met: result.evidence.length > 0 && result.citations.length >= result.evidence.length },
   ];
   const met = criteria.filter((c) => c.met).length;
-  return { percent: Math.round((met / criteria.length) * 100), criteria };
+  return { percent: boundedPercent(met, criteria.length), criteria };
 }
 
 /**
@@ -75,7 +88,7 @@ export function answerConfidence(result: QuestionAnswerResponse): AnswerConfiden
     { label: `Strongest evidence reaches the strong-evidence threshold (${STRONG_EVIDENCE_SCORE})`, met: top >= STRONG_EVIDENCE_SCORE },
   ];
   const met = criteria.filter((c) => c.met).length;
-  return { percent: Math.round((met / criteria.length) * 100), criteria };
+  return { percent: boundedPercent(met, criteria.length), criteria };
 }
 
 /** One line for a tooltip or screen reader: what the percentage is made of. */

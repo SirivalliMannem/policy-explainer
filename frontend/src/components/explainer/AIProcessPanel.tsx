@@ -264,10 +264,10 @@ function AnswerRecord({ result, askedBy, askedAt }: { result: QuestionAnswerResp
         </dl>
         {result.ledger_id && (
           <Link
-            to={`/app/dashboard?entry=${encodeURIComponent(result.ledger_id)}`}
+            to={`/app/audit-log?entry=${encodeURIComponent(result.ledger_id)}`}
             className="mt-3 inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-[12.5px] font-semibold text-espresso transition-colors hover:border-orange-btn hover:text-orange-btn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-btn"
           >
-            View in The Record <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+            View in the Audit Log <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
           </Link>
         )}
       </Section>

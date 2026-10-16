@@ -111,3 +111,39 @@ class ExplainResponse(BaseModel):
     retrieval: dict[str, Any] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     interpretation: Optional[InterpretationSchema] = None
+
+
+class PlainLanguageRequest(BaseModel):
+    """One cited clause to explain in plain words."""
+
+    heading: str = ""
+    form_number: str = ""
+    text: str = Field(..., min_length=1)
+
+
+class PlainLanguageResponse(BaseModel):
+    status: str  # explained | unavailable
+    explanation: str = ""
+    model_used: Optional[str] = None
+    provider: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class AttentionAnalysisRequest(BaseModel):
+    """A flagged question to analyse for the Needs attention Resolve box."""
+
+    question: str = Field(..., min_length=1)
+    policy_id: Optional[str] = None
+    # The flagged answer's stored retrieval stats (terms and counts of what was searched).
+    retrieval: dict = Field(default_factory=dict)
+    flag_reason: str = "no_evidence"
+
+
+class DocumentQuestionRequest(BaseModel):
+    """A question about (or, mode "summary", an explanation of) one uploaded document."""
+
+    document_id: str = Field(..., min_length=1)
+    question: str = ""
+    mode: str = Field("question", pattern="^(question|summary)$")
+    # The conversation's policy on file, given so the document can be compared with it.
+    policy_id: Optional[str] = None

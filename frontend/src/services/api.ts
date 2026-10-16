@@ -1,7 +1,13 @@
 import { APP_CONFIG } from '../config';
 import { currentEmployee } from './auth';
 import type {
+  DocumentInfo,
+  DocumentPage,
+  AttentionAnalysis,
+  AttentionResolution,
+  AttentionResolveResponse,
   AttentionResponse,
+  PlainLanguageExplanation,
   BillingItem,
   ClaimItem,
   ContextCheckResponse,
@@ -88,7 +94,8 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   try {
     response = await fetch(url.toString(), {
       headers: {
-        'Content-Type': 'application/json',
+        // A FormData body (file upload) sets its own multipart content type.
+        ...(rest.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...identityHeaders(),
         ...headers,
       },
@@ -169,11 +176,35 @@ export async function getDashboardStats(
 }
 
 /** Flagged and unanswered questions in the range, grouped by question, with their causes. */
+/**
+ * Close a flagged item: ask a verified suggestion or an edited question as a new question
+ * (asked_suggestion / edited_and_asked), or dismiss it with a reason.
+ */
+export async function resolveAttention(body: {
+  entry_id: string;
+  action: 'asked_suggestion' | 'edited_and_asked' | 'dismissed' | 'resolved';
+  question?: string;
+  reason?: string;
+}): Promise<AttentionResolveResponse> {
+  return apiClient.post<AttentionResolveResponse>('/api/dashboard/attention/resolve', body);
+}
+
+/** Analyse a flagged question now (on request only; the dashboard never calls the model on load). */
+export async function analyzeAttention(entryId: string): Promise<AttentionAnalysis> {
+  return apiClient.post<AttentionAnalysis>(`/api/dashboard/attention/${encodeURIComponent(entryId)}/analyze`, {});
+}
+
+/** How flagged items were closed in the range, newest first. */
+export async function getResolutionLog(timeRange: 'today' | '7d' | '30d' = '7d'): Promise<AttentionResolution[]> {
+  return apiClient.get<AttentionResolution[]>('/api/dashboard/attention/resolutions', { params: { range: timeRange } });
+}
+
 export async function getNeedsAttention(
-  timeRange: 'today' | '7d' | '30d' = '7d'
+  timeRange: 'today' | '7d' | '30d' = '7d',
+  page: { limit?: number; offset?: number } = {}
 ): Promise<AttentionResponse> {
   return apiClient.get<AttentionResponse>('/api/dashboard/attention', {
-    params: { range: timeRange },
+    params: { range: timeRange, limit: page.limit ?? 10, offset: page.offset ?? 0 },
   });
 }
 
@@ -291,13 +322,52 @@ export async function clearConversationContext(
 export async function submitQuestion(
   conversationId: string,
   question: string,
-  policyId?: string
+  policyId?: string,
+  documentId?: string
 ): Promise<QuestionAnswerResponse> {
   return apiClient.post<QuestionAnswerResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
-    policyId ? { question, policy_id: policyId } : { question },
+    { question, ...(policyId ? { policy_id: policyId } : {}), ...(documentId ? { document_id: documentId } : {}) },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
+}
+
+/** Upload a PDF, Word or text document into the conversation; it becomes the attached document. */
+export async function uploadDocument(conversationId: string, file: File): Promise<DocumentInfo> {
+  const body = new FormData();
+  body.append('file', file);
+  return request<DocumentInfo>(`/api/conversations/${encodeURIComponent(conversationId)}/documents`, {
+    method: 'POST',
+    body,
+    timeoutMs: QUESTION_TIMEOUT_MS,
+  });
+}
+
+/** The documents uploaded into a conversation, the attached one first. */
+export async function listDocuments(conversationId: string): Promise<DocumentInfo[]> {
+  return apiClient.get<DocumentInfo[]>(`/api/conversations/${encodeURIComponent(conversationId)}/documents`);
+}
+
+/** Stop answering from the document (it is kept, not deleted). */
+export async function detachDocument(conversationId: string, documentId: string): Promise<DocumentInfo> {
+  return apiClient.post<DocumentInfo>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/documents/${encodeURIComponent(documentId)}/detach`,
+    {}
+  );
+}
+
+/** The plain-language explanation of the whole document, with page references. */
+export async function explainDocument(conversationId: string, documentId: string): Promise<QuestionAnswerResponse> {
+  return apiClient.post<QuestionAnswerResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/documents/${encodeURIComponent(documentId)}/explain`,
+    {},
+    { timeoutMs: QUESTION_TIMEOUT_MS }
+  );
+}
+
+/** The text of one cited page or section of an uploaded document. */
+export async function getDocumentPage(pageId: string): Promise<DocumentPage> {
+  return apiClient.get<DocumentPage>(`/api/document-pages/${encodeURIComponent(pageId)}`);
 }
 
 /** The signed-in employee's conversations, newest activity first, archived ones excluded. */
@@ -341,6 +411,11 @@ export async function getConversationMessages(conversationId: string): Promise<C
 // ==========================================
 // Sources & Evidence Ledger
 // ==========================================
+
+/** Ask the language model to explain one cited clause in plain words (labelled as an AI explanation). */
+export async function explainClausePlainly(clauseId: string): Promise<PlainLanguageExplanation> {
+  return apiClient.post<PlainLanguageExplanation>(`/api/sources/clause/${encodeURIComponent(clauseId)}/plain-language`, {});
+}
 
 export async function getSource(sourceType: string, sourceId: string): Promise<SourceDocument> {
   return apiClient.get<SourceDocument>(

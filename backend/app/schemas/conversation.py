@@ -105,6 +105,8 @@ class QuestionSubmitRequest(BaseModel):
     # Answer about this policy instead of the conversation's context, without changing the context.
     # Used when one question is answered for each of a customer's matching policies.
     policy_id: Optional[str] = None
+    # Answer from this uploaded document only (attached to the same conversation by the same employee).
+    document_id: Optional[str] = None
 
 
 class QuestionSubmitResponse(BaseModel):

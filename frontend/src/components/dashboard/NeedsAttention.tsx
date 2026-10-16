@@ -1,31 +1,25 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, ChevronDown, Loader2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, History, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Skeleton } from '../ui/Skeleton';
 import { LedgerDetailDrawer } from './LedgerDetailDrawer';
-import { ApiError, getNeedsAttention } from '../../services/api';
-import { relativeTime } from '../../lib/explainer';
-import type { AttentionCause, AttentionItem, AttentionReason, AttentionResponse } from '../../types';
+import { ApiError, getNeedsAttention, getResolutionLog } from '../../services/api';
+import { formatDateTime, relativeTime } from '../../lib/explainer';
+import type { AttentionItem, AttentionReason, AttentionResolution, AttentionResolveResponse, AttentionResponse } from '../../types';
+import { ResolveBox } from './ResolveBox';
+import { Pagination } from '../ui/Pagination';
+import { PAGE_SIZE } from '../../lib/pagination';
 
 type Range = 'today' | '7d' | '30d';
-type Tab = 'queue' | 'gaps';
 
 const RANGE_LABEL: Record<Range, string> = { today: 'today', '7d': 'in the last 7 days', '30d': 'in the last 30 days' };
 const DAY_MS = 24 * 60 * 60 * 1000;
-const COLLAPSED_ROWS = 5;
 
 const TAG_STYLE: Record<AttentionReason, string> = {
   guardrail_flagged: 'bg-[#FFF1E6] text-[#9A3D09]',
   no_evidence: 'bg-[#FDECEC] text-[#A12A2A]',
   customer_not_found: 'bg-slate-100 text-slate-600',
   low_confidence: 'bg-[#E8EEF6] text-[#1F4A73]',
-};
-
-const EXAMPLES_LABEL: Record<AttentionReason, string> = {
-  guardrail_flagged: 'Checks failed:',
-  no_evidence: 'Unmatched terms:',
-  customer_not_found: 'Asked:',
-  low_confidence: 'Asked:',
 };
 
 function parseUtc(value: string): number {
@@ -60,13 +54,13 @@ function QueueRow({
   open,
   onToggle,
   onOpenRecord,
-  onAskAgain,
+  onClosed,
 }: {
   item: AttentionItem;
   open: boolean;
   onToggle: () => void;
   onOpenRecord: () => void;
-  onAskAgain: () => void;
+  onClosed: (result: AttentionResolveResponse, summary: string) => void;
 }) {
   const old = isOld(item);
   const s = item.sources;
@@ -83,6 +77,9 @@ function QueueRow({
       >
         <span className="min-w-0">
           <span className="block text-[14.5px] font-semibold leading-snug text-espresso">{item.question}</span>
+          {item.rerun_of && (
+            <span className="mt-0.5 block text-[11.5px] text-[#9A3D09]">re-run of “{item.rerun_of.question}”</span>
+          )}
           <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {item.policy_number && <code className="font-mono text-[11.5px] font-semibold text-espresso">{item.policy_number}</code>}
             {item.insured && <span>{item.insured}</span>}
@@ -111,21 +108,16 @@ function QueueRow({
       </button>
 
       {open && (
-        <div id={detailId} className="grid gap-4 px-1 pb-5 md:grid-cols-[1.4fr_1fr] animate-fade-in opacity-0">
+        <div id={detailId} className="grid gap-4 px-1 pb-5 md:grid-cols-2 animate-fade-in opacity-0">
           <div className="rounded-xl border border-border bg-slate-50 p-4 text-[13px] leading-relaxed text-espresso">
             <h5 className="mb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-orange-btn">WHY IT WAS FLAGGED</h5>
             <p>{item.detail}</p>
-            <p className="mt-2 text-xs text-muted-foreground md:hidden">
-              Asked {item.times_asked}× · first {relativeTime(item.first_asked_at)}
-            </p>
             {item.times_asked > 1 && (
-              <p className="mt-2 hidden md:block text-xs text-muted-foreground">
+              <p className="mt-2 text-xs text-muted-foreground">
                 Asked {item.times_asked} times, most recently {relativeTime(item.last_asked_at).toLowerCase()}.
               </p>
             )}
-          </div>
-          <div className="rounded-xl border border-border bg-slate-50 p-4 text-[13px] leading-relaxed text-espresso">
-            <h5 className="mb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-orange-btn">
+            <h5 className="mb-1.5 mt-4 text-[10.5px] font-semibold tracking-[0.08em] text-orange-btn">
               {s.citations.length ? 'SOURCES CITED' : 'SOURCES CHECKED'}
             </h5>
             {s.citations.length > 0 ? (
@@ -155,56 +147,15 @@ function QueueRow({
             ) : (
               <p>Policy records were checked; no policy evidence applies.</p>
             )}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={onOpenRecord}
-                className="rounded-lg border border-orange-btn bg-orange-btn px-3 py-1.5 text-[12.5px] font-semibold text-white transition-colors hover:bg-[#C2410C]"
-              >
-                Open record
-              </button>
-              <button
-                type="button"
-                onClick={onAskAgain}
-                className="rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] font-semibold text-espresso transition-colors hover:border-espresso"
-              >
-                Ask again
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={onOpenRecord}
+              className="mt-3 rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] font-semibold text-espresso transition-colors hover:border-espresso"
+            >
+              Open record
+            </button>
           </div>
-        </div>
-      )}
-    </li>
-  );
-}
-
-function CauseRow({ cause, first, animate }: { cause: AttentionCause; first: boolean; animate: boolean }) {
-  return (
-    <li className="grid grid-cols-[minmax(0,1fr)_50px] md:grid-cols-[230px_minmax(0,1fr)_60px] items-center gap-x-5 gap-y-2 border-b border-slate-100 py-4 last:border-b-0">
-      <div>
-        <div className="text-sm font-bold text-espresso">{cause.label}</div>
-        <div className="mt-0.5 text-xs text-muted-foreground">{cause.description}</div>
-      </div>
-      <div
-        className="order-3 col-span-2 md:order-none md:col-span-1 h-2.5 overflow-hidden rounded-md bg-slate-100"
-        role="img"
-        aria-label={`${cause.label}: ${cause.count} answers, ${cause.share_pct}% of flagged`}
-        title={`${cause.count} answers · ${cause.share_pct}% of flagged answers`}
-      >
-        <span
-          className={`block h-full rounded-md transition-[width] duration-1000 ease-out ${first ? 'bg-orange-btn' : 'bg-[#1F4A73]'}`}
-          style={{ width: animate ? `${Math.max(2, cause.share_pct)}%` : '0%' }}
-        />
-      </div>
-      <div className="text-right font-mono text-sm font-bold text-espresso">{cause.count}</div>
-      {cause.examples.length > 0 && (
-        <div className="order-4 col-span-2 md:col-span-3 -mt-1 flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
-          {EXAMPLES_LABEL[cause.reason]}
-          {cause.examples.map((e) => (
-            <code key={e} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11.5px] text-espresso">
-              {e}
-            </code>
-          ))}
+          <ResolveBox item={item} onClosed={onClosed} />
         </div>
       )}
     </li>
@@ -212,28 +163,45 @@ function CauseRow({ cause, first, animate }: { cause: AttentionCause; first: boo
 }
 
 /**
- * Questions that need a person, from the evidence ledger: a review queue grouped by question,
- * and the causes behind them. No review workflow exists yet, so nothing is marked resolved;
- * the queue is everything flagged inside the selected range.
+ * Questions that need a person, from the evidence ledger, grouped by question. Opening one shows
+ * why it was flagged and the actions that resolve it; a resolved question leaves the queue (and
+ * comes back if it is asked again). Resolutions are recorded; ledger entries are never changed.
  */
 export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range; refreshKey?: number }) {
-  const navigate = useNavigate();
   const [data, setData] = useState<AttentionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('queue');
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [record, setRecord] = useState<string | null>(null);
-  const [barsIn, setBarsIn] = useState(false);
+  const [resolvedNote, setResolvedNote] = useState<{ text: string; conversationId?: string } | null>(null);
+  const [reload, setReload] = useState(0);
+  const [showLog, setShowLog] = useState(false);
+  const [log, setLog] = useState<AttentionResolution[] | null>(null);
+
+  useEffect(() => {
+    if (!showLog) return;
+    let cancelled = false;
+    getResolutionLog(timeRange)
+      .then((rows) => !cancelled && setLog(rows))
+      .catch(() => !cancelled && setLog([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [showLog, timeRange, reload]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setFailed(null);
-    getNeedsAttention(timeRange)
+    getNeedsAttention(timeRange, { limit: PAGE_SIZE, offset })
       .then((res) => {
         if (cancelled) return;
+        // Closing the last item of a page leaves it empty: show the page before.
+        if (!res.items.length && offset > 0 && res.questions_flagged > 0) {
+          setOffset(Math.max(0, Math.floor((res.questions_flagged - 1) / PAGE_SIZE) * PAGE_SIZE));
+          return;
+        }
         setData(res);
         setOpenKey((key) => key ?? res.items[0]?.latest_entry_id ?? null);
       })
@@ -250,39 +218,31 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
     return () => {
       cancelled = true;
     };
-  }, [timeRange, refreshKey]);
+  }, [timeRange, refreshKey, reload, offset]);
 
-  // Grow the cause bars from zero each time the tab opens.
-  useEffect(() => {
-    if (tab !== 'gaps') return setBarsIn(false);
-    const id = requestAnimationFrame(() => requestAnimationFrame(() => setBarsIn(true)));
-    return () => cancelAnimationFrame(id);
-  }, [tab, data]);
+  // A different range starts from the first page.
+  useEffect(() => setOffset(0), [timeRange]);
 
   const items = data?.items ?? [];
-  const causes = data?.causes ?? [];
-  const shown = showAll ? items : items.slice(0, COLLAPSED_ROWS);
-  const oldCount = items.filter(isOld).length;
-  const repeatCount = items.filter((i) => i.times_asked > 1).length;
-  const flaggedPct = data && data.answers_total ? Math.round((data.flagged_total / data.answers_total) * 100) : 0;
-  const topCause = causes[0];
+  const shown = items;
+  const oldCount = data?.questions_waiting_over_day ?? 0;
+  const repeatCount = data?.questions_asked_repeatedly ?? 0;
 
-  const tabButton = (key: Tab, label: string, badge?: number) => (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tab === key}
-      onClick={() => setTab(key)}
-      className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-        tab === key ? 'bg-white text-espresso shadow-[0_1px_3px_rgba(15,42,67,0.15)]' : 'text-muted-foreground hover:text-espresso'
-      }`}
-    >
-      {label}
-      {badge !== undefined && badge > 0 && (
-        <b className="rounded-full bg-orange px-1.5 py-px text-[11px] text-white tabular-nums">{badge}</b>
-      )}
-    </button>
-  );
+  const markClosed = (item: AttentionItem, result: AttentionResolveResponse, summary: string) => {
+    // Leave the queue at once; the reload brings the counts (and any re-run item) up to date.
+    setData((d) => (d ? { ...d, items: d.items.filter((i) => i.latest_entry_id !== item.latest_entry_id) } : d));
+    setOpenKey(null);
+    const answer = result.new_answer;
+    setResolvedNote({
+      text: answer
+        ? answer.flagged
+          ? `${summary}. Closed. The new answer was flagged too, so it is in the queue as a re-run.`
+          : `${summary}. Closed: the new answer is grounded.`
+        : `${summary}. Closed.`,
+      conversationId: answer?.conversation_id,
+    });
+    setReload((n) => n + 1);
+  };
 
   return (
     <section className="rounded-2xl border border-border bg-card px-5 py-6 sm:px-7 shadow-card" aria-labelledby="attention-heading">
@@ -298,10 +258,11 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
             Flagged questions and missing evidence that need a person
           </p>
         </div>
-        <div role="tablist" aria-label="Needs attention view" className="flex rounded-[10px] border border-border bg-[#EEF2F7] p-[3px]">
-          {tabButton('queue', 'Review queue', data?.questions_flagged)}
-          {tabButton('gaps', 'Coverage gaps')}
-        </div>
+        {data && data.questions_flagged > 0 && (
+          <span className="rounded-full bg-orange px-2.5 py-1 text-[12px] font-bold text-white tabular-nums">
+            {data.questions_flagged} in queue
+          </span>
+        )}
       </div>
 
       {loading && !data ? (
@@ -315,21 +276,35 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
         <p className="mt-5 border-t border-border py-8 text-center text-xs text-muted-foreground">
           {failed}
         </p>
-      ) : !data || data.flagged_total === 0 ? (
+      ) : !data || items.length === 0 ? (
         <div className="mt-5 flex flex-col items-center border-t border-border py-10 text-center">
           <CheckCircle2 className="mb-2 h-7 w-7 text-success" />
           <p className="text-sm font-medium text-espresso">Nothing needs attention {RANGE_LABEL[timeRange]}.</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Every one of {data?.answers_total ?? 0} recorded answers was grounded in policy evidence.
+            {data?.questions_resolved
+              ? `${data.questions_resolved} flagged ${data.questions_resolved === 1 ? 'question was' : 'questions were'} resolved; the rest of the ${data.answers_total} recorded answers were grounded in policy evidence.`
+              : `Every one of ${data?.answers_total ?? 0} recorded answers was grounded in policy evidence.`}
           </p>
+          {resolvedNote && <p className="mt-2 text-xs font-semibold text-success">{resolvedNote.text}</p>}
         </div>
-      ) : tab === 'queue' ? (
-        <div key="queue" className="animate-fade-in opacity-0" role="tabpanel">
+      ) : (
+        <div key="queue" className="animate-fade-in opacity-0">
           <div className="mt-4 mb-1 flex flex-wrap gap-2.5 border-t border-border pt-4">
             {oldCount > 0 && <Pill hot value={oldCount} label="first flagged over 24h ago" />}
             <Pill value={repeatCount} label="asked more than once" />
             <Pill value={data.flagged_total} label={`flagged of ${data.answers_total} answers`} />
+            {(data.questions_resolved ?? 0) > 0 && <Pill value={data.questions_resolved ?? 0} label="resolved" />}
           </div>
+          {resolvedNote && (
+            <p role="status" className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-[12.5px] font-medium text-emerald-800">
+              <CheckCircle2 className="h-4 w-4 shrink-0" /> {resolvedNote.text}
+              {resolvedNote.conversationId && (
+                <Link to={`/app/explainer/c/${resolvedNote.conversationId}`} className="ml-auto font-semibold underline">
+                  Open the answer
+                </Link>
+              )}
+            </p>
+          )}
           <ul>
             {shown.map((item) => (
               <QueueRow
@@ -338,52 +313,70 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
                 open={openKey === item.latest_entry_id}
                 onToggle={() => setOpenKey((k) => (k === item.latest_entry_id ? null : item.latest_entry_id))}
                 onOpenRecord={() => setRecord(item.latest_entry_id)}
-                onAskAgain={() => navigate('/app/explainer', { state: { initialQuestion: item.question } })}
+                onClosed={(result, summary) => markClosed(item, result, summary)}
               />
             ))}
           </ul>
-          <div className="flex items-center justify-between pt-4 text-[12.5px] text-muted-foreground">
-            <span>
-              Showing {shown.length} of {data.questions_flagged}, longest waiting first
-            </span>
-            {items.length > COLLAPSED_ROWS && (
-              <button type="button" onClick={() => setShowAll((v) => !v)} className="font-bold text-orange-btn hover:underline">
-                {showAll ? 'Show fewer' : `View all ${items.length} →`}
-              </button>
-            )}
+          <div className="pt-4">
+            <Pagination
+              total={data.questions_flagged}
+              offset={data.offset ?? offset}
+              pageSize={PAGE_SIZE}
+              onChange={(next) => {
+                setOffset(next);
+                setOpenKey(null);
+              }}
+              noun="flagged questions, newest first"
+              disabled={loading}
+            />
           </div>
         </div>
-      ) : (
-        <div key="gaps" className="animate-fade-in opacity-0" role="tabpanel">
-          <div className="mt-4 mb-1 flex flex-wrap gap-2.5 border-t border-border pt-4">
-            <Pill hot value={data.flagged_total} label="answers need a person" />
-            <Pill value={causes.length} label={causes.length === 1 ? 'cause' : 'causes'} />
-            <Pill value={`${flaggedPct}%`} label="of recorded answers" />
-          </div>
-          <ul>
-            {causes.map((c, i) => (
-              <CauseRow key={c.reason} cause={c} first={i === 0} animate={barsIn} />
-            ))}
-          </ul>
-          {topCause && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-navy px-5 py-4 text-[13.5px] text-slate-200">
-              <span>
-                <b className="text-orange-gold">{topCause.label}</b> accounts for{' '}
-                <b className="text-orange-gold">
-                  {topCause.count} of {data.flagged_total}
-                </b>{' '}
-                flagged answers
-                {topCause.reason === 'no_evidence' && topCause.examples.length > 0
-                  ? ` — people asked about ${topCause.examples.slice(0, 2).join(' and ')}, and nothing in the indexed policy forms matched.`
-                  : '.'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setTab('queue')}
-                className="rounded-lg border border-orange-btn bg-orange-btn px-3 py-1.5 text-[12.5px] font-semibold text-white transition-colors hover:bg-[#C2410C]"
-              >
-                See the questions
-              </button>
+
+      )}
+
+      {data && !failed && (
+        <div className="mt-4 border-t border-border pt-3">
+          <button
+            type="button"
+            onClick={() => setShowLog((v) => !v)}
+            aria-expanded={showLog}
+            className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-espresso hover:text-orange-btn"
+          >
+            <History className="h-4 w-4" /> Resolution log
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showLog ? 'rotate-180' : ''}`} />
+          </button>
+          {showLog && (
+            <div className="mt-2">
+              <p className="mb-2 text-[11.5px] text-muted-foreground">
+                Each closure is recorded here. The original flagged record is unchanged in the Audit Log.
+              </p>
+              {log === null ? (
+                <Skeleton className="h-10 w-full" />
+              ) : log.length === 0 ? (
+                <p className="text-[12.5px] text-muted-foreground">Nothing was closed {RANGE_LABEL[timeRange]}.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {log.map((r) => (
+                    <li key={r.id} className="py-2 text-[12.5px] text-espresso">
+                      <span className="font-semibold">{r.action_label}</span>
+                      <span className="text-muted-foreground"> · {formatDateTime(r.resolved_at)} · {r.resolved_by_name || 'Name not recorded'} </span>
+                      <span className="font-mono text-[11px] text-muted-foreground">{r.resolved_by}</span>
+                      <span className="block">“{r.question}”</span>
+                      {r.new_question && (
+                        <span className="block text-[#334155]">
+                          → asked “{r.new_question}”
+                          {r.new_entry_id && (
+                            <Link to={`/app/audit-log?entry=${encodeURIComponent(r.new_entry_id)}`} className="ml-1.5 font-semibold text-orange-btn hover:underline">
+                              new answer
+                            </Link>
+                          )}
+                        </span>
+                      )}
+                      {r.note && <span className="block text-muted-foreground">Reason: {r.note}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>

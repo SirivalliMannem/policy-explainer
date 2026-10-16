@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any, Optional
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,11 @@ def answer_outcome(question_status: str, guardrail_status: str) -> str:
     if guardrail_status in ("flagged", "failed"):
         return "needs_review"
     return "answered"
+
+
+# Set while a flagged question is being re-asked from Needs attention, so the new entry records which
+# entry it re-runs (the original entry is never touched).
+RERUN_OF: ContextVar[Optional[dict]] = ContextVar("rerun_of", default=None)
 
 
 class LedgerService:
@@ -102,9 +108,13 @@ class LedgerService:
             fallback_reason=fallback_reason,
             latency_ms=latency_ms,
             timings_ms=timings_ms or {},
-            retrieval=retrieval or {},
+            retrieval={**(retrieval or {}), **({"rerun_of": RERUN_OF.get()} if RERUN_OF.get() else {})},
         )
         db.add(ledger_entry)
         db.commit()
         db.refresh(ledger_entry)
+        # A flagged answer is analysed once in the background for the Needs attention Resolve box.
+        from app.services.attention_analysis import schedule_analysis
+
+        schedule_analysis(ledger_entry)
         return ledger_entry

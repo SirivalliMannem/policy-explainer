@@ -21,8 +21,8 @@ def clause(score):
     return {"source_type": "clause", "relevance_score": score, "scope": "customer_form"}
 
 
-def test_a_generated_answer_meeting_every_criterion_is_100():
-    assert confidence_percent("high", "policy_explanation", [clause(15), clause(4)], [{}, {}], CHECKS, "passed") == 100
+def test_a_generated_answer_meeting_every_criterion_shows_the_98_ceiling():
+    assert confidence_percent("high", "policy_explanation", [clause(15), clause(4)], [{}, {}], CHECKS, "passed") == 98
 
 
 def test_each_missed_criterion_lowers_the_percentage():
@@ -35,7 +35,7 @@ def test_each_missed_criterion_lowers_the_percentage():
 
 def test_record_answers_use_the_record_criteria():
     record = {"source_type": "coverage", "scope": "policy_record"}
-    assert confidence_percent("high", "factual_lookup", [record], [{}], [], "passed") == 100
+    assert confidence_percent("high", "factual_lookup", [record], [{}], [], "passed") == 98
     assert confidence_percent("high", "factual_lookup", [record, record], [{}], [], "passed") == 67
 
 
@@ -78,3 +78,8 @@ def test_ledger_rows_and_detail_carry_the_percentage(headers, monkeypatch):
     # Evidence, guardrails, one citation and inline citations met; two citations and strong evidence missed.
     assert (row["confidence"], row["confidence_percent"]) == ("medium", 67)
     assert client.get(f"/api/ledger/{body['ledger_id']}").json()["confidence_percent"] == 67
+
+
+def test_an_answer_meeting_no_criterion_shows_the_5_floor():
+    failed = [{"name": "inline_citations", "status": "failed"}]
+    assert confidence_percent("low", "policy_explanation", [], [], failed, "flagged") == 5
