@@ -1,6 +1,8 @@
 import { APP_CONFIG } from '../config';
 import { currentEmployee } from './auth';
 import type {
+  DocumentInfo,
+  DocumentPage,
   AttentionAnalysis,
   AttentionResolution,
   AttentionResolveResponse,
@@ -92,7 +94,8 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   try {
     response = await fetch(url.toString(), {
       headers: {
-        'Content-Type': 'application/json',
+        // A FormData body (file upload) sets its own multipart content type.
+        ...(rest.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...identityHeaders(),
         ...headers,
       },
@@ -318,13 +321,52 @@ export async function clearConversationContext(
 export async function submitQuestion(
   conversationId: string,
   question: string,
-  policyId?: string
+  policyId?: string,
+  documentId?: string
 ): Promise<QuestionAnswerResponse> {
   return apiClient.post<QuestionAnswerResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
-    policyId ? { question, policy_id: policyId } : { question },
+    { question, ...(policyId ? { policy_id: policyId } : {}), ...(documentId ? { document_id: documentId } : {}) },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
+}
+
+/** Upload a PDF, Word or text document into the conversation; it becomes the attached document. */
+export async function uploadDocument(conversationId: string, file: File): Promise<DocumentInfo> {
+  const body = new FormData();
+  body.append('file', file);
+  return request<DocumentInfo>(`/api/conversations/${encodeURIComponent(conversationId)}/documents`, {
+    method: 'POST',
+    body,
+    timeoutMs: QUESTION_TIMEOUT_MS,
+  });
+}
+
+/** The documents uploaded into a conversation, the attached one first. */
+export async function listDocuments(conversationId: string): Promise<DocumentInfo[]> {
+  return apiClient.get<DocumentInfo[]>(`/api/conversations/${encodeURIComponent(conversationId)}/documents`);
+}
+
+/** Stop answering from the document (it is kept, not deleted). */
+export async function detachDocument(conversationId: string, documentId: string): Promise<DocumentInfo> {
+  return apiClient.post<DocumentInfo>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/documents/${encodeURIComponent(documentId)}/detach`,
+    {}
+  );
+}
+
+/** The plain-language explanation of the whole document, with page references. */
+export async function explainDocument(conversationId: string, documentId: string): Promise<QuestionAnswerResponse> {
+  return apiClient.post<QuestionAnswerResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/documents/${encodeURIComponent(documentId)}/explain`,
+    {},
+    { timeoutMs: QUESTION_TIMEOUT_MS }
+  );
+}
+
+/** The text of one cited page or section of an uploaded document. */
+export async function getDocumentPage(pageId: string): Promise<DocumentPage> {
+  return apiClient.get<DocumentPage>(`/api/document-pages/${encodeURIComponent(pageId)}`);
 }
 
 /** The signed-in employee's conversations, newest activity first, archived ones excluded. */

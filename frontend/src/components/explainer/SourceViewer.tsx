@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, ChevronDown, ChevronUp, FileText, FileX2, Loader2, Sparkles, X } from 'lucide-react';
-import { explainClausePlainly, getSource } from '../../services/api';
+import { explainClausePlainly, getDocumentPage, getSource } from '../../services/api';
 import type { PlainLanguageExplanation, SourceDocument, SourcePassage, SourceTarget } from '../../types';
 import { describeError } from '../../lib/explainer';
 
@@ -9,7 +9,29 @@ interface SourceViewerProps {
   onClose: () => void;
 }
 
+/** A page or section of an uploaded document, shown like any other source. */
+async function documentSource(pageId: string): Promise<SourceDocument> {
+  const page = await getDocumentPage(pageId);
+  const unit = page.unit === 'page' ? 'Page' : 'Section';
+  return {
+    source_type: 'document',
+    source_id: pageId,
+    representation: 'uploaded_document_text',
+    pdf_available: false,
+    scope: 'uploaded_document',
+    form_number: page.filename,
+    form_title: 'Uploaded document',
+    page: page.page_number,
+    page_count: page.page_count,
+    heading: `${unit} ${page.page_number}`,
+    text: page.text,
+    record_fields: {},
+    passages: [{ source_id: pageId, page: page.page_number, heading: `${unit} ${page.page_number}`, text: page.text, is_cited: true }],
+  };
+}
+
 const SCOPE_LABEL: Record<string, string> = {
+  uploaded_document: 'Uploaded by you into this chat · not the policy on file',
   customer_form: "Insured's own attached form",
   product_wording: 'Generic product wording',
   policy_record: "Policy's declarations / records",
@@ -114,7 +136,7 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
     setShowSimilar(false);
     setPlain({});
     setLoading(true);
-    getSource(target.sourceType, target.sourceId)
+    (target.sourceType === 'document' ? documentSource(target.sourceId) : getSource(target.sourceType, target.sourceId))
       .then((d) => active && setDoc(d))
       .catch((err) => active && setError(describeError(err).message))
       .finally(() => active && setLoading(false));
@@ -228,11 +250,23 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
           {!loading && tab === 'pdf' && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-6 py-12 text-center">
               <FileX2 className="h-8 w-8 text-slate-300" />
-              <p className="mt-3 text-sm font-semibold text-[#0F2A43]">No PDF on file for this form</p>
-              <p className="mt-1 max-w-md text-xs leading-relaxed text-[#64748B]">
-                The synthetic carrier library stores {formNumber || 'this form'} as structured clause text — form, edition,
-                page, section and heading — rather than as a PDF document. Use the Text tab to read the exact cited wording.
-              </p>
+              {doc?.source_type === 'document' ? (
+                <>
+                  <p className="mt-3 text-sm font-semibold text-[#0F2A43]">The original file is not kept</p>
+                  <p className="mt-1 max-w-md text-xs leading-relaxed text-[#64748B]">
+                    Only the text of {formNumber || 'the uploaded document'} is stored, page by page. Use the Text tab to read
+                    the cited page.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="mt-3 text-sm font-semibold text-[#0F2A43]">No PDF on file for this form</p>
+                  <p className="mt-1 max-w-md text-xs leading-relaxed text-[#64748B]">
+                    The synthetic carrier library stores {formNumber || 'this form'} as structured clause text — form, edition,
+                    page, section and heading — rather than as a PDF document. Use the Text tab to read the exact cited wording.
+                  </p>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => setTab('text')}
@@ -248,8 +282,9 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
               <div className="flex items-center gap-2 text-[10.5px] text-[#64748B]">
                 <FileText className="h-3.5 w-3.5 text-[#F97316]" />
                 <span>
-                  Synthetic source representation · structured text from the carrier form library
-                  {page ? ` · page ${page}` : ''}
+                  {doc?.source_type === 'document'
+                    ? `Text extracted from the uploaded document · ${doc.heading ?? ''}`
+                    : `Synthetic source representation · structured text from the carrier form library${page ? ` · page ${page}` : ''}`}
                 </span>
               </div>
 
@@ -292,7 +327,7 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                             Cited
                           </span>
                         )}
-                        {p.is_cited && !plain[p.source_id]?.result?.explanation && (
+                        {p.is_cited && doc?.source_type !== 'document' && !plain[p.source_id]?.result?.explanation && (
                           <button
                             type="button"
                             onClick={() => explain(p.source_id)}

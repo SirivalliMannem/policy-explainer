@@ -406,3 +406,35 @@ test('meaning search unavailable or finding nothing says so; older answers show 
   );
   assert.ok(!lines(undefined).some((l) => 'text' in l && l.text.startsWith('Meaning search')));
 });
+
+test('an answer from an uploaded document names the document and skips customer verification', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      answer_type: 'document',
+      policy_context: null,
+      retrieval: {
+        answer_type: 'document',
+        mode: 'question',
+        passages_searched: 4,
+        document: { id: 'doc-1', filename: 'renters.pdf', unit: 'page', page_count: 2 },
+      },
+    }),
+  });
+  assert.deepEqual(step(steps, 'verify').lines, [{ kind: 'text', text: 'Not needed: answered from the uploaded document.' }]);
+  assert.ok(step(steps, 'context').lines.some((l) => l.kind === 'text' && l.text === 'Uploaded document: renters.pdf · 2 pages'));
+  assert.ok(step(steps, 'retrieve').lines.some((l) => l.kind === 'text' && l.text === 'Searched 4 passages of renters.pdf'));
+});
+
+test('the whole-document explanation shows no search scores (nothing was searched)', () => {
+  const steps = buildProcessSteps({
+    result: answer({
+      answer_type: 'document',
+      policy_context: null,
+      evidence: [{ source_type: 'document', source_id: 'p1', form_number: 'renters.pdf', page: 1, content: '…', relevance_score: 0 }],
+      retrieval: { answer_type: 'document', mode: 'summary', passages_searched: 2, document: { id: 'd', filename: 'renters.pdf', unit: 'page', page_count: 2 } },
+    }),
+  });
+  const lines = step(steps, 'retrieve').lines;
+  assert.ok(lines.some((l) => l.kind === 'text' && l.text === 'Read 2 passages across renters.pdf for the explanation'));
+  assert.ok(!lines.some((l) => l.kind === 'passage' || ('text' in l && l.text.startsWith('Evidence confidence'))));
+});

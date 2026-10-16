@@ -169,6 +169,14 @@ function liveSteps(stages: Record<StageKey, LiveStage>, input: ProcessInput): Pr
 /** Step 1 from the verification recorded with the answer. */
 function verifyStep(result: QuestionAnswerResponse): ProcessStep {
   const v: CustomerVerification | null | undefined = result.retrieval?.customer_verification;
+  if (!v && result.retrieval?.answer_type === 'document') {
+    return {
+      key: 'verify',
+      label: STEP_LABELS.verify,
+      status: 'skipped',
+      lines: [{ kind: 'text', text: 'Not needed: answered from the uploaded document.' }],
+    };
+  }
   if (!v) {
     return {
       key: 'verify',
@@ -182,8 +190,12 @@ function verifyStep(result: QuestionAnswerResponse): ProcessStep {
 
 function contextLines(result: QuestionAnswerResponse, input: ProcessInput): StepLine[] {
   const lines: StepLine[] = [];
+  const doc = result.retrieval?.document;
   if (result.answer_type === 'portfolio') {
     lines.push({ kind: 'text', text: 'Portfolio lookup · answered from policy records' });
+  } else if (result.retrieval?.answer_type === 'document' && doc) {
+    const unit = doc.unit === 'page' ? 'page' : 'section';
+    lines.push({ kind: 'text', text: `Uploaded document: ${doc.filename} · ${doc.page_count} ${unit}${doc.page_count === 1 ? '' : 's'}` });
   } else if (result.policy_context) {
     lines.push({
       kind: 'text',
@@ -392,6 +404,14 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
   });
   if (records) {
     retrieveLines.push({ kind: 'result', tone: 'passed', text: 'Evidence confidence: exact record match. Values were read from the policy’s own records.' });
+  } else if (r.answer_type === 'document' && r.document) {
+    retrieveLines.push({
+      kind: 'text',
+      text:
+        r.mode === 'summary'
+          ? `Read ${plural(r.passages_searched ?? 0, 'passage')} across ${r.document.filename} for the explanation`
+          : `Searched ${plural(r.passages_searched ?? 0, 'passage')} of ${r.document.filename}`,
+    });
   } else if (r.clauses_searched !== undefined || r.forms_searched !== undefined) {
     const passages = (r.clauses_searched ?? 0) + (r.coverages_searched ?? 0) + (r.claims_searched ?? 0) + (r.billing_searched ?? 0);
     retrieveLines.push({
@@ -406,7 +426,9 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
     retrieveLines.push({ kind: 'warning', text: 'No passage matched the question.' });
   } else {
     const top = topEvidencePercent(result);
-    if (!records && top !== null) {
+    // The whole-document explanation reads passages across the document; it scores none of them.
+    const unscored = r.answer_type === 'document' && r.mode === 'summary';
+    if (!records && !unscored && top !== null) {
       retrieveLines.push({
         kind: 'result',
         tone: top >= 100 ? 'passed' : 'attention',
@@ -414,7 +436,7 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
       });
     }
     for (const item of searchedEvidence(result.evidence)) {
-      if (records || item.relevance_score === null || item.relevance_score === undefined) continue;
+      if (records || unscored || item.relevance_score === null || item.relevance_score === undefined) continue;
       retrieveLines.push({
         kind: 'passage',
         form: item.form_number || item.title || item.source_type,

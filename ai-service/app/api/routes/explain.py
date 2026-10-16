@@ -1,6 +1,6 @@
 """Explain API route for AI service."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -10,11 +10,13 @@ from app.schemas.explain import (
     InterpretationSchema,
     InterpretRequest,
     AttentionAnalysisRequest,
+    DocumentQuestionRequest,
     PlainLanguageRequest,
     PlainLanguageResponse,
 )
 from app.services.explainer_pipeline import ExplainerPipeline
 from app.services.attention_analysis import analyze as analyze_attention
+from app.services.document_qa import answer_from_document
 from app.services.plain_language import explain_clause
 from app.services.understanding import QueryInterpreter
 
@@ -70,3 +72,12 @@ def attention_analysis(payload: AttentionAnalysisRequest, db: Session = Depends(
     return analyze_attention(
         payload.question.strip(), (payload.policy_id or "").strip() or None, payload.retrieval, db, payload.flag_reason
     )
+
+
+@router.post("/document")
+def explain_document(payload: DocumentQuestionRequest, db: Session = Depends(get_db)):
+    """Answer from one uploaded document only, citing its pages or sections."""
+    result = answer_from_document(payload.document_id, payload.question.strip(), payload.mode, db)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return result

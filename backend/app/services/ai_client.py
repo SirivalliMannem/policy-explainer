@@ -131,6 +131,31 @@ class AIServiceClient:
             logger.warning("AI service attention-analysis unavailable: %s", type(exc).__name__)
         return None
 
+    def explain_document(self, document_id: str, question: str, mode: str = "question") -> AIServiceResponse:
+        """Answer from one uploaded document only (mode "summary": explain the whole document)."""
+        payload = {"document_id": document_id, "question": question, "mode": mode}
+        try:
+            with httpx.Client(timeout=AI_SERVICE_TIMEOUT_SECONDS) as client:
+                resp = client.post(f"{self.base_url}/api/explain/document", json=payload)
+        except httpx.TimeoutException:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=f"AI service did not respond within {int(AI_SERVICE_TIMEOUT_SECONDS)} seconds.",
+            )
+        except httpx.RequestError as exc:
+            logger.error("AI service unreachable at %s: %s", self.base_url, type(exc).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI service is unavailable. The document question could not be answered.",
+            )
+        if resp.status_code == 200:
+            return AIServiceResponse.model_validate(resp.json())
+        logger.error("AI service document answer returned HTTP %s", resp.status_code)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI service could not answer from the document.",
+        )
+
 
 # Global singleton client instance
 ai_client = AIServiceClient()

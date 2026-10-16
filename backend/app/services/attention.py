@@ -68,6 +68,8 @@ def _outcome(entry: EvidenceLedger) -> str:
 def _reason(entry: EvidenceLedger) -> Optional[str]:
     outcome = _outcome(entry)
     retrieval = entry.retrieval or {}
+    if retrieval.get("answer_type") == "document":
+        return None
     if outcome == "needs_review":
         return "guardrail_flagged"
     if outcome == "insufficient_evidence":

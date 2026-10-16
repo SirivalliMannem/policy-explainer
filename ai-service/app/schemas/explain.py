@@ -137,3 +137,11 @@ class AttentionAnalysisRequest(BaseModel):
     # The flagged answer's stored retrieval stats (terms and counts of what was searched).
     retrieval: dict = Field(default_factory=dict)
     flag_reason: str = "no_evidence"
+
+
+class DocumentQuestionRequest(BaseModel):
+    """A question about (or, mode "summary", an explanation of) one uploaded document."""
+
+    document_id: str = Field(..., min_length=1)
+    question: str = ""
+    mode: str = Field("question", pattern="^(question|summary)$")

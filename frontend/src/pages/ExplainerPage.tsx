@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, ArrowUp } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, FileText, Loader2, Plus, X } from 'lucide-react';
 import type {
   AskedBy,
+  DocumentInfo,
   EvidenceItem,
   PolicyContextCandidate,
   QuestionResolution,
@@ -12,7 +13,11 @@ import {
   ApiError,
   clearConversationContext,
   createConversation,
+  detachDocument,
+  explainDocument,
   getConversation,
+  listDocuments,
+  uploadDocument,
   getConversationMessages,
   resolvePolicyContext,
   resolvePolicyFromQuestion,
@@ -232,6 +237,15 @@ export function ExplainerPage() {
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
   const policyRef = useRef<PolicyContextCandidate | null>(null);
+  // A document uploaded into this chat: while attached, questions are answered from it alone.
+  const [attachedDoc, setAttachedDocState] = useState<DocumentInfo | null>(null);
+  const attachedDocRef = useRef<DocumentInfo | null>(null);
+  const setAttachedDoc = (doc: DocumentInfo | null) => {
+    attachedDocRef.current = doc;
+    setAttachedDocState(doc);
+  };
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingQuestionRef = useRef<string | null>(null);
   const busyRef = useRef(false);
   const panelOpenerRef = useRef<HTMLElement | null>(null);
@@ -352,6 +366,111 @@ export function ExplainerPage() {
     setProcess(IDLE_PROCESS);
     setPendingSwitch(null);
     setPolicySwitcherOpen(false);
+    setAttachedDoc(null);
+  };
+
+  const unitLabel = (doc: DocumentInfo) => `${doc.page_count} ${doc.unit === 'page' ? 'page' : 'section'}${doc.page_count === 1 ? '' : 's'}`;
+
+  /** A question about the attached document: answered from the document only, with its page references. */
+  const runDocumentQuestion = async (question: string, convId: string, doc: DocumentInfo) => {
+    openPanel({ mode: 'live' }, null);
+    setProcess((prev) => ({
+      ...prev,
+      phase: 'running',
+      result: null,
+      question,
+      contextDetail: `Uploaded document: ${doc.filename} · ${unitLabel(doc)}`,
+      stages: {
+        ...freshStages(),
+        verify: { status: 'skipped', detail: 'Not needed: answered from the uploaded document.' },
+        context: { status: 'completed', detail: `Uploaded document: ${doc.filename} · ${unitLabel(doc)}` },
+        retrieve: { status: 'processing' },
+      },
+    }));
+    try {
+      const result = await submitQuestion(convId, question, undefined, doc.document_id);
+      setProcess((prev) => ({ ...prev, phase: 'completed', result, askedBy: result.asked_by ?? prev.askedBy, askedAt: result.asked_at ?? prev.askedAt }));
+      push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result });
+    } catch (err) {
+      const friendly = describeError(err);
+      failProcess(friendly);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    }
+    notifyConversationsChanged();
+  };
+
+  /** Upload a document into the chat, then explain it in plain language. */
+  const handleUpload = async (file: File) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setIsWorking(true);
+    setIsUploading(true);
+    const askedAt = new Date().toISOString();
+    push({ kind: 'user', id: nextId('user'), time: nowTime(), text: `Uploaded “${file.name}”`, askedBy: me(), askedAt });
+    try {
+      const convId = await ensureConversation();
+      const doc = await uploadDocument(convId, file);
+      setAttachedDoc(doc);
+      setIsUploading(false);
+      push({
+        kind: 'assistant',
+        id: nextId('assistant'),
+        time: nowTime(),
+        text: `I've read “${doc.filename}” (${unitLabel(doc)}). Here it is in plain language. Ask me anything about it: my answers will come from this document only, with its ${doc.unit === 'page' ? 'page' : 'section'} numbers.`,
+        suggestions: [],
+      });
+      const question = `Explain the uploaded document “${doc.filename}” in simple language`;
+      openPanel({ mode: 'live' }, null);
+      setProcess({
+        phase: 'running', result: null, question, askedBy: me(), askedAt, contextDetail: `Uploaded document: ${doc.filename} · ${unitLabel(doc)}`,
+        verification: null,
+        stages: {
+          ...freshStages(),
+          verify: { status: 'skipped', detail: 'Not needed: answered from the uploaded document.' },
+          context: { status: 'completed', detail: `Uploaded document: ${doc.filename} · ${unitLabel(doc)}` },
+          retrieve: { status: 'processing' },
+        },
+      });
+      try {
+        const result = await explainDocument(convId, doc.document_id);
+        setProcess((prev) => ({ ...prev, phase: 'completed', result }));
+        push({ kind: 'answer', id: nextId('answer'), time: nowTime(), question, result });
+      } catch (err) {
+        const friendly = describeError(err);
+        failProcess(friendly);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: 'Could not explain the document', text: friendly.message });
+      }
+      notifyConversationsChanged();
+    } catch (err) {
+      const friendly = describeError(err);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: 'Upload failed', text: friendly.message });
+    } finally {
+      setIsUploading(false);
+      busyRef.current = false;
+      setIsWorking(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  /** Stop answering from the document; the chat answers from the policy again. */
+  const handleDetach = async () => {
+    const doc = attachedDocRef.current;
+    const convId = conversationRef.current;
+    if (!doc || !convId) return;
+    try {
+      await detachDocument(convId, doc.document_id);
+      setAttachedDoc(null);
+      push({
+        kind: 'assistant',
+        id: nextId('assistant'),
+        time: nowTime(),
+        text: `“${doc.filename}” is detached. Questions are answered from the policy wording again.`,
+        suggestions: [],
+      });
+    } catch (err) {
+      const friendly = describeError(err);
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+    }
   };
 
   const askForPolicy = (text: string, candidates: PolicyContextCandidate[], stageDetail: string, candidatesLabel?: string) => {
@@ -389,6 +508,13 @@ export function ExplainerPage() {
         const friendly = describeError(err);
         failProcess(friendly);
         push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+        return;
+      }
+
+      // A document is attached: answer from it alone, without resolving a policy or customer.
+      const doc = attachedDocRef.current;
+      if (doc) {
+        await runDocumentQuestion(text, convId, doc);
         return;
       }
 
@@ -1005,6 +1131,9 @@ export function ExplainerPage() {
       }
     }
     if (conversationRef.current === convId) setMessages(restored);
+    // The document still attached to this conversation, if any.
+    const docs = await listDocuments(convId).catch(() => [] as DocumentInfo[]);
+    if (conversationRef.current === convId) setAttachedDoc(docs.find((d) => d.is_active) ?? null);
   };
 
   // Follow the URL: a conversation id opens that conversation; /new starts an empty one.
@@ -1277,14 +1406,71 @@ export function ExplainerPage() {
 
           <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
             <form onSubmit={onSubmit} className="mx-auto w-full max-w-[780px]">
-              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-4 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
+              {(attachedDoc || isUploading) && (
+                <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#BFDBFE] bg-[#F0F7FF] px-3 py-1.5 text-[12.5px] text-[#1E3A5F]">
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#1D4ED8]" aria-hidden="true" />
+                      <span>Reading the document…</span>
+                    </>
+                  ) : (
+                    attachedDoc && (
+                      <>
+                        <FileText className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                        <span className="min-w-0 truncate font-semibold" title={attachedDoc.filename}>
+                          {attachedDoc.filename}
+                        </span>
+                        <span className="shrink-0 text-[#475569]">· {unitLabel(attachedDoc)} · answering from this document</span>
+                        <button
+                          type="button"
+                          onClick={handleDetach}
+                          disabled={isWorking}
+                          aria-label={`Detach ${attachedDoc.filename}`}
+                          title="Detach: answer from the policy again"
+                          className="ml-auto rounded p-0.5 text-[#475569] hover:bg-white hover:text-[#0F2A43] disabled:opacity-50 cursor-pointer"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </>
+                    )
+                  )}
+                </div>
+              )}
+              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-1.5 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file) handleUpload(file);
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                  aria-label="Upload a document (PDF, Word or text)"
+                  title="Upload a document (PDF, Word or text, up to 10 MB)"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#475569] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F2A43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                >
+                  <Plus className="h-5 w-5" strokeWidth={2.25} />
+                </button>
                 <QuestionInput
                   variant="bare"
                   value={input}
                   onChange={setInput}
                   disabled={isWorking || isLoadingHistory || Boolean(loadError)}
                   placeholder={
-                    activePolicy ? `Ask about ${activePolicy.customer_name}'s policy, or another one…` : 'Message Policy Explainer…'
+                    attachedDoc
+                      ? `Ask about ${attachedDoc.filename}…`
+                      : activePolicy
+                      ? `Ask about ${activePolicy.customer_name}'s policy, or another one…`
+                      : 'Message Policy Explainer…'
                   }
                   inputRef={inputRef}
                 />
@@ -1298,7 +1484,9 @@ export function ExplainerPage() {
                 </button>
               </div>
               <p className="mt-2 text-center text-[11px] text-[#94A3B8]">
-                Answers come from the policy wording, cite their sources and are recorded in the Audit Log.
+                {attachedDoc
+                  ? 'Answers come from the uploaded document, cite its pages and are recorded in the Audit Log.'
+                  : 'Answers come from the policy wording, cite their sources and are recorded in the Audit Log.'}
               </p>
             </form>
           </div>

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.routes.conversations import router as conversations_router
 from app.api.routes.customers import router as customers_router
 from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.documents import router as documents_router
 from app.api.routes.ledger import router as ledger_router
 from app.api.routes.policies import router as policies_router
 from app.api.routes.policy_resolution import router as policy_resolution_router
@@ -47,6 +48,7 @@ app.include_router(conversations_router)
 app.include_router(dashboard_router)
 app.include_router(ledger_router)
 app.include_router(sources_router)
+app.include_router(documents_router)
 
 
 @app.get("/health")

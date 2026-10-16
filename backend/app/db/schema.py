@@ -15,7 +15,10 @@ from sqlalchemy import MetaData
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
 
-APP_TABLES = ("conversation", "conversation_question", "evidence_ledger", "attention_resolution")
+APP_TABLES = (
+    "conversation", "conversation_question", "evidence_ledger", "attention_resolution",
+    "uploaded_document", "uploaded_document_page",
+)
 
 
 def _prepare_paths() -> None:
@@ -35,6 +38,7 @@ def managed_metadata() -> MetaData:
     import app.models.conversation as _conversation  # noqa: F401
     import app.models.ledger as _ledger  # noqa: F401
     import app.models.attention as _attention  # noqa: F401
+    import app.models.document as _document  # noqa: F401
     from app.db.database import Base as AppBase
 
     metadata = MetaData()

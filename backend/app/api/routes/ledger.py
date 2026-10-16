@@ -79,7 +79,9 @@ def _row(entry: EvidenceLedger, policy: Optional[CorePolicy], account: Optional[
         agent_name=entry.employee_name,
         agent_role=entry.employee_role,
         insured=insured,
-        answer_type="portfolio" if portfolio is not None else "policy_explanation",
+        answer_type="portfolio" if portfolio is not None else (
+            "document" if (entry.retrieval or {}).get("answer_type") == "document" else "policy_explanation"
+        ),
         customer_id=account.id if account else None,
         policy_id=entry.policy_id,
         policy_number=policy.policy_number if policy else None,

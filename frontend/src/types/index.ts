@@ -295,6 +295,11 @@ export interface RetrievalSummary {
   term_selection?: TermSelection | null;
   /** A several-facts question: each part, and the source it was answered from. */
   parts?: { label: string; question: string; source: 'records' | 'forms' | 'wording' | string; found: boolean }[];
+  /** Answers from an uploaded document: which document, and how many of its passages were searched. */
+  document?: { id: string; filename: string; unit: 'page' | 'section' | string; page_count: number } | null;
+  passages_searched?: number;
+  /** "summary": the plain-language explanation of the whole document; "question": a question about it. */
+  mode?: 'summary' | 'question' | string;
   /** Meaning-based clause search alongside word match. */
   meaning_search?: MeaningSearch | null;
   /** Company guidance articles searched next to the policy wording, shown apart from the answer. */
@@ -742,4 +747,29 @@ export interface LedgerQuery {
   sort?: 'newest' | 'oldest' | 'slowest' | 'fastest';
   limit?: number;
   offset?: number;
+}
+
+/** A document uploaded into a conversation (only its extracted text is kept). */
+export interface DocumentInfo {
+  document_id: string;
+  conversation_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  page_count: number;
+  /** "page" for PDFs; "section" for Word and text files. */
+  unit: 'page' | 'section' | string;
+  char_count: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+/** The text of one page or section of an uploaded document. */
+export interface DocumentPage {
+  document_id: string;
+  filename: string;
+  unit: 'page' | 'section' | string;
+  page_number: number;
+  page_count: number;
+  text: string;
 }

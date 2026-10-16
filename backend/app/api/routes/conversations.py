@@ -457,6 +457,12 @@ def submit_question(
 
     conv = _get_conversation_or_404(conversation_id, db, employee)
     started = time.perf_counter()
+    # A document attached in this chat: answer from it alone, never from the carrier's records.
+    if payload.document_id:
+        from app.api.routes.documents import answer_from_document, own_document
+
+        doc = own_document(payload.document_id, employee, db, conv.id)
+        return answer_from_document(conv, doc, question_text, "question", employee, db, started)
     # An explicit policy answers this question for one of a customer's several matching policies,
     # without changing the conversation's context; otherwise the conversation's policy is used.
     policy_id = payload.policy_id or conv.policy_id
@@ -1179,14 +1185,15 @@ def get_conversation_messages(
         if entry is not None:
             retrieval = entry.retrieval or {}
             is_portfolio = retrieval.get("answer_type") == "portfolio"
+            is_document = retrieval.get("answer_type") == "document"
             policy_context = _build_policy_context(entry.policy_id, db)
-            if policy_context or is_portfolio:
+            if policy_context or is_portfolio or is_document:
                 answer = QuestionAnswerResponse(
                     conversation_id=conv.id,
                     question_id=q.id,
                     question=q.question,
                     answer=entry.final_answer,
-                    answer_type="portfolio" if is_portfolio else "policy_explanation",
+                    answer_type="portfolio" if is_portfolio else "document" if is_document else "policy_explanation",
                     portfolio=retrieval.get("portfolio") if is_portfolio else None,
                     policy_context=policy_context,
                     evidence=entry.retrieved_evidence or [],
