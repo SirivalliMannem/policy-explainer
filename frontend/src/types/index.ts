@@ -528,6 +528,8 @@ export interface AttentionItem {
   reason_label: string;
   detail: string;
   policy_number?: string | null;
+  policy_id?: string | null;
+  conversation_id?: string | null;
   insured?: string | null;
   line_of_business?: string | null;
   times_asked: number;
@@ -579,7 +581,9 @@ export type AttentionAnalysisType =
   | 'definition'
   | 'coverage_no_evidence'
   | 'missing_form_or_edition'
-  | 'out_of_scope';
+  | 'out_of_scope'
+  | 'customer_not_found'
+  | 'other';
 
 /** The stored analysis of a flagged question: the model classifies, code verifies and states facts. */
 export interface AttentionAnalysis {

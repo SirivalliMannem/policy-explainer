@@ -287,10 +287,13 @@ def resolve_policy_from_question_text(
     if conversation:
         customer_verification.remember(conversation.id, question, verification)
 
-    intent = "portfolio" if asks_about_portfolio(question, interpretation, has_selected_policy=bool(active)) else "policy"
+    intent = "portfolio" if (asks_about_portfolio(question, interpretation, has_selected_policy=bool(active)) and verification.status != "not_found") else "policy"
     reply: Optional[small_talk.Reply] = None
     suggested: list[CorePolicy] = []
-    if result.status == "no_reference":
+    status_to_report = result.status
+    if verification.status == "not_found":
+        status_to_report = "not_found"
+    elif result.status == "no_reference":
         if (interpretation or {}).get("intent") == "other":
             # The interpreter judged it unrelated to insurance policies ("what's the weather?").
             intent = "off_topic"
@@ -298,7 +301,7 @@ def resolve_policy_from_question_text(
         elif not active:
             suggested = _recent_policies(db, employee.id)
     return QuestionResolution(
-        status=result.status,
+        status=status_to_report,
         intent=intent,
         reply=reply.text if reply else None,
         suggestions=reply.suggestions if reply else [],
@@ -307,9 +310,9 @@ def resolve_policy_from_question_text(
         term_selection=term_choice,
         answer_all=result.status == "ambiguous" and len({p.account_id for p in result.candidates}) == 1,
         interpretation=interpretation,
-        matched_on=result.matched_on,
-        reference=result.reference,
+        matched_on=verification.matched_on if verification.status == "not_found" else result.matched_on,
+        reference=verification.reference if verification.status == "not_found" else result.reference,
         policy=_to_candidate(result.policy) if result.policy else None,
         candidates=[_to_candidate(p) for p in result.candidates],
-        message=result.message,
+        message=verification.message if verification.status == "not_found" else result.message,
     )

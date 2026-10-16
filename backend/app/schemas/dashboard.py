@@ -79,6 +79,8 @@ class AttentionItem(BaseModel):
     reason_label: str
     detail: str
     policy_number: Optional[str] = None
+    policy_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     insured: Optional[str] = None
     line_of_business: Optional[str] = None
     times_asked: int

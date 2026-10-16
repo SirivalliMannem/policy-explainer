@@ -32,6 +32,16 @@ NON_NAME_WORDS = {
     "give", "display", "name", "there", "we", "our", "us", "me", "my", "is", "are", "was", "were",
     "home", "homeowner", "customers", "customer", "policyholders", "policyholder", "insureds", "insured",
     "accounts", "account", "households", "household", "policies", "in", "on", "of", "currently", "active",
+    "procedure", "filing", "claim", "claims", "dwelling", "damage", "peril", "perils",
+    "flood", "sewer", "sump", "roof", "hail", "wind", "windstorm", "limits", "limit",
+    "exclusions", "exclusion", "about", "regarding", "both", "either", "neither",
+    "each", "every", "other", "another", "first", "second", "third", "last",
+    "cost", "costs", "pay", "paying", "payment", "premium", "premiums",
+    "deductibles", "schedule", "schedules", "statement", "statements",
+    "liability", "medical", "collision", "comprehensive", "bodily", "injury",
+    "property", "structure", "structures", "open", "named", "loss", "hotel",
+    "use", "living", "expense", "expenses", "vehicle", "vehicles", "car", "cars",
+    "term", "terms", "effective", "expiration", "date", "dates", "status", "edition", "editions",
 }
 
 # Words of US state names, so "Texas" or "York" are never read as a surname.

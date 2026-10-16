@@ -327,6 +327,8 @@ class QueryInterpreter:
             full = best_name_match(stated, names, NAME_CUTOFF)
             if full and full not in holders:
                 holders.append(full)
+            elif not full and stated not in holders:
+                holders.append(stated)
 
         number = _text(data.get("policy_number"), 20)
         if number:

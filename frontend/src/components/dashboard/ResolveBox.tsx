@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Check, ChevronDown, Loader2, Sparkles, X } from 'lucide-react';
-import { analyzeAttention, resolveAttention } from '../../services/api';
+import { analyzeAttention, getConversation, resolveAttention } from '../../services/api';
 import { describeError } from '../../lib/explainer';
 import type {
   AttentionAnalysis,
@@ -32,6 +33,7 @@ function passageRef(p: AttentionPassage): string {
 /** "Show how we got this": only values that are stored; any line not stored is left out. */
 function HowWeGotThis({ original, analysis, candidate }: { original: string; analysis: AttentionAnalysis; candidate: AttentionCandidate }) {
   const search = analysis.original_search;
+  const passages = candidate.passages || [];
   return (
     <ul className="mt-2 space-y-1.5 rounded-lg border border-border bg-white px-3 py-2 text-[11.5px] leading-relaxed text-[#334155]">
       {search && (search.clauses_searched !== undefined || search.query_terms?.length) && (
@@ -48,10 +50,10 @@ function HowWeGotThis({ original, analysis, candidate }: { original: string; ana
       </li>
       <li>
         <Tag kind="CODE" />
-        Search result: {candidate.passages.length} {candidate.passages.length === 1 ? 'passage' : 'passages'} found, top score{' '}
-        {candidate.top_score.toFixed(1)} (evidence is kept at {EVIDENCE_SCORE} and above)
+        Search result: {passages.length} {passages.length === 1 ? 'passage' : 'passages'} found, top score{' '}
+        {(candidate.top_score ?? 0).toFixed(1)} (evidence is kept at {EVIDENCE_SCORE} and above)
       </li>
-      {candidate.passages.map((p, i) => (
+      {passages.map((p, i) => (
         <li key={`${p.source_id}-${i}`}>
           <Tag kind="CODE" />
           {[p.form_number, p.edition ? `ed. ${p.edition}` : null, p.page ? `p.${p.page}` : null, p.section, p.heading]
@@ -87,7 +89,8 @@ function SuggestionCard({
   onAsk: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const first = candidate.passages[0];
+  const first = candidate.passages?.[0];
+  const hasPassages = Boolean(candidate.passages && candidate.passages.length > 0);
   return (
     <li className={`rounded-lg border bg-white px-3 py-2.5 ${recommended ? 'border-orange-btn' : 'border-border'}`}>
       {recommended && (
@@ -100,39 +103,50 @@ function SuggestionCard({
         onClick={onAsk}
         disabled={busy}
         className="block w-full text-left text-[13px] font-semibold text-espresso hover:text-[#C2410C] disabled:opacity-60"
-        title="Ask this as a new question; the flagged item closes"
+        title="Ask this question in the chatbot"
       >
         {candidate.question} <span className="text-orange-btn">→</span>
       </button>
-      <p className="mt-1 text-[11.5px] text-emerald-700">
-        ✓ {candidate.passages.length} {candidate.passages.length === 1 ? 'passage' : 'passages'} found
-        {first ? ` · ${passageRef(first)}` : ''}
-      </p>
+      {hasPassages && (
+        <p className="mt-1 text-[11.5px] text-emerald-700">
+          ✓ {candidate.passages.length} {candidate.passages.length === 1 ? 'passage' : 'passages'} found
+          {first ? ` · ${passageRef(first)}` : ''}
+        </p>
+      )}
       {candidate.relation === 'related' && candidate.note && (
         <p className="mt-1 text-[11.5px] text-[#9A3D09]">Related question. {candidate.note}</p>
       )}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground hover:text-espresso"
-      >
-        Show how we got this <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && <HowWeGotThis original={original} analysis={analysis} candidate={candidate} />}
+      {hasPassages && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground hover:text-espresso"
+          >
+            Show how we got this <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+          </button>
+          {open && <HowWeGotThis original={original} analysis={analysis} candidate={candidate} />}
+        </>
+      )}
     </li>
   );
 }
 
 const HEADINGS: Record<string, string> = {
+  coverage_no_evidence: 'ASK THIS INSTEAD',
   typo: 'WRONG WORDING · TRY THESE',
   vague_wording: 'WRONG WORDING · TRY THESE',
   definition: 'TRY THESE INSTEAD',
+  customer_not_found: 'IDENTIFY CUSTOMER · TRY THESE',
+  missing_form_or_edition: 'CHECK FORMS · TRY THESE',
+  out_of_scope: 'CLARIFY INQUIRY · TRY THESE',
+  other: 'TRY THESE INSTEAD',
 };
 
 /**
- * The Resolve box: verified suggestions from the stored analysis. Asking one (or an edited question)
- * runs it as a new question and closes the item; Dismiss closes it with a reason. Nobody else is involved.
+ * The Resolve box: dynamic suggestions from the stored analysis. Asking one navigates to the chatbot
+ * to run the question through the normal answering pipeline; Dismiss closes it with a reason.
  */
 export function ResolveBox({
   item,
@@ -141,6 +155,7 @@ export function ResolveBox({
   item: AttentionItem;
   onClosed: (result: AttentionResolveResponse, summary: string) => void;
 }) {
+  const navigate = useNavigate();
   const [analysis, setAnalysis] = useState<AttentionAnalysis | null>(item.analysis ?? null);
   const [analyzing, setAnalyzing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -166,6 +181,28 @@ export function ResolveBox({
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  const handleSuggestionClick = async (candidate: AttentionCandidate) => {
+    setBusy(candidate.question);
+    let target = '/app/explainer';
+    if (item.conversation_id) {
+      try {
+        await getConversation(item.conversation_id);
+        target = `/app/explainer/c/${item.conversation_id}`;
+      } catch {
+        // Conversation does not exist or belongs to another employee;
+        // safely fallback to the supported new-conversation workflow
+        target = '/app/explainer';
+      }
+    }
+    setBusy(null);
+    navigate(target, {
+      state: {
+        initialQuestion: candidate.question,
+        policyId: item.policy_id || undefined,
+      },
+    });
   };
 
   const ask = async (action: 'asked_suggestion' | 'edited_and_asked', question: string) => {
@@ -196,6 +233,20 @@ export function ResolveBox({
   return (
     <div className="rounded-xl border border-[#FDC9A0] bg-[#FFFBF7] p-4 text-[13px] leading-relaxed text-espresso">
       <h5 className="mb-2 text-[10.5px] font-semibold tracking-[0.08em] text-orange-btn">RESOLVE</h5>
+
+      {(item.reason === 'customer_not_found' || analysis?.type === 'customer_not_found') && (
+        <div className="mb-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-[12.5px] text-[#991B1B]">
+          <h6 className="text-[11px] font-bold tracking-[0.08em] text-[#B91C1C]">CUSTOMER NOT FOUND · VERIFICATION REQUIRED</h6>
+          <p className="mt-1 font-medium">{item.detail || analysis?.reason || "I couldn't find a matching customer in the records. Please verify the customer name or provide a valid policy number."}</p>
+          <div className="mt-2 space-y-1 text-[11.5px] text-[#7F1D1D]">
+            <p className="font-semibold">Recommended Actions:</p>
+            <ul className="list-disc pl-4 space-y-0.5">
+              <li>Verify the customer's spelling or full name in customer records.</li>
+              <li>Search using a supported policy number (e.g. HO-XXXX-XXXX) or account number.</li>
+            </ul>
+          </div>
+        </div>
+      )}
 
       {!ready && (
         <div className="mb-3 rounded-lg bg-white px-3 py-2 text-[12.5px] text-[#334155]">
@@ -257,7 +308,7 @@ export function ResolveBox({
                 candidate={c}
                 recommended={i === 0}
                 busy={busy !== null}
-                onAsk={() => ask('asked_suggestion', c.question)}
+                onAsk={() => handleSuggestionClick(c)}
               />
             ))}
           </ul>

@@ -60,6 +60,95 @@ const MATCH_LABEL: Record<string, string> = {
   loss_date: 'date of loss',
 };
 
+function detectQuestionEntityConflict(
+  question: string,
+  targetPolicy: PolicyContextCandidate
+): { hasConflict: boolean; entity?: string } {
+  const q = question.trim();
+  if (!q) return { hasConflict: false };
+
+  // 1. Explicit policy number in question
+  const policyNumMatch = q.match(/\b(HO|PA)[-\s]?\d{4}(?:[-\s]?\d{4})?\b/i);
+  if (policyNumMatch) {
+    const rawNum = policyNumMatch[0].replace(/[-\s]/g, '').toUpperCase();
+    const targetNum = targetPolicy.policy_number.replace(/[-\s]/g, '').toUpperCase();
+    if (rawNum !== targetNum) {
+      return { hasConflict: true, entity: `policy ${policyNumMatch[0]}` };
+    }
+  }
+
+  // 2. Explicit person name in question
+  const nonNames = new Set([
+    'does', 'do', 'did', 'what', 'which', 'who', 'whose', 'when', 'where', 'why', 'how', 'is', 'are',
+    'can', 'could', 'would', 'will', 'should', 'the', 'this', 'that', 'these', 'those', 'and', 'for',
+    'with', 'under', 'policy', 'coverage', 'coverages', 'endorsement', 'form', 'forms', 'deductible',
+    'water', 'backup', 'homeowners', 'auto', 'personal', 'special', 'texas', 'new', 'york', 'section',
+    'part', 'show', 'tell', 'explain', 'list', 'please', 'has', 'have', 'any', 'all', 'give', 'display',
+    'name', 'there', 'we', 'our', 'us', 'me', 'my', 'was', 'were', 'home', 'customer', 'policyholder',
+    'insured', 'policies', 'procedure', 'filing', 'claim', 'dwelling', 'damage', 'peril', 'flood',
+    'limits', 'limit', 'exclusions', 'exclusion', 'about', 'regarding', 'both', 'either', 'neither',
+    'each', 'every', 'other', 'another', 'first', 'second', 'third', 'last', 'premium', 'deductibles',
+  ]);
+
+  const targetParts = targetPolicy.customer_name.toLowerCase().split(/\s+/);
+
+  const prepMatch = q.match(/\b(?:of|for|about|with|under|regarding)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b/i);
+  if (prepMatch) {
+    const candidate = prepMatch[1].trim();
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.some((w) => nonNames.has(w)) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
+      if (!words.some((w) => targetParts.includes(w))) {
+        return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  const possMatch = q.match(/\b([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)(?:['’]s)\b/i);
+  if (possMatch) {
+    const candidate = possMatch[1].trim();
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.some((w) => nonNames.has(w)) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
+      if (!words.some((w) => targetParts.includes(w))) {
+        return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  const verbMatch = q.match(/\b(?:does|is|has)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:have|covered|own|insured)\b/i);
+  if (verbMatch) {
+    const candidate = verbMatch[1].trim();
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.some((w) => nonNames.has(w)) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
+      if (!words.some((w) => targetParts.includes(w))) {
+        return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  const fullMatch = q.match(/\b([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,})\b/);
+  if (fullMatch) {
+    const candidate = fullMatch[1].trim();
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.some((w) => nonNames.has(w))) {
+      if (!words.some((w) => targetParts.includes(w))) {
+        return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  const singleMatch = q.match(/\b([A-Z][a-zA-Z\-]{2,})\b/);
+  if (singleMatch) {
+    const candidate = singleMatch[1].trim();
+    if (!nonNames.has(candidate.toLowerCase()) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
+      if (!targetParts.includes(candidate.toLowerCase())) {
+        return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  return { hasConflict: false };
+}
+
 /** Wide enough for the chat column and the docked AI process panel side by side. */
 const DOCK_QUERY = '(min-width: 1000px)';
 
@@ -191,9 +280,10 @@ export function ExplainerPage() {
   }, []);
 
   /** A conversation is created only when the first question is asked, then gets its own URL. */
-  const ensureConversation = async (): Promise<string> => {
+  const ensureConversation = async (targetPolicyId?: string): Promise<string> => {
     if (conversationRef.current) return conversationRef.current;
-    const conv = await createConversation();
+    const pid = targetPolicyId || policyRef.current?.policy_id;
+    const conv = await createConversation(pid);
     conversationRef.current = conv.conversation_id;
     navigate(`/app/explainer/c/${conv.conversation_id}`, { replace: true });
     return conv.conversation_id;
@@ -228,7 +318,8 @@ export function ExplainerPage() {
     }));
 
     try {
-      const result = await submitQuestion(convId, question, forPolicy?.policy_id);
+      const targetPolicy = forPolicy || policyRef.current;
+      const result = await submitQuestion(convId, question, targetPolicy?.policy_id);
       setProcess((prev) => ({
         ...prev,
         phase: 'completed',
@@ -345,15 +436,24 @@ export function ExplainerPage() {
         pendingQuestionRef.current = pending && looksLikeReply(text) ? pending : text;
         setProcess((prev) => ({
           ...prev,
-          phase: 'needs_input',
-          stages: { ...prev.stages, verify: { status: notFound ? 'failed' : 'attention', detail: verification.message } },
+          phase: notFound ? 'failed' : 'needs_input',
+          stages: {
+            ...freshStages(),
+            verify: { status: notFound ? 'failed' : 'attention', detail: verification.message },
+            context: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
+            retrieve: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
+            ground: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
+            generate: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
+            citation: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
+            deliver: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
+          },
         }));
         push({
           kind: 'assistant',
           id: nextId('assistant'),
           time: nowTime(),
           text: notFound
-            ? `${verification.message} Please check the spelling, or give a policy number, claim number, email or phone number.`
+            ? verification.message
             : `${verification.message} Which customer did you mean?`,
           suggestions: notFound ? [] : verification.customers.map((c) => c.name),
         });
@@ -433,20 +533,21 @@ export function ExplainerPage() {
         }
 
         pendingQuestionRef.current = null;
-        if (!current || current.policy_id !== resolved.policy_id) {
-          const isSwitch = Boolean(current);
-          try {
-            await setConversationContext(convId, resolved.policy_id, {
-              customerId: resolved.customer_id,
-            });
-          } catch (err) {
-            const friendly = describeError(err);
-            failProcess(friendly);
-            push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
-            return;
-          }
-          setActivePolicy(resolved);
-          setFeatureTab(null);
+        const isDifferentPolicy = !current || current.policy_id !== resolved.policy_id;
+        const isSwitch = Boolean(current && current.policy_id !== resolved.policy_id);
+        try {
+          await setConversationContext(convId, resolved.policy_id, {
+            customerId: resolved.customer_id,
+          });
+        } catch (err) {
+          const friendly = describeError(err);
+          failProcess(friendly);
+          push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+          return;
+        }
+        setActivePolicy(resolved);
+        setFeatureTab(null);
+        if (isDifferentPolicy) {
           push({
             kind: 'context',
             id: nextId('context'),
@@ -492,6 +593,16 @@ export function ExplainerPage() {
       } else if (resolution.status === 'ambiguous') {
         if (current && resolution.candidates.some((c) => c.policy_id === current.policy_id)) {
           contextDetail = `Policy ${current.policy_number} · ${current.customer_name}`;
+          try {
+            await setConversationContext(convId, current.policy_id, {
+              customerId: current.customer_id,
+            });
+          } catch (err) {
+            const friendly = describeError(err);
+            failProcess(friendly);
+            push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+            return;
+          }
         } else {
           pendingQuestionRef.current = pendingQuestionRef.current ?? text;
           askForPolicy(
@@ -511,6 +622,16 @@ export function ExplainerPage() {
         return;
       } else if (current) {
         contextDetail = `Policy ${current.policy_number} · ${current.customer_name}`;
+        try {
+          await setConversationContext(convId, current.policy_id, {
+            customerId: current.customer_id,
+          });
+        } catch (err) {
+          const friendly = describeError(err);
+          failProcess(friendly);
+          push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+          return;
+        }
       } else {
         pendingQuestionRef.current = text;
         const recent = resolution.suggested_policies ?? [];
@@ -525,7 +646,8 @@ export function ExplainerPage() {
         return;
       }
 
-      await runPipeline(question, convId, contextDetail);
+      const targetPolicy = (resolution.status === 'resolved' && resolution.policy) ? resolution.policy : (current || undefined);
+      await runPipeline(question, convId, contextDetail, targetPolicy);
     } finally {
       busyRef.current = false;
       setIsWorking(false);
@@ -554,17 +676,41 @@ export function ExplainerPage() {
     if (current && current.policy_id === candidate.policy_id) {
       pendingQuestionRef.current = null;
       if (pending) {
+        const conflict = detectQuestionEntityConflict(pending, candidate);
+        if (conflict.hasConflict && conflict.entity) {
+          push({
+            kind: 'assistant',
+            id: nextId('assistant'),
+            time: nowTime(),
+            text: `The original question refers to ${conflict.entity}, but the selected policy belongs to ${candidate.customer_name}. Would you like to rephrase the question for ${candidate.customer_name}’s policy?`,
+            suggestions: [
+              `What are the exclusions for policy ${candidate.policy_number}?`,
+              `What are the exclusions of ${candidate.customer_name}?`,
+            ],
+          });
+          setInput(pending);
+          setProcess(IDLE_PROCESS);
+          inputRef.current?.focus();
+          return;
+        }
         busyRef.current = true;
         setIsWorking(true);
         try {
-          const convId = await ensureConversation();
+          const convId = await ensureConversation(candidate.policy_id);
+          await setConversationContext(convId, candidate.policy_id, {
+            customerId: candidate.customer_id,
+          });
           await runPipeline(
             pending,
             convId,
             `Policy ${candidate.policy_number} · ${candidate.customer_name}`,
-            undefined,
+            candidate,
             `${candidate.customer_name}, chosen by the employee.`
           );
+        } catch (err) {
+          const friendly = describeError(err);
+          failProcess(friendly);
+          push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
         } finally {
           busyRef.current = false;
           setIsWorking(false);
@@ -577,7 +723,7 @@ export function ExplainerPage() {
     busyRef.current = true;
     setIsWorking(true);
     try {
-      const convId = await ensureConversation();
+      const convId = await ensureConversation(candidate.policy_id);
       const isSwitch = Boolean(current);
       await setConversationContext(convId, candidate.policy_id, {
         customerId: candidate.customer_id,
@@ -597,13 +743,30 @@ export function ExplainerPage() {
       });
       notifyConversationsChanged();
       if (pending) {
-        await runPipeline(
-          pending,
-          convId,
-          `Policy ${candidate.policy_number} · ${candidate.customer_name}`,
-          undefined,
-          `${candidate.customer_name}, chosen by the employee.`
-        );
+        const conflict = detectQuestionEntityConflict(pending, candidate);
+        if (conflict.hasConflict && conflict.entity) {
+          push({
+            kind: 'assistant',
+            id: nextId('assistant'),
+            time: nowTime(),
+            text: `The original question refers to ${conflict.entity}, but the selected policy belongs to ${candidate.customer_name}. Would you like to rephrase the question for ${candidate.customer_name}’s policy?`,
+            suggestions: [
+              `What are the exclusions for policy ${candidate.policy_number}?`,
+              `What are the exclusions of ${candidate.customer_name}?`,
+            ],
+          });
+          setInput(pending);
+          setProcess(IDLE_PROCESS);
+          inputRef.current?.focus();
+        } else {
+          await runPipeline(
+            pending,
+            convId,
+            `Policy ${candidate.policy_number} · ${candidate.customer_name}`,
+            candidate,
+            `${candidate.customer_name}, chosen by the employee.`
+          );
+        }
       } else {
         setProcess(IDLE_PROCESS);
       }
@@ -626,9 +789,24 @@ export function ExplainerPage() {
     try {
       const newConv = await createConversation(targetPolicy.policy_id);
       notifyConversationsChanged();
-      navigate(`/app/explainer/c/${newConv.conversation_id}`, {
-        state: pendingQuestion ? { initialQuestion: pendingQuestion } : null,
-      });
+      const conflict = pendingQuestion ? detectQuestionEntityConflict(pendingQuestion, targetPolicy) : { hasConflict: false };
+      if (conflict.hasConflict && conflict.entity) {
+        navigate(`/app/explainer/c/${newConv.conversation_id}`, {
+          state: {
+            policyId: targetPolicy.policy_id,
+            conflictNotice: {
+              entity: conflict.entity,
+              customerName: targetPolicy.customer_name,
+              policyNumber: targetPolicy.policy_number,
+              pendingQuestion,
+            },
+          },
+        });
+      } else {
+        navigate(`/app/explainer/c/${newConv.conversation_id}`, {
+          state: pendingQuestion ? { initialQuestion: pendingQuestion, policyId: targetPolicy.policy_id } : { policyId: targetPolicy.policy_id },
+        });
+      }
     } catch (err) {
       const friendly = describeError(err);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
@@ -644,7 +822,7 @@ export function ExplainerPage() {
     busyRef.current = true;
     setIsWorking(true);
     try {
-      const convId = await ensureConversation();
+      const convId = await ensureConversation(targetPolicy.policy_id);
       await setConversationContext(convId, targetPolicy.policy_id, {
         customerId: targetPolicy.customer_id,
         confirmDifferentCustomer: true,
@@ -664,13 +842,30 @@ export function ExplainerPage() {
       });
       notifyConversationsChanged();
       if (pendingQuestion) {
-        await runPipeline(
-          pendingQuestion,
-          convId,
-          `Policy ${targetPolicy.policy_number} · ${targetPolicy.customer_name}`,
-          undefined,
-          `${targetPolicy.customer_name}, confirmed by the employee when switching customers.`
-        );
+        const conflict = detectQuestionEntityConflict(pendingQuestion, targetPolicy);
+        if (conflict.hasConflict && conflict.entity) {
+          push({
+            kind: 'assistant',
+            id: nextId('assistant'),
+            time: nowTime(),
+            text: `The original question refers to ${conflict.entity}, but the selected policy belongs to ${targetPolicy.customer_name}. Would you like to rephrase the question for ${targetPolicy.customer_name}’s policy?`,
+            suggestions: [
+              `What are the exclusions for policy ${targetPolicy.policy_number}?`,
+              `What are the exclusions of ${targetPolicy.customer_name}?`,
+            ],
+          });
+          setInput(pendingQuestion);
+          setProcess(IDLE_PROCESS);
+          inputRef.current?.focus();
+        } else {
+          await runPipeline(
+            pendingQuestion,
+            convId,
+            `Policy ${targetPolicy.policy_number} · ${targetPolicy.customer_name}`,
+            targetPolicy,
+            `${targetPolicy.customer_name}, confirmed by the employee when switching customers.`
+          );
+        }
       } else {
         setProcess(IDLE_PROCESS);
       }
@@ -809,7 +1004,63 @@ export function ExplainerPage() {
     conversationRef.current = routeConversationId ?? null;
     if (!routeConversationId) {
       newVisitRef.current = location.key;
-      const state = (location.state || {}) as { initialQuestion?: string };
+      const state = (location.state || {}) as {
+        initialQuestion?: string;
+        policyId?: string;
+        conflictNotice?: { entity: string; customerName: string; policyNumber: string; pendingQuestion: string };
+      };
+      if (state.conflictNotice) {
+        navigate(location.pathname, { replace: true, state: null });
+        const cn = state.conflictNotice;
+        push({
+          kind: 'assistant',
+          id: nextId('assistant'),
+          time: nowTime(),
+          text: `The original question refers to ${cn.entity}, but the selected policy belongs to ${cn.customerName}. Would you like to rephrase the question for ${cn.customerName}’s policy?`,
+          suggestions: [
+            `What are the exclusions for policy ${cn.policyNumber}?`,
+            `What are the exclusions of ${cn.customerName}?`,
+          ],
+        });
+        setInput(cn.pendingQuestion);
+        setProcess(IDLE_PROCESS);
+        inputRef.current?.focus();
+        return;
+      }
+      if (state.policyId && !policyRef.current) {
+        resolvePolicyContext(state.policyId)
+          .then((p) => {
+            setActivePolicy(p);
+            if (state.initialQuestion) {
+              navigate(location.pathname, { replace: true, state: null });
+              const conflict = detectQuestionEntityConflict(state.initialQuestion, p);
+              if (conflict.hasConflict && conflict.entity) {
+                push({
+                  kind: 'assistant',
+                  id: nextId('assistant'),
+                  time: nowTime(),
+                  text: `The original question refers to ${conflict.entity}, but the selected policy belongs to ${p.customer_name}. Would you like to rephrase the question for ${p.customer_name}’s policy?`,
+                  suggestions: [
+                    `What are the exclusions for policy ${p.policy_number}?`,
+                    `What are the exclusions of ${p.customer_name}?`,
+                  ],
+                });
+                setInput(state.initialQuestion);
+                setProcess(IDLE_PROCESS);
+                inputRef.current?.focus();
+              } else {
+                handleAsk(state.initialQuestion);
+              }
+            }
+          })
+          .catch(() => {
+            if (state.initialQuestion) {
+              navigate(location.pathname, { replace: true, state: null });
+              handleAsk(state.initialQuestion);
+            }
+          });
+        return;
+      }
       if (state.initialQuestion) {
         navigate(location.pathname, { replace: true, state: null });
         handleAsk(state.initialQuestion);
@@ -825,15 +1076,102 @@ export function ExplainerPage() {
     loadConversation(convId)
       .then(() => {
         if (load !== loadIdRef.current) return;
-        const state = (location.state || {}) as { initialQuestion?: string };
+        const state = (location.state || {}) as {
+          initialQuestion?: string;
+          policyId?: string;
+          conflictNotice?: { entity: string; customerName: string; policyNumber: string; pendingQuestion: string };
+        };
+        if (state.conflictNotice) {
+          navigate(location.pathname, { replace: true, state: null });
+          const cn = state.conflictNotice;
+          push({
+            kind: 'assistant',
+            id: nextId('assistant'),
+            time: nowTime(),
+            text: `The original question refers to ${cn.entity}, but the selected policy belongs to ${cn.customerName}. Would you like to rephrase the question for ${cn.customerName}’s policy?`,
+            suggestions: [
+              `What are the exclusions for policy ${cn.policyNumber}?`,
+              `What are the exclusions of ${cn.customerName}?`,
+            ],
+          });
+          setInput(cn.pendingQuestion);
+          setProcess(IDLE_PROCESS);
+          inputRef.current?.focus();
+          return;
+        }
+        if (state.policyId && !policyRef.current) {
+          resolvePolicyContext(state.policyId)
+            .then((p) => {
+              setActivePolicy(p);
+              if (state.initialQuestion) {
+                navigate(location.pathname, { replace: true, state: null });
+                const conflict = detectQuestionEntityConflict(state.initialQuestion, p);
+                if (conflict.hasConflict && conflict.entity) {
+                  push({
+                    kind: 'assistant',
+                    id: nextId('assistant'),
+                    time: nowTime(),
+                    text: `The original question refers to ${conflict.entity}, but the selected policy belongs to ${p.customer_name}. Would you like to rephrase the question for ${p.customer_name}’s policy?`,
+                    suggestions: [
+                      `What are the exclusions for policy ${p.policy_number}?`,
+                      `What are the exclusions of ${p.customer_name}?`,
+                    ],
+                  });
+                  setInput(state.initialQuestion);
+                  setProcess(IDLE_PROCESS);
+                  inputRef.current?.focus();
+                } else {
+                  handleAsk(state.initialQuestion);
+                }
+              }
+            })
+            .catch(() => {
+              if (state.initialQuestion) {
+                navigate(location.pathname, { replace: true, state: null });
+                handleAsk(state.initialQuestion);
+              }
+            });
+          return;
+        }
         if (state.initialQuestion) {
           navigate(location.pathname, { replace: true, state: null });
+          const pol = policyRef.current;
+          if (pol) {
+            const conflict = detectQuestionEntityConflict(state.initialQuestion, pol);
+            if (conflict.hasConflict && conflict.entity) {
+              push({
+                kind: 'assistant',
+                id: nextId('assistant'),
+                time: nowTime(),
+                text: `The original question refers to ${conflict.entity}, but the selected policy belongs to ${pol.customer_name}. Would you like to rephrase the question for ${pol.customer_name}’s policy?`,
+                suggestions: [
+                  `What are the exclusions for policy ${pol.policy_number}?`,
+                  `What are the exclusions of ${pol.customer_name}?`,
+                ],
+              });
+              setInput(state.initialQuestion);
+              setProcess(IDLE_PROCESS);
+              inputRef.current?.focus();
+              return;
+            }
+          }
           handleAsk(state.initialQuestion);
         }
       })
       .catch((err) => {
         if (load !== loadIdRef.current) return; // the employee has moved on
         conversationRef.current = null;
+        const state = (location.state || {}) as { initialQuestion?: string; policyId?: string };
+        if (state.initialQuestion) {
+          navigate('/app/explainer', {
+            replace: true,
+            state: {
+              initialQuestion: state.initialQuestion,
+              policyId: state.policyId,
+            },
+          });
+          return;
+        }
         setLoadError(
           err instanceof ApiError && err.status === 404
             ? { title: 'Conversation not available', message: 'It does not exist or belongs to another employee.' }

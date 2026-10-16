@@ -180,7 +180,7 @@ def portfolio_evidence(result: PortfolioResult) -> tuple[list[dict], list[dict]]
 def portfolio_suggestions(result: PortfolioResult) -> list[str]:
     """Follow-ups about the policies just listed."""
     if result.scope == "not_found":
-        return ["What policies do we have?"]
+        return []
     return [f"What does {p.policy_number} cover?" for p in result.policies[:3]]
 
 
@@ -191,10 +191,14 @@ def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
     scope = "customer" if accounts else "book"
 
     # A name was given but matches nobody: say so rather than answering for the whole book.
-    unmatched = name_words(text) if not accounts else []
+    from app.services.customer_verification import _named_people
+    unmatched = [p for p in _named_people(text, None) if not find_accounts(p, db)[0]] if not accounts else []
+    if not unmatched and not accounts:
+        unmatched = name_words(text)
     if unmatched:
+        name_str = " ".join(unmatched)
         return PortfolioResult(
-            answer=f"No policyholder named {' '.join(unmatched)} is on file. Check the spelling or use a policy number.",
+            answer=f"I couldn't find a matching customer for '{name_str}'. Please verify the customer name or provide a valid policy number.",
             scope="not_found",
             customers=[],
             policies=[],

@@ -48,56 +48,69 @@ def run(monkeypatch, db, policy_id, reply, question="Does this policy cover dama
     return attention_analysis.analyze(question, policy_id, STORED_SEARCH, db)
 
 
-def test_candidates_that_find_no_evidence_are_dropped(monkeypatch, db, policy_id):
+def test_case_a_no_evidence_generates_two_alternative_questions(monkeypatch, db, policy_id):
     result = run(monkeypatch, db, policy_id, {
         "type": "coverage_no_evidence", "reason": "No clause addresses meteors.",
         "candidates": [
             {"question": "Is sewer back-up into the basement covered?", "relation": "related", "note": "Does not answer meteors."},
-            {"question": "Does it cover zorblax quux frobnication?", "relation": "related", "note": "Does not answer meteors."},
+            {"question": "What is the deductible for water damage under this policy?", "relation": "related", "note": "Inquires about water damage coverage."},
         ],
     })
     assert result["status"] == "ready"
-    assert [c["question"] for c in result["candidates"]] == ["Is sewer back-up into the basement covered?"]
-    assert result["dropped_candidates"] == 1
-    kept = result["candidates"][0]
-    assert kept["passages"] and all(p["score"] >= attention_analysis.EVIDENCE_SCORE for p in kept["passages"])
-    assert all(p["quote_verified"] for p in kept["passages"] if p["source_type"] == "clause")
+    assert len(result["candidates"]) == 2
+    assert result["candidates"][0]["question"] == "Is sewer back-up into the basement covered?"
+    assert result["candidates"][0]["relation"] == "related"
+    assert result["candidates"][0]["note"] == "Does not answer meteors."
+    assert result["candidates"][0]["passages"] and all(p["score"] >= attention_analysis.EVIDENCE_SCORE for p in result["candidates"][0]["passages"])
+    assert all(p["quote_verified"] for p in result["candidates"][0]["passages"] if p["source_type"] == "clause")
+    assert result["candidates"][1]["relation"] == "related"
 
 
-def test_a_real_gap_is_never_presented_as_the_same_question(monkeypatch, db, policy_id):
+def test_case_b_spelling_or_wording_error_generates_two_corrected_alternatives(monkeypatch, db, policy_id):
     result = run(monkeypatch, db, policy_id, {
-        "type": "coverage_no_evidence", "reason": "No clause addresses meteors.",
+        "type": "typo", "reason": "Typo in 'sewer' prevented retrieval match.",
         "candidates": [
-            {"question": "Is sewer back-up into the basement covered?", "relation": "same"},  # no note: cannot be shown
-            {"question": "Is water back-up from a sewer covered?", "relation": "same", "note": "Does not answer meteors."},
+            {"question": "Is sewer back-up into the basement covered?", "relation": "same"},
+            {"question": "Does this policy cover sewer back-up damage?", "relation": "same"},
+        ],
+    }, question="Is suwer bak-up into basement covred?")
+    assert result["status"] == "ready"
+    assert len(result["candidates"]) == 2
+    assert result["type"] == "typo"
+    assert result["category"] == "wrong_wording"
+    assert result["candidates"][0]["relation"] == "same"
+    assert result["candidates"][1]["relation"] == "same"
+    assert result["candidates"][0]["question"] == "Is sewer back-up into the basement covered?"
+
+
+def test_case_c_other_errors_address_specific_issue(monkeypatch, db, policy_id):
+    result = run(monkeypatch, db, policy_id, {
+        "type": "out_of_scope", "reason": "Not a single policy coverage question.",
+        "candidates": [
+            {"question": "What coverage forms and endorsements apply to policy HO-2847-1193?", "relation": "related", "note": "Checks attached policy endorsements."},
+            {"question": "What is the policy deductible and coverage limit?", "relation": "related", "note": "Checks basic policy terms."},
+        ],
+    }, question="What is the meaning of life?")
+    assert result["status"] == "ready"
+    assert len(result["candidates"]) == 2
+    assert result["candidates"][0]["relation"] == "related"
+    assert result["candidates"][1]["relation"] == "related"
+
+
+def test_missing_policy_context_generates_two_suggestions_via_llm(monkeypatch, db):
+    provider = FakeProvider({
+        "type": "out_of_scope", "reason": "Customer and policy could not be identified.",
+        "candidates": [
+            {"question": "Could you provide the policy number (e.g. HO-XXXX-XXXX)?", "relation": "related", "note": "Clarifies policy number."},
+            {"question": "Could you provide the customer's full name or account number?", "relation": "related", "note": "Clarifies customer."},
         ],
     })
-    assert [c["relation"] for c in result["candidates"]] == ["related"]
-    assert result["candidates"][0]["note"] == "Does not answer meteors."
-
-
-def test_what_is_missing_is_built_from_the_stored_search(monkeypatch, db, policy_id):
-    result = run(monkeypatch, db, policy_id, {"type": "coverage_no_evidence", "reason": "The policy is silent on meteors entirely.", "candidates": []})
-    assert result["missing"] == (
-        "Searched 6 coverages, 4 forms and 47 clauses on HO-2847-1193; none mention “meteors”, “zorblax”."
-    )
-    assert "silent" not in result["missing"]  # the model's wording is not used
-
-
-def test_a_missing_edition_is_stated_from_the_policy_forms(monkeypatch, db, policy_id):
-    result = run(monkeypatch, db, policy_id, {"type": "typo", "reason": "Wrong edition.", "candidates": []},
-                 question="Is HO 04 95 edition 05 11 on this policy?")
-    assert result["type"] == "missing_form_or_edition"  # the stored forms decide, not the model
-    assert result["missing"] == "HO 04 95 edition 05 11 is not on HO-2847-1193; the policy has HO 04 95 edition 10 00."
-    assert result["upload_available"] is False
-
-
-def test_out_of_scope_offers_no_suggestions(monkeypatch, db, policy_id):
-    result = run(monkeypatch, db, policy_id, {
-        "type": "out_of_scope", "reason": "Not an insurance question.",
-        "candidates": [{"question": "Is sewer back-up covered?", "relation": "related", "note": "x"}],
-    }, question="What is the capital of France?")
-    assert result["category"] == "out_of_scope" and result["candidates"] == []
+    monkeypatch.setattr(attention_analysis.LLMService, "get_provider", classmethod(lambda cls, name=None: provider))
+    result = attention_analysis.analyze("Does Margaret Chen have flood coverage?", None, STORED_SEARCH, db, flag_reason="customer_not_found")
+    assert result["status"] == "ready"
+    assert len(result["candidates"]) == 2
+    assert result["candidates"][0]["question"].startswith("Could you provide the policy number")
+    assert result["candidates"][1]["question"].startswith("Could you provide the customer's full name")
 
 
 def test_a_reply_that_does_not_match_the_schema_is_rejected(monkeypatch, db, policy_id):

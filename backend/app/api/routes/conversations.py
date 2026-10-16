@@ -55,7 +55,8 @@ from app.services.portfolio import (
     portfolio_suggestions,
 )
 from app.services.company_guidance import guidance_for_answer, with_guidance_status
-from app.services.customer_verification import verification_for_answer
+from app.services.customer_verification import verification_for_answer, verify_customer
+from app.schemas.policy_resolution import CustomerVerification
 from app.services.loss_date import extract_loss_date, term_selection
 from app.services.multi_part import Part, PartAnswer, answer_endorsement, answer_records, combine, split_question
 from app.services.factual_lookup import (
@@ -63,6 +64,7 @@ from app.services.factual_lookup import (
     is_factual_query,
     is_wording_query,
 )
+from app.services.policy_resolver import resolve_policy_from_question
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -467,10 +469,39 @@ def submit_question(
         # The same question follows for the customer's other policies: keep its interpretation.
         remember(conv.id, question_text, interpretation)
 
-    # Customer and portfolio questions ("how many policies does X have?") are answered from
-    # policy records and do not need, or change, the conversation's single-policy context.
+    # 1. Customer and portfolio questions ("how many policies does X have?", "what are the policies of Sirivalli")
+    # are answered from policy records. If an unknown customer is named, answer_portfolio_question returns
+    # scope="not_found", policies=[], and does not expose other customers' policies.
     if not payload.policy_id and asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
         return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee)
+
+    # 2. Customer verification check: for policy-specific questions, if the question explicitly names a customer
+    # who is not on file, fail customer verification immediately without exposing other customers' policies.
+    active_policy = db.get(CorePolicy, conv.policy_id) if conv.policy_id else None
+    typed_res = resolve_policy_from_question(question_text, db)
+    cust_verif = verify_customer(typed_res, question_text, interpretation, active_policy, db)
+    if cust_verif.status == "not_found":
+        return _answer_customer_not_found(conv, question_text, cust_verif, db, started, employee)
+
+    # 3. Explicit reference to a different customer in question text requires confirmation if not specified in payload
+    if not payload.policy_id and conv.policy_id and active_policy and cust_verif.status == "verified" and cust_verif.matched_on != "conversation":
+        if cust_verif.customers and active_policy.account and cust_verif.customers[0].customer_id != active_policy.account_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"You're asking about a policy belonging to {cust_verif.customers[0].name}. "
+                    f"You're currently discussing a policy belonging to {active_policy.account.name}. "
+                    "Explicit confirmation is required to switch the existing conversation."
+                ),
+            )
+
+    if not policy_id:
+        canonical_q = understood_text(question_text, interpretation)
+        res = resolve_policy_from_question(question_text, db)
+        if res.status != "resolved" and canonical_q != question_text:
+            res = resolve_policy_from_question(canonical_q, db)
+        if res.status == "resolved" and res.policy:
+            policy_id = res.policy.id
 
     if not policy_id:
         raise HTTPException(
@@ -491,6 +522,13 @@ def submit_question(
         policy = db.get(CorePolicy, term_choice["policy_id"])
         policy_id = policy.id
     validate_employee_authorization(employee, policy)
+
+    # Bind resolved policy context to conversation if not already bound
+    if not conv.policy_id:
+        conv.policy_id = policy_id
+        conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+
     policy_context = _build_policy_context(policy_id, db)
 
     canonical_question = understood_text(question_text, interpretation)
@@ -936,6 +974,84 @@ def _answer_factual_question(
         interpretation=interpretation,
         asked_by=asked_by(conv.employee_id, ledger_entry),
         asked_at=question_record.created_at,
+    )
+
+
+def _answer_customer_not_found(
+    conv: Conversation,
+    question_text: str,
+    verification: CustomerVerification,
+    db: Session,
+    started: float,
+    employee: EmployeeUser,
+) -> QuestionAnswerResponse:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    question_record = ConversationQuestion(
+        conversation_id=conv.id,
+        policy_id=None,
+        question=question_text,
+        status="insufficient_evidence",
+        created_at=now,
+    )
+    conv.updated_at = now
+    db.add(question_record)
+    db.commit()
+    db.refresh(question_record)
+
+    latency_ms = int(round((time.perf_counter() - started) * 1000))
+    ledger_entry = LedgerService.record_entry(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        policy_id=None,
+        question=question_text,
+        evidence=[],
+        grounding_context="Customer verification failed; named customer not found in customer records.",
+        raw_llm_response="",
+        final_answer=verification.message,
+        citations=[],
+        confidence="none",
+        guardrail_status="not_applicable",
+        suggested_questions=[],
+        db=db,
+        employee_id=conv.employee_id,
+        **_asker_fields(employee),
+        outcome="insufficient_evidence",
+        guardrail_checks=[],
+        model_used="none",
+        provider="none",
+        is_fallback=False,
+        latency_ms=latency_ms,
+        retrieval={
+            "answer_type": "customer_verification_failed",
+            "customer_verification": verification.model_dump(),
+            "policies_matched": 0,
+        },
+    )
+
+    return QuestionAnswerResponse(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        question=question_text,
+        status="insufficient_evidence",
+        answer=verification.message,
+        evidence=[],
+        citations=[],
+        confidence="none",
+        confidence_percent=None,
+        confidence_criteria=None,
+        guardrail_status="not_applicable",
+        guardrail_checks=[],
+        suggested_questions=[],
+        retrieval={
+            "answer_type": "customer_verification_failed",
+            "customer_verification": verification.model_dump(),
+            "policies_matched": 0,
+        },
+        ledger_id=ledger_entry.id,
+        created_at=question_record.created_at,
+        asked_by=asked_by(conv.employee_id, ledger_entry),
+        asked_at=question_record.created_at,
+        latency_ms=latency_ms,
     )
 
 

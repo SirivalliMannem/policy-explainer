@@ -27,8 +27,8 @@ from app.schemas.policy_resolution import CustomerVerification, VerifiedCustomer
 from app.services.policy_resolver import NON_NAME_WORDS, STATE_WORDS, ResolutionResult, find_accounts
 
 # Two capitalised words in a row ("John Smith") or a capitalised possessive ("Smith's").
-_FULL_NAME = re.compile(r"\b([A-Z][a-z]{1,})\s+([A-Z][a-z]{1,})\b")
-_POSSESSIVE = re.compile(r"\b([A-Z][a-z]{2,})(?:'s|’s)\b")
+_FULL_NAME = re.compile(r"\b([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,})\b")
+_POSSESSIVE = re.compile(r"\b([A-Z][a-zA-Z\-]{1,}(?:\s+[A-Z][a-zA-Z\-]{1,})?)(?:'s|’s)\b")
 
 _TTL_SECONDS = 600
 _cache: dict[tuple[str, str], tuple[float, dict]] = {}
@@ -62,19 +62,72 @@ def _customer(account: CoreAccount) -> VerifiedCustomer:
     return VerifiedCustomer(customer_id=account.id, name=account.name, account_number=account.account_number or None)
 
 
+_POLICY_NUMBER_OR_CLAIM = re.compile(r"\b(?:HO|PA|CLM)[-\s]?\d+", re.IGNORECASE)
+
+
 def _named_people(question: str, interpretation: Optional[dict]) -> list[str]:
-    """People the question names: from the interpreter when it ran, else capitalised full names."""
+    """People the question names: from the interpreter when it ran, else capitalised or contextual names."""
     names = [n for n in (interpretation or {}).get("policyholders") or [] if isinstance(n, str) and n.strip()]
+    if (interpretation or {}).get("policyholder_name"):
+        st = interpretation["policyholder_name"].strip()
+        if st and st not in names:
+            names.append(st)
     if names:
         return names
-    found = []
-    for first, last in _FULL_NAME.findall(question):
-        if not {first.lower(), last.lower()} & (NON_NAME_WORDS | STATE_WORDS):
-            found.append(f"{first} {last}")
-    for word in _POSSESSIVE.findall(question):
-        if word.lower() not in NON_NAME_WORDS | STATE_WORDS and not any(word in n for n in found):
-            found.append(word)
-    return found
+    q_clean = question.strip().rstrip("?.!")
+    found: list[str] = []
+
+    # 1. Possessive ("Smith's", "Sirivalli's")
+    for m in _POSSESSIVE.finditer(q_clean):
+        candidate = m.group(1).strip()
+        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not all(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in candidate.split()):
+            found.append(candidate)
+
+    # 2. Prepositional phrases: of X, for X, about X, regarding X, under X
+    for m in re.finditer(r"\b(?:of|for|about|with|under|regarding)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b", q_clean, re.IGNORECASE):
+        candidate = m.group(1).strip()
+        words = candidate.split()
+        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not any(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in words):
+            found.append(candidate)
+
+    # 3. Does X have, is X covered, has X
+    for m in re.finditer(r"\b(?:does|is|has)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:have|covered|own|insured)\b", q_clean, re.IGNORECASE):
+        candidate = m.group(1).strip()
+        words = candidate.split()
+        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not any(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in words):
+            found.append(candidate)
+
+    # 4. Role-introduced names
+    for m in re.finditer(r"\b(?:customer|policyholder|insured|client|account)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b", q_clean, re.IGNORECASE):
+        candidate = m.group(1).strip()
+        words = candidate.split()
+        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not any(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in words):
+            found.append(candidate)
+
+    # 5. Full capitalized names ("John Smith", "Margaret Chen")
+    for m in _FULL_NAME.finditer(question):
+        candidate = m.group(1).strip()
+        if not all(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in candidate.split()):
+            found.append(candidate)
+
+    # 6. Single capitalized words not in non-names
+    for m in re.finditer(r"\b([A-Z][a-zA-Z\-]{2,})\b", question):
+        w = m.group(1).strip()
+        if not _POLICY_NUMBER_OR_CLAIM.search(w) and w.lower() not in NON_NAME_WORDS | STATE_WORDS and w not in found:
+            found.append(w)
+
+    # If full name is present, filter out individual component words
+    multi = [f for f in found if " " in f]
+    if multi:
+        filtered = []
+        for f in found:
+            if " " in f:
+                filtered.append(f)
+            elif not any(f in m.split() for m in multi):
+                filtered.append(f)
+        found = filtered
+
+    return list(dict.fromkeys(found))
 
 
 def verify_customer(
@@ -133,15 +186,50 @@ def verify_customer(
             message=result.message or f"No customer in the records matches {result.reference}.",
         )
 
-    # no_reference: was a person named who is not in the records?
-    unknown = [name for name in _named_people(question, interpretation) if not find_accounts(name, db)[0]]
+    # Check whether any customer was named in the question
+    people = _named_people(question, interpretation)
+    known = []
+    unknown = []
+    for p in people:
+        accs, _ = find_accounts(p, db)
+        if accs:
+            known.extend(accs)
+        else:
+            unknown.append(p)
+
+    # A customer was explicitly named but not found in the customer records:
+    # NEVER fall back to active conversation context; fail verification.
     if unknown:
+        name = unknown[0]
         return CustomerVerification(
             status="not_found",
             matched_on="customer_name",
-            reference=unknown[0],
-            message=f"No customer named {unknown[0]} is in the customer records.",
+            reference=name,
+            message=f"I couldn't find a matching customer for '{name}'. Please verify the customer name or provide a valid policy number.",
         )
+
+    if known:
+        unique_known = {a.id: a for a in known}
+        if len(unique_known) == 1:
+            a = next(iter(unique_known.values()))
+            return CustomerVerification(
+                status="verified",
+                matched_on="customer_name",
+                reference=a.name,
+                customers=[_customer(a)],
+                message=f"{a.name} is in the customer records.",
+            )
+        else:
+            names = sorted(a.name for a in unique_known.values())
+            return CustomerVerification(
+                status="ambiguous",
+                matched_on="customer_name",
+                reference=people[0] if people else None,
+                customers=[_customer(a) for a in unique_known.values()],
+                message=f"{len(names)} customers in the records match: {', '.join(names[:-1])} and {names[-1]}.",
+            )
+
+    # No customer named in question: use verified active context if available
     if active and active.account:
         return CustomerVerification(
             status="verified",

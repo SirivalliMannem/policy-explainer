@@ -70,7 +70,10 @@ def _reason(entry: EvidenceLedger) -> Optional[str]:
     if outcome == "needs_review":
         return "guardrail_flagged"
     if outcome == "insufficient_evidence":
-        if retrieval.get("answer_type") == "portfolio":
+        if retrieval.get("answer_type") in ("portfolio", "customer_verification_failed"):
+            return "customer_not_found"
+        cust_v = retrieval.get("customer_verification")
+        if isinstance(cust_v, dict) and cust_v.get("status") in ("not_found", "customer_not_found"):
             return "customer_not_found"
         return "no_evidence"
     if entry.confidence == "low":
@@ -182,6 +185,8 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
                 reason_label=REASONS[reason][0],
                 detail=_detail(entry, reason),
                 policy_number=policy.policy_number if policy else None,
+                policy_id=entry.policy_id or (policy.id if policy else None),
+                conversation_id=entry.conversation_id,
                 insured=account.name if account else None,
                 line_of_business=policy.line_of_business if policy else None,
                 times_asked=group["count"],
