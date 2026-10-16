@@ -323,7 +323,14 @@ function AnswerCard({
             <FileText className="h-3.5 w-3.5 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
             <span className="font-semibold">From the uploaded document</span>
             <span className="truncate">· {r.document.filename}</span>
-            <span className="text-[#64748B]">· not the policy on file</span>
+            <span className="text-[#64748B]">
+              {r.policy_passages ? '· compared with the policy on file' : '· not the policy on file'}
+            </span>
+            {r.general_knowledge && (
+              <span className="basis-full text-[11px] text-[#475569]">
+                Sentences beginning “In general” are general insurance knowledge, not taken from the document or the policy.
+              </span>
+            )}
           </div>
         )}
 

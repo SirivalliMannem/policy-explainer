@@ -111,7 +111,12 @@ class AttentionResponse(BaseModel):
     questions_flagged: int
     # Flagged questions in the range already resolved by a person (not in the queue).
     questions_resolved: int = 0
+    # One page of the queue (newest first): items[offset : offset + limit] of questions_flagged.
     items: List[AttentionItem]
+    offset: int = 0
+    limit: int = 10
+    questions_waiting_over_day: int = 0
+    questions_asked_repeatedly: int = 0
     causes: List[AttentionCause]
 
 

@@ -412,6 +412,12 @@ function resultSteps(result: QuestionAnswerResponse, input: ProcessInput): Proce
           ? `Read ${plural(r.passages_searched ?? 0, 'passage')} across ${r.document.filename} for the explanation`
           : `Searched ${plural(r.passages_searched ?? 0, 'passage')} of ${r.document.filename}`,
     });
+    if (r.policy_passages) {
+      retrieveLines.push({ kind: 'text', text: `Added ${plural(r.policy_passages, 'passage')} of the policy on file, for comparison` });
+    }
+    if (r.general_knowledge) {
+      retrieveLines.push({ kind: 'text', text: 'The answer adds general insurance knowledge, marked “In general”' });
+    }
   } else if (r.clauses_searched !== undefined || r.forms_searched !== undefined) {
     const passages = (r.clauses_searched ?? 0) + (r.coverages_searched ?? 0) + (r.claims_searched ?? 0) + (r.billing_searched ?? 0);
     retrieveLines.push({

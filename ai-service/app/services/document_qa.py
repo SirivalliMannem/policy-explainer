@@ -1,11 +1,14 @@
-"""Answers grounded in a document the employee uploaded into the chat.
+"""Answers about a document the employee uploaded into the chat.
 
 The document's text is stored page by page (PDF) or section by section (Word, text). It is split into
 passages; a question is matched to passages by the same word match and meaning search used for policy
 clauses; the language model answers from those passages only and cites them as [E#], which the chat
-shows with the document's page or section. A document can be about anything: answers say what the
-document says, and say plainly when it does not cover the question. Nothing from the carrier's policy
-records is mixed in.
+shows with the document's page or section. A broad question ("can this relate to a homeowners
+policy?") also gets an overview of the whole document. When the conversation has a policy selected,
+the most relevant wording of that policy on file is given too, labelled separately, so the two can be
+compared. The model may add general insurance knowledge to explain, compare or relate, but only in
+sentences that begin "In general," and never cited as the document or the policy. It says plainly when
+a question has nothing to do with the document.
 
 When the model is unavailable, the matching passages themselves are shown with their page numbers;
 nothing is written that is not in the document.
@@ -54,12 +57,19 @@ Write:
 End every sentence or bullet that states a fact with the passage it comes from, as [E1], [E2].
 Never say whether a particular claim or loss would be paid."""
 
-QUESTION_PROMPT = f"""You answer a question about a document that an insurance employee uploaded.
+GENERAL_MARKER = "In general,"
 
-Use ONLY the numbered passages given. Do not add outside knowledge or assumptions.
-Answer in plain language. End every sentence that states a fact with the passage it comes from, as [E1], [E2].
-If the passages do not contain the answer, reply with exactly: {NOT_IN_DOCUMENT}
-Never say whether a particular claim or loss would be paid; explain what the document says instead."""
+QUESTION_PROMPT = f"""You help an insurance employee with a document they uploaded. They may ask what it says, or ask you to explain it, compare it, relate it to other kinds of insurance or to the customer's policy on file, or reason about it.
+
+The numbered sources are passages from the UPLOADED DOCUMENT and, when given, from the POLICY ON FILE (the customer's own policy in the carrier's records). Each is labelled.
+Rules:
+- What the document or the policy says must come from the sources, with the source cited at the end of the sentence as [E1], [E2]. Make clear which one you mean ("the uploaded document", "the policy on file").
+- To explain, compare or relate you may use general insurance knowledge, but every such sentence must begin with "{GENERAL_MARKER}" and carry no citation. Never present general knowledge as what the document or the policy says.
+- Answer in plain language, concisely.
+- Never say whether a particular claim or loss would be paid.
+- If the question has nothing to do with the document, the policy or insurance, reply with exactly: {NOT_IN_DOCUMENT}"""
+OVERVIEW_WHEN_FEWER_THAN = 2
+POLICY_PASSAGES = 4
 
 
 def _passages(document: UploadedDocument, pages: list[UploadedDocumentPage]) -> list[dict]:
@@ -145,8 +155,10 @@ def _evidence_dicts(items: list[EvidenceItem]) -> list[dict]:
     return [
         {
             "source_type": i.source_type, "source_id": i.source_id, "title": i.title, "content": i.content,
-            "form_number": i.form_number, "page": i.page, "heading": i.heading, "relevance_score": i.relevance_score,
-            "evidence_index": n, "scope": "uploaded_document", "matched_by": i.metadata.get("matched_by"),
+            "form_number": i.form_number, "edition": i.edition, "page": i.page, "section": i.section, "heading": i.heading,
+            "relevance_score": i.relevance_score, "evidence_index": n,
+            # The uploaded document, or the customer's policy on file given for comparison.
+            "scope": (i.metadata or {}).get("scope", "uploaded_document"), "matched_by": (i.metadata or {}).get("matched_by"),
         }
         for n, i in enumerate(items, start=1)
     ]
@@ -155,11 +167,19 @@ def _evidence_dicts(items: list[EvidenceItem]) -> list[dict]:
 def _checks(answer: str, evidence: list[EvidenceItem]) -> list[dict]:
     refs = referenced_evidence_indexes(answer)
     valid = [r for r in refs if 1 <= r <= len(evidence)]
+    general = GENERAL_MARKER.lower() in answer.lower()
+    if valid:
+        inline = {"name": "inline_citations", "status": "passed", "detail": f"{len(valid)} inline reference(s) to the sources."}
+    elif general:
+        # Only general knowledge, clearly marked as such: reported, not blocked.
+        inline = {"name": "inline_citations", "status": "warning",
+                  "detail": "The answer uses general insurance knowledge only (marked “In general”); nothing in the document is cited."}
+    else:
+        inline = {"name": "inline_citations", "status": "failed", "detail": "The answer cites no passage of the document."}
     return [
         {"name": "answer_present", "status": "passed" if answer.strip() else "failed",
          "detail": "A non-empty answer was produced." if answer.strip() else "No answer was produced."},
-        {"name": "inline_citations", "status": "passed" if valid else "failed",
-         "detail": f"{len(valid)} inline reference(s) to the uploaded document." if valid else "The answer cites no passage of the document."},
+        inline,
         {"name": "citations_verified", "status": "passed" if len(valid) == len(refs) else "failed",
          "detail": f"{len(valid)} of {len(refs)} references point to passages of the document."},
     ]
@@ -174,7 +194,22 @@ def _fallback_answer(lead: str, evidence: list[EvidenceItem]) -> str:
     return "\n".join(lines)
 
 
-def answer_from_document(document_id: str, question: str, mode: str, db: Session) -> Optional[dict]:
+def _policy_evidence(question: str, policy_id: Optional[str], db: Session) -> list[EvidenceItem]:
+    """The policy on file's most relevant wording for the question, for comparison with the document."""
+    if not policy_id:
+        return []
+    from app.services.retrieval.evidence_retriever import EvidenceRetriever
+
+    items = EvidenceRetriever.retrieve(question, policy_id, db)
+    kept = [i for i in items if i.source_type in ("clause", "coverage")][:POLICY_PASSAGES]
+    for item in kept:
+        item.metadata = {**(item.metadata or {}), "scope": "policy_on_file"}
+    return kept
+
+
+def answer_from_document(
+    document_id: str, question: str, mode: str, db: Session, policy_id: Optional[str] = None
+) -> Optional[dict]:
     """A grounded answer (or the plain-language explanation, mode "summary") from one uploaded document."""
     started = time.perf_counter()
     document = db.query(UploadedDocument).filter(UploadedDocument.id == document_id).first()
@@ -187,16 +222,26 @@ def answer_from_document(document_id: str, question: str, mode: str, db: Session
         .all()
     )
     passages = _passages(document, pages)
+    policy_items: list[EvidenceItem] = []
+    matched = 0  # passages that matched the question (the rest, if any, are the document's overview)
     if mode == "summary":
         chosen, meaning = _overview(passages), None
     else:
         chosen, meaning = _score(question, passages)
-    evidence = _evidence(document, chosen)
+        matched = len(chosen)
+        # A broad question matches few passages: give the whole document's overview as well, so it can
+        # still be explained, compared or related.
+        if len(chosen) < OVERVIEW_WHEN_FEWER_THAN:
+            seen = {p["id"] for p in chosen}
+            chosen = chosen + [p for p in _overview(passages) if p["id"] not in seen][: MAX_PASSAGES - len(chosen)]
+        policy_items = _policy_evidence(question, policy_id, db)
+    evidence = _evidence(document, chosen) + policy_items
     retrieval = {
         "answer_type": "document",
         "mode": mode,
         "document": {"id": document.id, "filename": document.filename, "unit": document.unit, "page_count": document.page_count},
         "passages_searched": len(passages),
+        "policy_passages": len(policy_items),
         **({"meaning_search": meaning} if meaning else {}),
     }
     base = {"question": question, "suggested_questions": [], "retrieval": retrieval, "evidence": _evidence_dicts(evidence)}
@@ -209,8 +254,13 @@ def answer_from_document(document_id: str, question: str, mode: str, db: Session
             "model_used": "none", "provider": "none", "timings_ms": {"retrieval": retrieval_ms},
         }
 
-    numbered = "\n\n".join(f"[E{n}] ({item.heading})\n{item.content}" for n, item in enumerate(evidence, start=1))
-    grounding = f"Document: {document.filename}\n\n{numbered}"
+    def label(item: EvidenceItem) -> str:
+        if item.source_type == "document":
+            return f"UPLOADED DOCUMENT, {item.heading}"
+        return f"POLICY ON FILE, {item.form_number or ''} p.{item.page or '-'} {item.heading or item.title}".strip()
+
+    numbered = "\n\n".join(f"[E{n}] ({label(item)})\n{item.content}" for n, item in enumerate(evidence, start=1))
+    grounding = f"Uploaded document: {document.filename}\n\n{numbered}"
     generation_started = time.perf_counter()
     try:
         provider = LLMService.get_provider()
@@ -227,6 +277,8 @@ def answer_from_document(document_id: str, question: str, mode: str, db: Session
             "The language model is not available right now, so here are passages from across the document:"
             if mode == "summary"
             else "The language model is not available right now. These passages of the document match the question:"
+            if matched
+            else "The language model is not available right now, so the question cannot be answered. Nothing in the document matched it; here is an overview of the document:"
         )
         answer = _fallback_answer(lead, evidence)
         model_used, provider_name, is_fallback, fallback_reason = "none", "none", True, type(exc).__name__
@@ -242,7 +294,8 @@ def answer_from_document(document_id: str, question: str, mode: str, db: Session
         }
 
     checks = _checks(answer, evidence)
-    passed = all(c["status"] == "passed" for c in checks)
+    passed = not any(c["status"] == "failed" for c in checks)
+    retrieval["general_knowledge"] = GENERAL_MARKER.lower() in answer.lower()
     cited = len({r for r in referenced_evidence_indexes(answer) if 1 <= r <= len(evidence)})
     top = max((i.relevance_score for i in evidence), default=0.0)
     confidence = "low" if is_fallback or not passed else "high" if cited >= 2 and (mode == "summary" or top >= STRONG_EVIDENCE_SCORE) else "medium"

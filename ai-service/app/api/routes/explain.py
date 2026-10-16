@@ -77,7 +77,9 @@ def attention_analysis(payload: AttentionAnalysisRequest, db: Session = Depends(
 @router.post("/document")
 def explain_document(payload: DocumentQuestionRequest, db: Session = Depends(get_db)):
     """Answer from one uploaded document only, citing its pages or sections."""
-    result = answer_from_document(payload.document_id, payload.question.strip(), payload.mode, db)
+    result = answer_from_document(
+        payload.document_id, payload.question.strip(), payload.mode, db, (payload.policy_id or "").strip() or None
+    )
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     return result

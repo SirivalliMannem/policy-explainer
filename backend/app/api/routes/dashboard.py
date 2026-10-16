@@ -276,11 +276,13 @@ def get_most_asked_topics(
 @router.get("/attention", response_model=AttentionResponse)
 def get_needs_attention(
     time_range: str = Query("7d", alias="range", pattern="^(today|7d|30d)$"),
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """Flagged and unanswered questions in the range, grouped by question, plus their causes."""
+    """One page of the flagged and unanswered questions in the range, grouped by question, plus their causes."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    return needs_attention(db, _window_start(time_range, now), time_range)
+    return needs_attention(db, _window_start(time_range, now), time_range, limit=limit, offset=offset)
 
 
 def _check_role(employee: EmployeeUser) -> None:

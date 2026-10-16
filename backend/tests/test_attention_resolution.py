@@ -260,3 +260,15 @@ def test_a_name_with_digits_is_not_found_and_reveals_no_other_customer(session):
     assert body["status"] == "insufficient_evidence"
     assert "Sirivalli" in body["answer"] and not body.get("evidence")
     assert (body.get("portfolio") or {}).get("policies", []) == []  # no other customer is revealed
+
+
+def test_the_queue_is_served_one_page_at_a_time(session):
+    for _ in range(3):
+        flagged(session)
+    first = client.get("/api/dashboard/attention", params={"range": "today", "limit": 2, "offset": 0}).json()
+    second = client.get("/api/dashboard/attention", params={"range": "today", "limit": 2, "offset": 2}).json()
+    assert len(first["items"]) == 2 and (first["offset"], first["limit"]) == (0, 2)
+    assert first["questions_flagged"] == second["questions_flagged"] >= 3  # the total is the whole queue
+    assert not {i["latest_entry_id"] for i in first["items"]} & {i["latest_entry_id"] for i in second["items"]}
+    default = client.get("/api/dashboard/attention", params={"range": "today"}).json()
+    assert len(default["items"]) <= 10

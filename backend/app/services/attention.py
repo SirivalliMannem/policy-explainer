@@ -130,7 +130,7 @@ def _closed_until(db: Session) -> dict[tuple[str, str], datetime]:
     return until
 
 
-def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 50) -> AttentionResponse:
+def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 10, offset: int = 0) -> AttentionResponse:
     rows = (
         db.query(EvidenceLedger, CorePolicy, CoreAccount)
         .outerjoin(CorePolicy, CorePolicy.id == EvidenceLedger.policy_id)
@@ -232,8 +232,13 @@ def needs_attention(db: Session, since: datetime, range_name: str, limit: int = 
         answers_total=len(rows),
         flagged_total=flagged,
         questions_flagged=len(items),
+        # Over the whole queue, not just the page shown.
+        questions_waiting_over_day=sum(1 for i in items if (datetime.now(timezone.utc).replace(tzinfo=None) - i.first_asked_at).total_seconds() > 86400),
+        questions_asked_repeatedly=sum(1 for i in items if i.times_asked > 1),
         questions_resolved=len(resolved_groups - set(groups)),
-        items=items[:limit],
+        items=items[offset:offset + limit],
+        offset=offset,
+        limit=limit,
         causes=causes,
     )
 

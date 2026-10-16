@@ -86,10 +86,40 @@ def test_the_explanation_reads_across_the_whole_document(monkeypatch, db, docume
     assert "simple, plain language" in provider.prompts[0][0]
 
 
-def test_a_question_the_document_does_not_cover_gets_no_model_call(monkeypatch, db, document_id):
-    result, provider = run(monkeypatch, db, document_id, "Who won the 2022 World Cup?", reply="Argentina [E1].")
+def test_an_unrelated_question_is_declined(monkeypatch, db, document_id):
+    result, provider = run(monkeypatch, db, document_id, "Who won the 2022 World Cup?", reply=document_qa.NOT_IN_DOCUMENT)
     assert result["status"] == "insufficient_evidence" and result["evidence"] == []
-    assert provider.prompts == []  # nothing to ground an answer in, so nothing is generated
+    # The model still saw the document's overview, so it could judge that the question is unrelated.
+    assert "Lakeside Mutual" in provider.prompts[0][1]
+
+
+def test_a_broad_question_gets_the_documents_overview_and_marked_general_knowledge(monkeypatch, db, document_id):
+    reply = ("The uploaded document is a renters policy for Jordan Avery [E1]. "
+             "In general, a homeowners policy also insures the dwelling, which a renters policy does not.")
+    result, provider = run(monkeypatch, db, document_id, "Can this relate to a homeowners policy?", reply=reply)
+    assert result["status"] == "answered" and result["retrieval"]["general_knowledge"] is True
+    assert {e["page"] for e in result["evidence"]} == {1, 2}  # the overview of the whole document
+    assert "In general," in provider.prompts[0][0]  # general knowledge allowed only when marked
+
+
+def test_an_answer_with_only_marked_general_knowledge_is_reported_not_blocked(monkeypatch, db, document_id):
+    result, _ = run(monkeypatch, db, document_id, "Can this relate to a homeowners policy?",
+                    reply="In general, homeowners and renters policies both cover personal property.")
+    inline = next(c for c in result["guardrail_checks"] if c["name"] == "inline_citations")
+    assert inline["status"] == "warning" and result["guardrail_status"] == "passed"
+
+
+def test_the_policy_on_file_is_given_for_comparison_and_labelled(monkeypatch, db, document_id):
+    from app.models.policy import CorePolicy
+
+    policy = db.query(CorePolicy).filter(CorePolicy.policy_number == "HO-9021-4477").order_by(CorePolicy.term_number.desc()).first()
+    provider = FakeProvider("The uploaded document excludes flood [E1]; the policy on file also excludes it [E2].")
+    monkeypatch.setattr(document_qa.LLMService, "get_provider", classmethod(lambda cls, name=None: provider))
+    result = document_qa.answer_from_document(document_id, "Is flood damage excluded?", "question", db, policy.id)
+    scopes = [e["scope"] for e in result["evidence"]]
+    assert "uploaded_document" in scopes and "policy_on_file" in scopes
+    assert result["retrieval"]["policy_passages"] >= 1
+    assert "POLICY ON FILE" in provider.prompts[0][1] and "UPLOADED DOCUMENT" in provider.prompts[0][1]
 
 
 def test_when_the_passages_do_not_answer_it_the_model_says_so_and_nothing_is_shown(monkeypatch, db, document_id):

@@ -66,7 +66,7 @@ def test_unusable_files_are_refused_with_a_reason(name, data, message):
 def session(monkeypatch):
     asked: list[tuple] = []
 
-    def explain_document(document_id, question, mode="question"):
+    def explain_document(document_id, question, mode="question", policy_id=None):
         asked.append((document_id, question, mode))
         if "world cup" in question.lower():
             return AIServiceResponse(question=question, answer="The uploaded document does not appear to cover this question.",

@@ -145,3 +145,5 @@ class DocumentQuestionRequest(BaseModel):
     document_id: str = Field(..., min_length=1)
     question: str = ""
     mode: str = Field("question", pattern="^(question|summary)$")
+    # The conversation's policy on file, given so the document can be compared with it.
+    policy_id: Optional[str] = None

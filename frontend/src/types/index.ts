@@ -298,6 +298,10 @@ export interface RetrievalSummary {
   /** Answers from an uploaded document: which document, and how many of its passages were searched. */
   document?: { id: string; filename: string; unit: 'page' | 'section' | string; page_count: number } | null;
   passages_searched?: number;
+  /** Passages of the conversation's policy on file given with the document, for comparison. */
+  policy_passages?: number;
+  /** The answer adds general insurance knowledge (sentences beginning "In general"), not from any source. */
+  general_knowledge?: boolean;
   /** "summary": the plain-language explanation of the whole document; "question": a question about it. */
   mode?: 'summary' | 'question' | string;
   /** Meaning-based clause search alongside word match. */
@@ -643,6 +647,12 @@ export interface AttentionResponse {
   questions_flagged: number;
   /** Flagged questions in the range already resolved by a person. */
   questions_resolved?: number;
+  /** The page of items: items are questions_flagged[offset : offset + limit]. */
+  offset?: number;
+  limit?: number;
+  /** Over the whole queue, not just this page. */
+  questions_waiting_over_day?: number;
+  questions_asked_repeatedly?: number;
   items: AttentionItem[];
   causes: AttentionCause[];
 }

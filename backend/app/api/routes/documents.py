@@ -211,7 +211,7 @@ def answer_from_document(
     db.commit()
     db.refresh(question_record)
     try:
-        ai = ai_client.explain_document(doc.id, question, mode)
+        ai = ai_client.explain_document(doc.id, question, mode, conv.policy_id)
     except HTTPException:
         question_record.status = "failed"
         db.commit()

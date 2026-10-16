@@ -87,6 +87,20 @@ def meaning_points(lifts: dict[str, float], clauses: list) -> dict[str, float]:
     return points
 
 
+# Words that ask for a kind of clause, by the clause_type stored on each clause.
+CLAUSE_TYPE_TERMS: dict[str, set[str]] = {
+    "exclusion": {"exclusion", "exclusions", "exclude", "excludes", "excluded"},
+    "condition": {"condition", "conditions"},
+    "definition": {"definition", "definitions", "define", "defined", "defines"},
+}
+# Enough on its own to count as evidence (with the customer's-own-form bonus it reaches the strong level).
+CLAUSE_TYPE_SCORE = 8.0
+# With a topic in the question: a nudge that needs a topic match too to reach the evidence threshold.
+CLAUSE_TYPE_TOPIC_SCORE = 2.0
+# Words that name no topic ("what are the exclusions on this policy", "list all of them").
+GENERIC_TERMS = {"list", "all", "any", "main", "key", "apply", "applies", "listed"}
+
+
 POLICY_NUMBER_REFERENCE = re.compile(r"\b(?:HO|PA)[-\s]?\d{4}(?:[-\s]\d{4})?\b", re.IGNORECASE)
 
 POLICY_IDENTIFICATION_PATTERN = re.compile(
@@ -308,6 +322,11 @@ class EvidenceRetriever:
         )
 
         all_candidate_clauses = [(c, True) for c in customer_clauses] + [(c, False) for c in product_clauses]
+        asked_types = {kind for kind, words in CLAUSE_TYPE_TERMS.items() if q_tokens & words}
+        # "What are the exclusions?" asks for all of them; "is flood excluded?" asks about flood, so a
+        # clause of that kind still has to match the topic to count.
+        topic_terms = q_tokens - set().union(*CLAUSE_TYPE_TERMS.values()) - GENERIC_TERMS
+        type_score = CLAUSE_TYPE_SCORE if not topic_terms else CLAUSE_TYPE_TOPIC_SCORE
         stats["clauses_searched"] = len(all_candidate_clauses)
 
         # Meaning-based search over the same clauses, alongside the word match below.
@@ -352,6 +371,12 @@ class EvidenceRetriever:
             # Governing pattern alignment
             if clause.pattern_code and clause.pattern_code in matched_coverage_patterns:
                 score += 5.0
+
+            # A question about a kind of clause ("what are the exclusions?") matches the clauses stored
+            # as that kind, whatever their heading says: exclusions are often headed by their subject
+            # ("Water Damage", "Earth Movement") and only the section says "Exclusions".
+            if clause.clause_type in asked_types:
+                score += type_score
 
             # Specific question terms: deductible, sewer, backup, flood
             if "deductible" in q_tokens and ("deductible" in clause.heading.lower() or "deductible" in clause_keywords):

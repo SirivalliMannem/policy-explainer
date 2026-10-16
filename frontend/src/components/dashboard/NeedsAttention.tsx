@@ -7,12 +7,13 @@ import { ApiError, getNeedsAttention, getResolutionLog } from '../../services/ap
 import { formatDateTime, relativeTime } from '../../lib/explainer';
 import type { AttentionItem, AttentionReason, AttentionResolution, AttentionResolveResponse, AttentionResponse } from '../../types';
 import { ResolveBox } from './ResolveBox';
+import { Pagination } from '../ui/Pagination';
+import { PAGE_SIZE } from '../../lib/pagination';
 
 type Range = 'today' | '7d' | '30d';
 
 const RANGE_LABEL: Record<Range, string> = { today: 'today', '7d': 'in the last 7 days', '30d': 'in the last 30 days' };
 const DAY_MS = 24 * 60 * 60 * 1000;
-const COLLAPSED_ROWS = 5;
 
 const TAG_STYLE: Record<AttentionReason, string> = {
   guardrail_flagged: 'bg-[#FFF1E6] text-[#9A3D09]',
@@ -171,7 +172,7 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState<string | null>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [record, setRecord] = useState<string | null>(null);
   const [resolvedNote, setResolvedNote] = useState<{ text: string; conversationId?: string } | null>(null);
   const [reload, setReload] = useState(0);
@@ -193,9 +194,14 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
     let cancelled = false;
     setLoading(true);
     setFailed(null);
-    getNeedsAttention(timeRange)
+    getNeedsAttention(timeRange, { limit: PAGE_SIZE, offset })
       .then((res) => {
         if (cancelled) return;
+        // Closing the last item of a page leaves it empty: show the page before.
+        if (!res.items.length && offset > 0 && res.questions_flagged > 0) {
+          setOffset(Math.max(0, Math.floor((res.questions_flagged - 1) / PAGE_SIZE) * PAGE_SIZE));
+          return;
+        }
         setData(res);
         setOpenKey((key) => key ?? res.items[0]?.latest_entry_id ?? null);
       })
@@ -212,12 +218,15 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
     return () => {
       cancelled = true;
     };
-  }, [timeRange, refreshKey, reload]);
+  }, [timeRange, refreshKey, reload, offset]);
+
+  // A different range starts from the first page.
+  useEffect(() => setOffset(0), [timeRange]);
 
   const items = data?.items ?? [];
-  const shown = showAll ? items : items.slice(0, COLLAPSED_ROWS);
-  const oldCount = items.filter(isOld).length;
-  const repeatCount = items.filter((i) => i.times_asked > 1).length;
+  const shown = items;
+  const oldCount = data?.questions_waiting_over_day ?? 0;
+  const repeatCount = data?.questions_asked_repeatedly ?? 0;
 
   const markClosed = (item: AttentionItem, result: AttentionResolveResponse, summary: string) => {
     // Leave the queue at once; the reload brings the counts (and any re-run item) up to date.
@@ -308,15 +317,18 @@ export function NeedsAttention({ timeRange, refreshKey = 0 }: { timeRange: Range
               />
             ))}
           </ul>
-          <div className="flex items-center justify-between pt-4 text-[12.5px] text-muted-foreground">
-            <span>
-              Showing {shown.length} of {data.questions_flagged}, longest waiting first
-            </span>
-            {items.length > COLLAPSED_ROWS && (
-              <button type="button" onClick={() => setShowAll((v) => !v)} className="font-bold text-orange-btn hover:underline">
-                {showAll ? 'Show fewer' : `View all ${items.length} →`}
-              </button>
-            )}
+          <div className="pt-4">
+            <Pagination
+              total={data.questions_flagged}
+              offset={data.offset ?? offset}
+              pageSize={PAGE_SIZE}
+              onChange={(next) => {
+                setOffset(next);
+                setOpenKey(null);
+              }}
+              noun="flagged questions, newest first"
+              disabled={loading}
+            />
           </div>
         </div>
 

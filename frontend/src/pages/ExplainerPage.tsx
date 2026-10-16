@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, ArrowUp, FileText, Loader2, Plus, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, FileText, Loader2, Plus, Upload, X } from 'lucide-react';
 import type {
   AskedBy,
   DocumentInfo,
@@ -246,6 +246,22 @@ export function ExplainerPage() {
   };
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // The "+" menu by the Send button: "Upload document" opens the file picker.
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const attachMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!attachMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target as Node)) setAttachMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setAttachMenuOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [attachMenuOpen]);
   const pendingQuestionRef = useRef<string | null>(null);
   const busyRef = useRef(false);
   const panelOpenerRef = useRef<HTMLElement | null>(null);
@@ -1436,7 +1452,7 @@ export function ExplainerPage() {
                   )}
                 </div>
               )}
-              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-1.5 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
+              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-4 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1450,16 +1466,6 @@ export function ExplainerPage() {
                     if (file) handleUpload(file);
                   }}
                 />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isWorking || isLoadingHistory || Boolean(loadError)}
-                  aria-label="Upload a document (PDF, Word or text)"
-                  title="Upload a document (PDF, Word or text, up to 10 MB)"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#475569] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F2A43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-                >
-                  <Plus className="h-5 w-5" strokeWidth={2.25} />
-                </button>
                 <QuestionInput
                   variant="bare"
                   value={input}
@@ -1474,6 +1480,43 @@ export function ExplainerPage() {
                   }
                   inputRef={inputRef}
                 />
+                <div ref={attachMenuRef} className="relative shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setAttachMenuOpen((open) => !open)}
+                    disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                    aria-label="Add"
+                    aria-haspopup="menu"
+                    aria-expanded={attachMenuOpen}
+                    title="Add a document"
+                    className="flex h-9 w-9 items-center justify-center rounded-xl text-[#475569] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F2A43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                  >
+                    <Plus className={`h-5 w-5 transition-transform ${attachMenuOpen ? 'rotate-45' : ''}`} strokeWidth={2.25} />
+                  </button>
+                  {attachMenuOpen && (
+                    <div
+                      role="menu"
+                      aria-label="Add"
+                      className="absolute bottom-full right-0 z-30 mb-2 w-64 rounded-xl border border-[#E2E8F0] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,42,67,0.14)]"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setAttachMenuOpen(false);
+                          fileInputRef.current?.click();
+                        }}
+                        className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                      >
+                        <Upload className="mt-0.5 h-4 w-4 shrink-0 text-[#EA580C]" aria-hidden="true" />
+                        <span>
+                          <span className="block text-[13px] font-semibold text-[#0F2A43]">Upload document</span>
+                          <span className="block text-[11.5px] text-[#64748B]">PDF, Word or text · up to 10 MB</span>
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   type="submit"
                   aria-label="Send"

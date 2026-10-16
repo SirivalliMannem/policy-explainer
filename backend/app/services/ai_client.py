@@ -131,9 +131,12 @@ class AIServiceClient:
             logger.warning("AI service attention-analysis unavailable: %s", type(exc).__name__)
         return None
 
-    def explain_document(self, document_id: str, question: str, mode: str = "question") -> AIServiceResponse:
-        """Answer from one uploaded document only (mode "summary": explain the whole document)."""
-        payload = {"document_id": document_id, "question": question, "mode": mode}
+    def explain_document(
+        self, document_id: str, question: str, mode: str = "question", policy_id: Optional[str] = None
+    ) -> AIServiceResponse:
+        """Answer about one uploaded document (mode "summary": explain the whole document). With the
+        conversation's policy, its relevant wording is given too, for comparison."""
+        payload = {"document_id": document_id, "question": question, "mode": mode, "policy_id": policy_id}
         try:
             with httpx.Client(timeout=AI_SERVICE_TIMEOUT_SECONDS) as client:
                 resp = client.post(f"{self.base_url}/api/explain/document", json=payload)

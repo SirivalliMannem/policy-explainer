@@ -200,10 +200,11 @@ export async function getResolutionLog(timeRange: 'today' | '7d' | '30d' = '7d')
 }
 
 export async function getNeedsAttention(
-  timeRange: 'today' | '7d' | '30d' = '7d'
+  timeRange: 'today' | '7d' | '30d' = '7d',
+  page: { limit?: number; offset?: number } = {}
 ): Promise<AttentionResponse> {
   return apiClient.get<AttentionResponse>('/api/dashboard/attention', {
-    params: { range: timeRange },
+    params: { range: timeRange, limit: page.limit ?? 10, offset: page.offset ?? 0 },
   });
 }
 
