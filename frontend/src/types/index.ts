@@ -523,6 +523,8 @@ export interface SourceTarget {
   sourceType: string;
   sourceId: string;
   evidence?: EvidenceItem | null;
+  /** The answer's sentence that cited this source, to point at the matching detail. */
+  claim?: string;
 }
 
 // ==========================================
@@ -782,4 +784,10 @@ export interface DocumentPage {
   page_number: number;
   page_count: number;
   text: string;
+}
+
+/** The whole extracted text of an uploaded document, page by page. */
+export interface DocumentText {
+  document: DocumentInfo;
+  pages: { page_id: string; page_number: number; text: string }[];
 }

@@ -189,6 +189,11 @@ def test_only_the_uploader_can_use_or_read_the_document(session):
         db.close()
     assert client.get(f"/api/document-pages/{page_id}", headers=other).status_code == 404
     assert client.get(f"/api/document-pages/{page_id}", headers=headers).json()["text"].startswith("Lakeside Mutual")
+    # The whole document opens from the chat for its uploader only, page by page.
+    assert client.get(f"/api/documents/{doc['document_id']}/pages", headers=other).status_code == 404
+    whole = client.get(f"/api/documents/{doc['document_id']}/pages", headers=headers).json()
+    assert whole["document"]["filename"] == doc["filename"]
+    assert [p["page_number"] for p in whole["pages"]] == list(range(1, len(SAMPLE_POLICY_PAGES) + 1))
     # A document cannot be used from another conversation, even by its owner.
     elsewhere = new_conversation(session)
     res = client.post(f"/api/conversations/{elsewhere}/questions", json={"question": "Deductible?", "document_id": doc["document_id"]}, headers=headers)

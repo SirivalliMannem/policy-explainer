@@ -18,7 +18,7 @@ import {
   ListChecks,
   Loader2,
 } from 'lucide-react';
-import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import type { AskedBy, DocumentInfo, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
 import type { ProcessState } from '../../lib/explainer';
 import { askerName, fullWhen } from '../../lib/conversations';
 import { answerConfidence, confidenceExplanation, isRecordAnswer } from '../../lib/confidence';
@@ -73,7 +73,9 @@ export type ChatMessage =
       /** One of several answers to the same question, one per matching policy: label it with its policy. */
       labelled?: boolean;
     }
-  | { kind: 'error'; id: string; time: string; title: string; text: string };
+  | { kind: 'error'; id: string; time: string; title: string; text: string }
+  /** A document uploaded into the chat, shown as a file the employee can open. Null while it is being read. */
+  | { kind: 'document'; id: string; time: string; filename: string; document: DocumentInfo | null; askedBy?: AskedBy | null; askedAt?: string | null };
 
 import { InlineCustomerSwitchCard } from './InlineCustomerSwitchCard';
 
@@ -99,8 +101,10 @@ interface ConversationStreamProps {
   activePolicy: PolicyContextCandidate | null;
   onAsk: (question: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
-  onOpenSource: (item: EvidenceItem) => void;
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
   onOpenTab: (tab: PolicyFeatureTab, highlight?: { type: 'coverage' | 'form'; id: string }) => void;
+  /** Open an uploaded document from its card in the chat. */
+  onOpenDocument?: (document: DocumentInfo) => void;
   pendingSwitch?: PendingCustomerSwitch | null;
   onConfirmSwitchContext?: () => Promise<void> | void;
   onConfirmStartNew?: () => Promise<void> | void;
@@ -261,7 +265,7 @@ function AnswerCard({
   result: QuestionAnswerResponse;
   time: string;
   onAsk: (q: string) => void;
-  onOpenSource: (item: EvidenceItem) => void;
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
   onOpenTab: ConversationStreamProps['onOpenTab'];
 }) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -509,7 +513,7 @@ function PortfolioCard({
   isWorking: boolean;
   onAsk: (q: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
-  onOpenSource: (item: EvidenceItem) => void;
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
 }) {
   const portfolio = result.portfolio;
   const policies = portfolio?.policies ?? [];
@@ -643,6 +647,7 @@ export function ConversationStream({
   onChooseCandidate,
   onOpenSource,
   onOpenTab,
+  onOpenDocument,
   pendingSwitch,
   onConfirmSwitchContext,
   onConfirmStartNew,
@@ -717,6 +722,61 @@ export function ConversationStream({
                 </span>
               </div>
             );
+
+          case 'document': {
+            const doc = msg.document;
+            const kind = doc ? (doc.content_type.includes('pdf') ? 'PDF' : doc.content_type.includes('word') ? 'Word' : 'Text') : '';
+            const card = (
+              <>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#EA580C]">
+                  {doc ? (
+                    <FileText className="h-5 w-5 text-white" aria-hidden="true" />
+                  ) : (
+                    <Loader2 className="h-5 w-5 animate-spin text-white" aria-hidden="true" />
+                  )}
+                </span>
+                <span className="min-w-0 text-left">
+                  <span className="block truncate text-[13px] font-semibold text-[#0F2A43]" title={msg.filename}>
+                    {msg.filename}
+                  </span>
+                  <span className="block text-[11.5px] text-[#64748B]">
+                    {doc
+                      ? `${kind} · ${doc.page_count} ${doc.unit === 'page' ? 'page' : 'section'}${doc.page_count === 1 ? '' : 's'}`
+                      : 'Reading the document…'}
+                  </span>
+                </span>
+              </>
+            );
+            return (
+              <div key={msg.id} className="message-in flex items-start justify-end gap-2.5">
+                <div className="flex max-w-[85%] flex-col items-end sm:max-w-[70%]">
+                  {doc && onOpenDocument ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenDocument(doc)}
+                      title={`Open ${msg.filename}`}
+                      aria-label={`Open document ${msg.filename}`}
+                      className="flex w-72 max-w-full items-center gap-3 rounded-2xl rounded-tr-md border border-[#E2E8F0] bg-white px-3 py-2.5 shadow-sm transition-colors hover:border-[#F97316] hover:bg-[#FFF7ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                    >
+                      {card}
+                    </button>
+                  ) : (
+                    <div className="flex w-72 max-w-full items-center gap-3 rounded-2xl rounded-tr-md border border-[#E2E8F0] bg-white px-3 py-2.5 shadow-sm">
+                      {card}
+                    </div>
+                  )}
+                  <span className="mt-1 text-right text-[10.5px] text-[#64748B]">
+                    Uploaded by <span className="font-semibold text-[#0F2A43]">{askerName(msg.askedBy)}</span>
+                    {' · '}
+                    {fullWhen(msg.askedAt) || msg.time}
+                  </span>
+                </div>
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#16385A]">
+                  <User className="h-3.5 w-3.5 text-slate-200" />
+                </span>
+              </div>
+            );
+          }
 
           case 'context': {
             const isDiffCustomer = msg.switchType === 'different_customer';

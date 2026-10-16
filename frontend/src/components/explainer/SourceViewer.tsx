@@ -3,6 +3,7 @@ import { AlertCircle, ChevronDown, ChevronUp, FileText, FileX2, Loader2, Sparkle
 import { explainClausePlainly, getDocumentPage, getSource } from '../../services/api';
 import type { PlainLanguageExplanation, SourceDocument, SourcePassage, SourceTarget } from '../../types';
 import { describeError } from '../../lib/explainer';
+import { pageParagraphs, passageSentences } from '../../lib/citedPassage';
 
 interface SourceViewerProps {
   target: SourceTarget | null;
@@ -77,6 +78,74 @@ function Meta({ label, value }: { label: string; value?: string | number | null 
       <dd className="mt-0.5 truncate text-[12.5px] font-semibold text-[#0F2A43]" title={value ? String(value) : undefined}>
         {value || '—'}
       </dd>
+    </div>
+  );
+}
+
+/**
+ * A cited page of an uploaded document: the passage the answer cited, with the sentences that support
+ * the answer's sentence highlighted. The rest of the page is folded away.
+ */
+function DocumentCitation({ pageText, heading, passage, claim }: { pageText: string; heading: string; passage?: string; claim?: string }) {
+  const [wholePage, setWholePage] = useState(false);
+  const cited = passage?.trim() || pageText;
+  const sentences = passageSentences(cited, claim);
+  const highlighted = sentences.some((s) => s.match);
+  const isWholePage = cited.replace(/\s+/g, ' ').trim() === pageText.replace(/\s+/g, ' ').trim();
+  return (
+    <div className="space-y-3">
+      {claim && (
+        <p className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 text-[12px] text-[#475569]">
+          <span className="font-semibold text-[#0F2A43]">The answer said: </span>“{claim}”
+        </p>
+      )}
+      <div className="rounded-lg border border-[#FDBA74] border-l-4 border-l-[#F97316] bg-[#FFF7ED] px-4 py-3">
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <span className="text-[12px] font-bold text-[#0F2A43]">Cited passage · {heading}</span>
+          <span className="rounded bg-[#F97316] px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider text-white">Cited</span>
+        </div>
+        <p className="font-serif text-[13.5px] leading-relaxed text-[#475569]">
+          {sentences.map((s, i) => (
+            <span key={i}>
+              {s.match ? (
+                <mark className="rounded bg-[#FED7AA] px-0.5 text-[#1E293B]">{s.text}</mark>
+              ) : (
+                <span className={highlighted ? '' : 'text-[#1E293B]'}>{s.text}</span>
+              )}{' '}
+            </span>
+          ))}
+        </p>
+        {highlighted && (
+          <p className="mt-2 text-[10.5px] text-[#64748B]">Highlighted: the sentences that support the answer.</p>
+        )}
+      </div>
+      {!isWholePage && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setWholePage(!wholePage)}
+            className="flex items-center gap-1 text-[11.5px] font-semibold text-[#64748B] hover:text-[#0F2A43] cursor-pointer"
+            aria-expanded={wholePage}
+          >
+            {wholePage ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            Whole {heading.toLowerCase()}
+          </button>
+          {wholePage && (
+            <div className="mt-2 space-y-2 rounded-lg border border-[#E2E8F0] bg-white px-4 py-3">
+              {pageParagraphs(pageText, cited).map((p, i) => (
+                <p
+                  key={i}
+                  className={`whitespace-pre-wrap font-serif text-[13px] leading-relaxed ${
+                    p.cited ? 'border-l-2 border-[#F97316] pl-2 text-[#1E293B]' : 'text-[#64748B]'
+                  }`}
+                >
+                  {p.text}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -299,7 +368,14 @@ export function SourceViewer({ target, onClose }: SourceViewerProps) {
                 </dl>
               )}
 
-              {doc && doc.passages.length > 0 ? (
+              {doc?.source_type === 'document' ? (
+                <DocumentCitation
+                  pageText={doc.text ?? ''}
+                  heading={doc.heading ?? 'Page'}
+                  passage={evidence?.source_id === doc.source_id ? evidence?.content : undefined}
+                  claim={target.claim}
+                />
+              ) : doc && doc.passages.length > 0 ? (
                 <div className="space-y-3">
                   {doc.source_type === 'coverage' && (
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-[#64748B]">

@@ -3,6 +3,7 @@ import { currentEmployee } from './auth';
 import type {
   DocumentInfo,
   DocumentPage,
+  DocumentText,
   AttentionAnalysis,
   AttentionResolution,
   AttentionResolveResponse,
@@ -368,6 +369,11 @@ export async function explainDocument(conversationId: string, documentId: string
 /** The text of one cited page or section of an uploaded document. */
 export async function getDocumentPage(pageId: string): Promise<DocumentPage> {
   return apiClient.get<DocumentPage>(`/api/document-pages/${encodeURIComponent(pageId)}`);
+}
+
+/** The whole extracted text of an uploaded document, page by page, to open it from the chat. */
+export async function getDocumentPages(documentId: string): Promise<DocumentText> {
+  return apiClient.get<DocumentText>(`/api/documents/${encodeURIComponent(documentId)}/pages`);
 }
 
 /** The signed-in employee's conversations, newest activity first, archived ones excluded. */

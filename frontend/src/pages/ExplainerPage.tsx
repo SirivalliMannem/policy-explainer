@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, ArrowUp, FileText, Loader2, Plus, Upload, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, FileText, FileX2, Loader2, Plus, Upload, X } from 'lucide-react';
 import type {
   AskedBy,
   DocumentInfo,
@@ -31,6 +31,7 @@ import { ChatMessage, ConversationStream, PendingCustomerSwitch } from '../compo
 import { PolicySwitcherModal } from '../components/explainer/PolicySwitcherModal';
 import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
+import { DocumentViewer } from '../components/explainer/DocumentViewer';
 import { AIProcessPanel, AuditTarget, PanelContent } from '../components/explainer/AIProcessPanel';
 import { Skeleton } from '../components/ui/Skeleton';
 import {
@@ -244,7 +245,8 @@ export function ExplainerPage() {
     attachedDocRef.current = doc;
     setAttachedDocState(doc);
   };
-  const [isUploading, setIsUploading] = useState(false);
+  // The uploaded document opened from its card in the chat.
+  const [openDocument, setOpenDocument] = useState<DocumentInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // The "+" menu by the Send button: "Upload document" opens the file picker.
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -420,19 +422,19 @@ export function ExplainerPage() {
     if (busyRef.current) return;
     busyRef.current = true;
     setIsWorking(true);
-    setIsUploading(true);
     const askedAt = new Date().toISOString();
-    push({ kind: 'user', id: nextId('user'), time: nowTime(), text: `Uploaded “${file.name}”`, askedBy: me(), askedAt });
+    const cardId = nextId('document');
+    push({ kind: 'document', id: cardId, time: nowTime(), filename: file.name, document: null, askedBy: me(), askedAt });
     try {
       const convId = await ensureConversation();
       const doc = await uploadDocument(convId, file);
       setAttachedDoc(doc);
-      setIsUploading(false);
+      setMessages((prev) => prev.map((m) => (m.id === cardId && m.kind === 'document' ? { ...m, document: doc, filename: doc.filename } : m)));
       push({
         kind: 'assistant',
         id: nextId('assistant'),
         time: nowTime(),
-        text: `I've read “${doc.filename}” (${unitLabel(doc)}). Here it is in plain language. Ask me anything about it: my answers will come from this document only, with its ${doc.unit === 'page' ? 'page' : 'section'} numbers.`,
+        text: `I've read “${doc.filename}” (${unitLabel(doc)}). Here it is in plain language. Ask me anything about it, including how it compares with a policy: what the document says is cited with its ${doc.unit === 'page' ? 'page' : 'section'} numbers.`,
         suggestions: [],
       });
       const question = `Explain the uploaded document “${doc.filename}” in simple language`;
@@ -459,16 +461,16 @@ export function ExplainerPage() {
       notifyConversationsChanged();
     } catch (err) {
       const friendly = describeError(err);
-      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: 'Upload failed', text: friendly.message });
+      setMessages((prev) => prev.filter((m) => m.id !== cardId));
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: `Could not upload “${file.name}”`, text: friendly.message });
     } finally {
-      setIsUploading(false);
       busyRef.current = false;
       setIsWorking(false);
       inputRef.current?.focus();
     }
   };
 
-  /** Stop answering from the document; the chat answers from the policy again. */
+  /** Stop answering from the document (it stays in the chat); questions go to the policy wording again. */
   const handleDetach = async () => {
     const doc = attachedDocRef.current;
     const convId = conversationRef.current;
@@ -476,13 +478,6 @@ export function ExplainerPage() {
     try {
       await detachDocument(convId, doc.document_id);
       setAttachedDoc(null);
-      push({
-        kind: 'assistant',
-        id: nextId('assistant'),
-        time: nowTime(),
-        text: `“${doc.filename}” is detached. Questions are answered from the policy wording again.`,
-        suggestions: [],
-      });
     } catch (err) {
       const friendly = describeError(err);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
@@ -1065,8 +1060,10 @@ export function ExplainerPage() {
     []
   );
 
-  const openSource = useCallback((item: EvidenceItem) => {
-    setSourceTarget({ sourceType: item.source_type, sourceId: item.source_id, evidence: item });
+  const closeDocument = useCallback(() => setOpenDocument(null), []);
+
+  const openSource = useCallback((item: EvidenceItem, claim?: string) => {
+    setSourceTarget({ sourceType: item.source_type, sourceId: item.source_id, evidence: item, claim });
   }, []);
 
   const showAudit = useCallback((target: AuditTarget, opener: HTMLElement) => {
@@ -1113,11 +1110,24 @@ export function ExplainerPage() {
     if (conv.policy_context && conversationRef.current === convId) {
       setActivePolicy(await resolvePolicyContext(conv.policy_context.policy_id));
     }
-    const records = await getConversationMessages(convId);
+    const [records, docs] = await Promise.all([
+      getConversationMessages(convId),
+      listDocuments(convId).catch(() => [] as DocumentInfo[]),
+    ]);
     const restored: ChatMessage[] = [];
+    const uploads = [...docs].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    const explainQuestions = new Set(uploads.map((d) => `Explain the uploaded document “${d.filename}” in simple language`));
+    const addUploadsUntil = (when: string | null) => {
+      while (uploads.length && (when === null || Date.parse(uploads[0].created_at) <= Date.parse(when))) {
+        const d = uploads.shift()!;
+        restored.push({ kind: 'document', id: nextId('document'), time: timeOf(d.created_at), filename: d.filename, document: d, askedBy: me(), askedAt: d.created_at });
+      }
+    };
     // A question answered for each of a customer's policies shows once, with its labelled answers.
     for (const { record, startsQuestion, inGroup } of groupPolicyAnswers(records)) {
-      if (startsQuestion) {
+      addUploadsUntil(record.created_at);
+      // The explanation asked on upload shows under the document's card, not as a typed question.
+      if (startsQuestion && !explainQuestions.has(record.question)) {
         restored.push({
           kind: 'user',
           id: nextId('user'),
@@ -1146,9 +1156,9 @@ export function ExplainerPage() {
         });
       }
     }
+    addUploadsUntil(null);
     if (conversationRef.current === convId) setMessages(restored);
     // The document still attached to this conversation, if any.
-    const docs = await listDocuments(convId).catch(() => [] as DocumentInfo[]);
     if (conversationRef.current === convId) setAttachedDoc(docs.find((d) => d.is_active) ?? null);
   };
 
@@ -1412,6 +1422,7 @@ export function ExplainerPage() {
               onAsk={handleAsk}
               onChooseCandidate={handleChooseCandidate}
               onOpenSource={openSource}
+              onOpenDocument={setOpenDocument}
               onOpenTab={openTab}
               pendingSwitch={pendingSwitch}
               onConfirmSwitchContext={handleConfirmSwitchExisting}
@@ -1422,36 +1433,6 @@ export function ExplainerPage() {
 
           <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
             <form onSubmit={onSubmit} className="mx-auto w-full max-w-[780px]">
-              {(attachedDoc || isUploading) && (
-                <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#BFDBFE] bg-[#F0F7FF] px-3 py-1.5 text-[12.5px] text-[#1E3A5F]">
-                  {isUploading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#1D4ED8]" aria-hidden="true" />
-                      <span>Reading the document…</span>
-                    </>
-                  ) : (
-                    attachedDoc && (
-                      <>
-                        <FileText className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                        <span className="min-w-0 truncate font-semibold" title={attachedDoc.filename}>
-                          {attachedDoc.filename}
-                        </span>
-                        <span className="shrink-0 text-[#475569]">· {unitLabel(attachedDoc)} · answering from this document</span>
-                        <button
-                          type="button"
-                          onClick={handleDetach}
-                          disabled={isWorking}
-                          aria-label={`Detach ${attachedDoc.filename}`}
-                          title="Detach: answer from the policy again"
-                          className="ml-auto rounded p-0.5 text-[#475569] hover:bg-white hover:text-[#0F2A43] disabled:opacity-50 cursor-pointer"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </>
-                    )
-                  )}
-                </div>
-              )}
               <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-4 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
                 <input
                   ref={fileInputRef}
@@ -1514,6 +1495,25 @@ export function ExplainerPage() {
                           <span className="block text-[11.5px] text-[#64748B]">PDF, Word or text · up to 10 MB</span>
                         </span>
                       </button>
+                      {attachedDoc && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setAttachMenuOpen(false);
+                            handleDetach();
+                          }}
+                          className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                        >
+                          <FileX2 className="mt-0.5 h-4 w-4 shrink-0 text-[#64748B]" aria-hidden="true" />
+                          <span className="min-w-0">
+                            <span className="block text-[13px] font-semibold text-[#0F2A43]">Ask about the policy instead</span>
+                            <span className="block truncate text-[11.5px] text-[#64748B]" title={attachedDoc.filename}>
+                              Stop answering from {attachedDoc.filename}
+                            </span>
+                          </span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1538,6 +1538,7 @@ export function ExplainerPage() {
 
       <AIProcessPanel content={panel} process={process} docked={docked} autoFocus={panelAutoFocus} onClose={closePanel} />
       <SourceViewer target={sourceTarget} onClose={() => setSourceTarget(null)} />
+      <DocumentViewer document={openDocument} onClose={closeDocument} />
 
       {/* Policy and Customer Selection Modal */}
       <PolicySwitcherModal

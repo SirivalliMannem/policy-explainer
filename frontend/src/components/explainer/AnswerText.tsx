@@ -2,11 +2,13 @@ import { Fragment, ReactNode } from 'react';
 import { FileText } from 'lucide-react';
 import type { EvidenceItem } from '../../types';
 import { evidenceByIndex, evidenceChipLabel } from '../../lib/explainer';
+import { claimText } from '../../lib/citedPassage';
 
 interface AnswerTextProps {
   text: string;
   evidence: EvidenceItem[];
-  onOpenSource: (item: EvidenceItem) => void;
+  /** The second argument is the answer's sentence the chip supports, to point at the matching detail. */
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
 }
 
 const TOKEN = /(\*\*[^*]+\*\*|(?:\[E\d{1,2}\])+)/g;
@@ -16,16 +18,18 @@ const BULLET = /^\s*(?:[-*•])\s+/;
 export function SourceChip({
   item,
   onOpen,
+  claim,
   size = 'sm',
 }: {
   item: EvidenceItem;
-  onOpen: (item: EvidenceItem) => void;
+  onOpen: (item: EvidenceItem, claim?: string) => void;
+  claim?: string;
   size?: 'sm' | 'md';
 }) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(item)}
+      onClick={() => onOpen(item, claim)}
       title={`Open source: ${item.title || evidenceChipLabel(item)}`}
       className={`source-chip inline-flex items-center gap-1 align-baseline rounded-md border border-[#FDBA74] bg-[#FFF7ED] font-mono font-semibold text-[#C2410C] hover:bg-[#F97316] hover:text-white hover:border-[#F97316] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F97316]/40 transition-colors cursor-pointer whitespace-nowrap ${
         size === 'md' ? 'px-2 py-1 text-[11px]' : 'mx-0.5 px-1.5 py-px text-[10.5px]'
@@ -38,8 +42,11 @@ export function SourceChip({
 }
 
 function renderInline(text: string, evidence: EvidenceItem[], onOpenSource: AnswerTextProps['onOpenSource']): ReactNode[] {
+  // The words since the previous chips: the claim the next chips support.
+  let claim = '';
   return text.split(TOKEN).map((part, i) => {
     if (!part) return null;
+    if (!part.startsWith('[E')) claim += part;
     if (part.startsWith('**') && part.endsWith('**')) {
       return (
         <strong key={i} className="font-semibold text-[#0F2A43]">
@@ -51,13 +58,15 @@ function renderInline(text: string, evidence: EvidenceItem[], onOpenSource: Answ
       // One chip per distinct source label: [E1][E3] often point at the same form page.
       const seen = new Set<string>();
       const chips: ReactNode[] = [];
+      const supports = claimText(claim);
+      claim = '';
       for (const match of part.matchAll(REF)) {
         const item = evidenceByIndex(evidence, Number(match[1]));
         if (!item) continue;
         const label = evidenceChipLabel(item);
         if (seen.has(label)) continue;
         seen.add(label);
-        chips.push(<SourceChip key={`${i}-${match[1]}`} item={item} onOpen={onOpenSource} />);
+        chips.push(<SourceChip key={`${i}-${match[1]}`} item={item} onOpen={onOpenSource} claim={supports} />);
       }
       return <Fragment key={i}>{chips}</Fragment>;
     }
