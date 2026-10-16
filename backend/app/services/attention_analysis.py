@@ -36,13 +36,35 @@ def run_analysis(entry: EvidenceLedger, db: Session) -> Optional[dict]:
     reason = flag_reason(entry)
     if reason is None:
         return None
-    result = ai_client.attention_analysis(entry.question, entry.policy_id, entry.retrieval or {}, reason)
+    result = local_analysis(entry, reason)
+    if result is None:
+        result = ai_client.attention_analysis(entry.question, entry.policy_id, entry.retrieval or {}, reason)
     if result is None:
         result = {"status": "failed", "reason": "The AI service is not reachable right now."}
     entry.attention_analysis = result
     flag_modified(entry, "attention_analysis")
     db.commit()
     return result
+
+
+def local_analysis(entry: EvidenceLedger, reason: str) -> Optional[dict]:
+    """The analysis for cases decided without the model: an unverified customer (no suggestions, no
+    other customers or policies) and a question with no verified policy (nothing to ground them in)."""
+    verification = (entry.retrieval or {}).get("customer_verification")
+    status = verification.get("status") if isinstance(verification, dict) else None
+    if reason == "customer_not_found" or status in ("not_found", "customer_not_found"):
+        return {
+            "status": "ready", "type": "customer_not_found", "category": "customer_not_found",
+            "reason": "The customer asked about was not found in the customer records, so no policy context exists to suggest questions from.",
+            "candidates": [], "missing": None,
+        }
+    if not entry.policy_id:
+        return {
+            "status": "ready", "type": "policy_context_missing", "category": "policy_context_missing",
+            "reason": "No single policy was identified for this question, so suggestions cannot be grounded in policy wording.",
+            "candidates": [], "missing": None,
+        }
+    return None
 
 
 def _analyse_in_background(entry_id: str) -> None:

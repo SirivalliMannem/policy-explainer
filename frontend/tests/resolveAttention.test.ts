@@ -1,195 +1,95 @@
+// Run with `npm test`. The Needs attention Resolve box: what it shows (resolveView, in its decision
+// order) and where a suggestion is asked (suggestionNavigation). ResolveBox renders exactly these.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { AttentionItem, AttentionCandidate, AttentionAnalysis } from '../src/types/index.ts';
+import { SUGGESTION_COUNT, resolveView, suggestionNavigation } from '../src/lib/resolveSuggestions.ts';
+import type { AttentionAnalysis, AttentionCandidate, AttentionItem } from '../src/types/index.ts';
 
-/**
- * Pure helper mirroring ResolveBox suggestion navigation:
- * Generates navigation target path and state, and confirms it does NOT invoke resolveAttention.
- */
-function getSuggestionNavigation(
-  item: AttentionItem,
-  candidate: AttentionCandidate
-): { target: string; state: { initialQuestion: string; policyId?: string } } {
-  const target = item.conversation_id ? `/app/explainer/c/${item.conversation_id}` : '/app/explainer';
+function item(overrides: Partial<AttentionItem> = {}): AttentionItem {
   return {
-    target,
-    state: {
-      initialQuestion: candidate.question,
-      policyId: item.policy_id || undefined,
-    },
-  };
-}
-
-/**
- * Helper simulating UI state determination in ResolveBox:
- * Returns whether "Suggestions not ready" placeholder is shown or suggestions list is rendered.
- */
-function getResolveBoxDisplayState(analysis: AttentionAnalysis | null | undefined): {
-  showNotReadyPlaceholder: boolean;
-  showSuggestionsList: boolean;
-  candidateCount: number;
-} {
-  const ready = analysis?.status === 'ready';
-  const candidates = ready ? analysis?.candidates ?? [] : [];
-  return {
-    showNotReadyPlaceholder: !ready,
-    showSuggestionsList: candidates.length > 0,
-    candidateCount: candidates.length,
-  };
-}
-
-test('suggestion click generates correct navigation to existing conversation with question and policy context', () => {
-  const item: AttentionItem = {
-    question: 'Does this policy cover flood damage?',
+    question: 'Is sewer backup covered?',
     reason: 'no_evidence',
-    reason_label: 'No matching policy evidence',
-    detail: 'Searched 4 coverages; none mention flood.',
+    reason_label: 'No matching evidence',
+    detail: 'No policy evidence matched the question.',
     policy_number: 'HO-2847-1193',
     policy_id: 'pol-ho-1',
-    conversation_id: 'conv-xyz-123',
     times_asked: 1,
-    first_asked_at: '2026-10-15T10:00:00Z',
-    last_asked_at: '2026-10-15T10:00:00Z',
+    first_asked_at: '2026-10-16T10:00:00Z',
+    last_asked_at: '2026-10-16T10:00:00Z',
     latest_entry_id: 'entry-1',
-    sources: { query_terms: ['flood'], coverages_searched: 4, forms_searched: 2, clauses_searched: 30, citations: [] },
+    sources: { query_terms: ['sewer'], coverages_searched: 6, forms_searched: 4, clauses_searched: 47, citations: [] },
+    ...overrides,
   };
+}
 
-  const candidate: AttentionCandidate = {
-    question: 'What water damage coverages or endorsements apply to HO-2847-1193?',
-    relation: 'related',
-    note: 'Inquires about available water damage coverages.',
-    passages: [],
-    top_score: 0.0,
-  };
+function candidate(question: string, relation: 'same' | 'related' = 'related'): AttentionCandidate {
+  return { question, relation, note: relation === 'related' ? 'Does not answer sewer backup itself.' : null, passages: [], top_score: 0 };
+}
 
-  const nav = getSuggestionNavigation(item, candidate);
-  assert.equal(nav.target, '/app/explainer/c/conv-xyz-123');
-  assert.equal(nav.state.initialQuestion, 'What water damage coverages or endorsements apply to HO-2847-1193?');
-  assert.equal(nav.state.policyId, 'pol-ho-1');
+function ready(candidates: AttentionCandidate[], overrides: Partial<AttentionAnalysis> = {}): AttentionAnalysis {
+  return { status: 'ready', type: 'coverage_no_evidence', category: 'evidence_missing', reason: 'No clause.', candidates, ...overrides };
+}
+
+const TWO = [
+  candidate('Which water-damage coverages are listed on HO-2847-1193?'),
+  candidate('Is a water back-up endorsement attached to HO-2847-1193?'),
+];
+
+test('customer not found: zero suggestions, even if an analysis carries some', () => {
+  const view = resolveView(item({ reason: 'customer_not_found', policy_id: null, policy_number: null }), ready(TWO));
+  assert.equal(view.mode, 'customer_not_found');
+  assert.equal(view.candidates.length, 0);
 });
 
-test('suggestion click without conversation_id navigates to base explainer path', () => {
-  const item: AttentionItem = {
-    question: 'Is Margaret Chen on file?',
-    reason: 'customer_not_found',
-    reason_label: 'Customer not found',
-    detail: 'No customer matching Margaret Chen.',
-    policy_number: null,
-    policy_id: null,
-    conversation_id: null,
-    times_asked: 1,
-    first_asked_at: '2026-10-15T10:00:00Z',
-    last_asked_at: '2026-10-15T10:00:00Z',
-    latest_entry_id: 'entry-2',
-    sources: { query_terms: ['margaret'], coverages_searched: 0, forms_searched: 0, clauses_searched: 0, citations: [] },
-  };
-
-  const candidate: AttentionCandidate = {
-    question: 'Could you provide the customer full name or policy number?',
-    relation: 'related',
-    note: 'Clarifies customer identity.',
-    passages: [],
-    top_score: 0.0,
-  };
-
-  const nav = getSuggestionNavigation(item, candidate);
-  assert.equal(nav.target, '/app/explainer');
-  assert.equal(nav.state.initialQuestion, 'Could you provide the customer full name or policy number?');
-  assert.equal(nav.state.policyId, undefined);
+test('customer found but no verified policy: no policy-specific suggestions', () => {
+  const view = resolveView(item({ policy_id: null }), ready(TWO));
+  assert.equal(view.mode, 'policy_context_missing');
+  assert.equal(view.candidates.length, 0);
+  assert.equal(resolveView(item(), ready([], { type: 'policy_context_missing' })).mode, 'policy_context_missing');
 });
 
-test('clicking a suggestion does not prematurely call resolve or change ledger status', () => {
-  let resolveCallCount = 0;
-  const mockResolveAttention = () => {
-    resolveCallCount++;
-  };
-
-  const item: AttentionItem = {
-    question: 'Is sewer back-up covered?',
-    reason: 'no_evidence',
-    reason_label: 'No matching policy evidence',
-    detail: 'No evidence.',
-    policy_number: 'HO-2847-1193',
-    policy_id: 'pol-1',
-    conversation_id: 'conv-1',
-    times_asked: 1,
-    first_asked_at: '2026-10-15T10:00:00Z',
-    last_asked_at: '2026-10-15T10:00:00Z',
-    latest_entry_id: 'entry-3',
-    sources: { query_terms: [], coverages_searched: 1, forms_searched: 1, clauses_searched: 10, citations: [] },
-  };
-
-  const candidate: AttentionCandidate = {
-    question: 'Is sewer back-up into the basement covered under endorsement HO 04 95?',
-    relation: 'related',
-    note: 'Inquires about endorsement coverage.',
-    passages: [],
-    top_score: 0.0,
-  };
-
-  // Simulate suggestion click handler
-  const nav = getSuggestionNavigation(item, candidate);
-  // resolveAttention is NOT called
-  assert.equal(resolveCallCount, 0, 'resolveAttention must not be invoked on suggestion click');
-  assert.ok(nav.target.includes('conv-1'));
+test('verified policy, evidence missing: exactly two suggestions', () => {
+  const view = resolveView(item(), ready(TWO));
+  assert.equal(view.mode, 'suggestions');
+  assert.equal(view.candidates.length, SUGGESTION_COUNT);
+  assert.equal(view.heading, 'ASK THIS INSTEAD');
 });
 
-test('Resolve panel replaces "Suggestions not ready" when analysis is ready with suggestions', () => {
-  // 1. When analysis is null (not yet ready)
-  const pendingState = getResolveBoxDisplayState(null);
-  assert.equal(pendingState.showNotReadyPlaceholder, true);
-  assert.equal(pendingState.showSuggestionsList, false);
-
-  // 2. When analysis has failed
-  const failedState = getResolveBoxDisplayState({
-    version: 1,
-    analyzed_at: '2026-10-15T10:00:00Z',
-    status: 'failed',
-    reason: 'Language model busy',
-  });
-  assert.equal(failedState.showNotReadyPlaceholder, true);
-  assert.equal(failedState.showSuggestionsList, false);
-
-  // 3. When analysis is ready with exactly two suggestions
-  const readyState = getResolveBoxDisplayState({
-    version: 1,
-    analyzed_at: '2026-10-15T10:00:00Z',
-    status: 'ready',
-    type: 'coverage_no_evidence',
-    category: 'evidence_missing',
-    reason: 'No coverage found for meteors.',
-    candidates: [
-      { question: 'Alternative question 1', relation: 'related', note: 'Note 1', passages: [], top_score: 0.0 },
-      { question: 'Alternative question 2', relation: 'related', note: 'Note 2', passages: [], top_score: 0.0 },
-    ],
-  });
-  assert.equal(readyState.showNotReadyPlaceholder, false, '"Suggestions not ready" must be replaced');
-  assert.equal(readyState.showSuggestionsList, true, 'Suggestions list must be displayed');
-  assert.equal(readyState.candidateCount, 2, 'Exactly two candidates must be rendered');
+test('spelling or wording error with a verified policy: two corrected suggestions', () => {
+  const view = resolveView(
+    item({ question: 'is sewr bakup coverd' }),
+    ready([candidate('Is sewer backup covered?', 'same'), candidate('Does the policy cover water backing up through a sewer?', 'same')], {
+      type: 'typo',
+      category: 'wrong_wording',
+    })
+  );
+  assert.equal(view.mode, 'suggestions');
+  assert.equal(view.heading, 'WRONG WORDING · TRY THESE');
+  assert.deepEqual(view.candidates.map((c) => c.relation), ['same', 'same']);
 });
 
-test('Case A, Case B, and Case C suggestion structures conform to requirements', () => {
-  // Case A: no_evidence -> relation is 'related'
-  const caseACandidates: AttentionCandidate[] = [
-    { question: 'Is water backup covered by HO 04 95?', relation: 'related', note: 'Examines water backup.', passages: [], top_score: 5.0 },
-    { question: 'What is the limit for water backup?', relation: 'related', note: 'Examines limit.', passages: [], top_score: 4.0 },
-  ];
-  assert.equal(caseACandidates.length, 2);
-  assert.ok(caseACandidates.every((c) => c.relation === 'related'));
+test('anything other than exactly two suggestions shows none', () => {
+  assert.equal(resolveView(item(), ready(TWO.slice(0, 1))).mode, 'no_alternative');
+  assert.equal(resolveView(item(), ready(TWO.slice(0, 1))).candidates.length, 0);
+});
 
-  // Case B: typo/wording -> relation is 'same'
-  const caseBCandidates: AttentionCandidate[] = [
-    { question: 'Is sewer back-up into basement covered?', relation: 'same', passages: [], top_score: 6.0 },
-    { question: 'Does policy HO-2847-1193 cover sewer back-up?', relation: 'same', passages: [], top_score: 5.5 },
-  ];
-  assert.equal(caseBCandidates.length, 2);
-  assert.ok(caseBCandidates.every((c) => c.relation === 'same'));
+test('not analysed, or the analysis failed: no suggestions are shown', () => {
+  assert.equal(resolveView(item(), null).mode, 'not_ready');
+  const failed = resolveView(item(), { status: 'failed', reason: 'The language model is not available right now.' });
+  assert.equal(failed.mode, 'not_ready');
+  assert.equal(failed.candidates.length, 0);
+});
 
-  // Case C: other errors (customer_not_found, missing identifier) -> relation is 'related'
-  const caseCCandidates: AttentionCandidate[] = [
-    { question: 'Could you provide the policy number (e.g. HO-XXXX-XXXX)?', relation: 'related', note: 'Clarifies policy number.', passages: [], top_score: 0.0 },
-    { question: 'Could you provide the customer full name or account number?', relation: 'related', note: 'Clarifies customer identity.', passages: [], top_score: 0.0 },
-  ];
-  assert.equal(caseCCandidates.length, 2);
-  assert.ok(caseCCandidates.every((c) => c.relation === 'related'));
+test('out of scope: no suggestions', () => {
+  const view = resolveView(item(), ready([], { type: 'out_of_scope', category: 'out_of_scope' }));
+  assert.equal(view.mode, 'out_of_scope');
+  assert.equal(view.candidates.length, 0);
+});
+
+test('a suggestion opens a new conversation of the employee with the verified policy, never the asker’s', () => {
+  const nav = suggestionNavigation(item(), TWO[0].question);
+  assert.equal(nav.path, '/app/explainer/new');
+  assert.deepEqual(nav.state, { initialQuestion: TWO[0].question, policyId: 'pol-ho-1' });
+  // The queue item carries no conversation id at all: conversations belong to their owner.
+  assert.equal('conversation_id' in item(), false);
 });

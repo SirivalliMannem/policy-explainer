@@ -179,7 +179,7 @@ export async function getDashboardStats(
  */
 export async function resolveAttention(body: {
   entry_id: string;
-  action: 'asked_suggestion' | 'edited_and_asked' | 'dismissed';
+  action: 'asked_suggestion' | 'edited_and_asked' | 'dismissed' | 'resolved';
   question?: string;
   reason?: string;
 }): Promise<AttentionResolveResponse> {

@@ -523,8 +523,9 @@ def submit_question(
         policy_id = policy.id
     validate_employee_authorization(employee, policy)
 
-    # Bind resolved policy context to conversation if not already bound
-    if not conv.policy_id:
+    # Bind the policy the question resolved to as the conversation's context when it has none. An
+    # explicit policy (one of a customer's several policies, answered in turn) never changes it.
+    if not conv.policy_id and not payload.policy_id:
         conv.policy_id = policy_id
         conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()

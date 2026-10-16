@@ -1,16 +1,22 @@
 """Analysis of a flagged question for the Needs attention Resolve box.
 
-One language-model call classifies why the question went unanswered and proposes at most two
-alternative questions. Everything after that is code:
+Decision order (each step stops the ones after it):
 
-- every candidate is run through the normal retrieval; only candidates that find a clause or a
-  coverage scoring at least EVIDENCE_SCORE (the score at which retrieval keeps a passage as
-  evidence) are kept, each with the passages it found, quoted from the stored wording and checked
-  word for word against the source row;
-- "What is missing" is built from the original search's own counts and terms, or from the form
-  numbers and editions actually on the policy and in the form library, never from the model's prose.
+1. The actual flag reason decides first.
+2. Customer verification: when the customer asked about is not on file, nothing is generated. No
+   suggested questions, no other customers or policies, no model call: the Resolve box shows the
+   verification failure and how to verify the customer instead.
+3. Policy context: without a verified policy there is nothing to ground a suggestion in, so again
+   nothing is generated; the employee is asked to identify the policy.
+4. With a verified customer and policy, one model call classifies the question and returns exactly two
+   distinct alternative questions in that policy's context: corrected wording for spelling or
+   wording errors, related questions the policy can answer when evidence is missing. Code checks
+   them (two, distinct, not a restatement of an unanswerable question); anything else is recorded
+   as a failure and nothing is shown. Each suggestion is also run through the normal retrieval and
+   the passages it finds are stored with it, quoted from the stored wording.
 
-When the model is unavailable the analysis is returned as failed and nothing is invented.
+"What is missing" is built from the original search's own counts and terms, or from the form numbers
+and editions actually on the policy and in the form library, never from the model's prose.
 """
 
 from __future__ import annotations
@@ -74,20 +80,20 @@ Classify the issue into exactly one of these:
 - "missing_form_or_edition": It names a specific form or edition that this policy does not have.
 - "out_of_scope": It is not an insurance question about this policy, or represents another error.
 
-Generate EXACTLY TWO alternative questions that the employee could ask instead, tailored to the actual flag reason:
-1. For "coverage_no_evidence" (or when flag reason is no_evidence): Propose EXACTLY TWO alternative questions based on the original question's context and the policy's available coverages, forms, and endorsements (never merely rephrase the unanswerable question or assume it is covered). Set relation to "related", and provide a concise note explaining what it addresses.
-2. For spelling or wording errors ("typo", "vague_wording", "definition"): Propose EXACTLY TWO corrected alternatives that preserve the original intended meaning while using correct spelling and clear policy terminology. Set relation to "same".
-3. For other errors ("missing_form_or_edition", "out_of_scope", etc.): Propose EXACTLY TWO suggestions addressing the specific issue (e.g. asking for available endorsements or clarifying specific policy terms). Set relation to "related", with a concise note.
+Then write EXACTLY TWO different questions the employee could ask instead, for this policy only, using the coverage, form and endorsement names given:
+1. "coverage_no_evidence" or "missing_form_or_edition": two questions that explore related information this policy's records and forms can answer (for example its listed coverages of that kind, or whether a relevant endorsement is attached). Do not restate the original question, and do not assume a coverage or endorsement exists unless it is listed. relation "related", with a one-line "note" saying what it does NOT answer about the original.
+2. "typo", "vague_wording" or "definition": two corrected questions that keep the original meaning, with correct spelling and the policy's own terms. relation "same".
+3. "out_of_scope": no questions (an empty list).
 
 Reply with JSON only:
 {"type": "...", "reason": "one short sentence", "candidates": [{"question": "...", "relation": "same|related", "note": "..."}, {"question": "...", "relation": "same|related", "note": "..."}]}"""
 
-MISSING_POLICY_PROMPT = """You review a question submitted to an insurance policy explainer that could not be answered because the specific policy or customer context was not identified (e.g., customer not found, ambiguous customer name, or missing policy number).
-
-Generate EXACTLY TWO dynamic suggested questions addressing the specific issue (e.g., asking for the policy number like HO-XXXX-XXXX, account number, full customer name, or claim number).
-
-Reply with JSON only:
-{"type": "out_of_scope", "reason": "one short sentence explaining that customer or policy context is needed", "candidates": [{"question": "...", "relation": "related", "note": "Clarifies policy identifier"}, {"question": "...", "relation": "related", "note": "Clarifies customer or claim context"}]}"""
+# Evidence-missing types: a suggestion that only restates the unanswerable question is not shown.
+EVIDENCE_MISSING = {"coverage_no_evidence", "missing_form_or_edition"}
+# Content-word overlap at or above which a suggestion restates the original question.
+RESTATEMENT_OVERLAP = 0.75
+_STOP = {"the", "a", "an", "is", "are", "does", "do", "my", "this", "that", "on", "of", "for", "to", "in", "it",
+         "policy", "covered", "cover", "coverage", "what", "under", "be", "by", "any", "there", "can", "i"}
 
 
 def _utc_now() -> str:
@@ -208,64 +214,42 @@ FLAG_LINES = {
 }
 
 
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]+", (text or "").lower()) if len(w) > 2 and w not in _STOP}
+
+
+def _restates(candidate: str, original: str) -> bool:
+    a, b = _content_words(candidate), _content_words(original)
+    return bool(a and b) and len(a & b) / len(a | b) >= RESTATEMENT_OVERLAP
+
+
+def _customer_not_found(flag_reason: str, retrieval: dict) -> bool:
+    verification = (retrieval or {}).get("customer_verification")
+    status = verification.get("status") if isinstance(verification, dict) else None
+    return flag_reason == "customer_not_found" or status in ("not_found", "customer_not_found")
+
+
 def analyze(question: str, policy_id: Optional[str], retrieval: dict, db: Session, flag_reason: str = "no_evidence") -> dict:
     """The stored analysis of one flagged question. Never raises; a failure is recorded as such."""
     base = {"version": ANALYSIS_VERSION, "analyzed_at": _utc_now(), "original_search": _original_search(retrieval or {})}
+
+    # 2. Customer verification comes first: an unverified customer gets no suggestions at all.
+    if _customer_not_found(flag_reason, retrieval):
+        return {
+            **base, "status": "ready", "type": "customer_not_found", "category": "customer_not_found",
+            "reason": "The customer asked about was not found in the customer records, so no policy context exists to suggest questions from.",
+            "candidates": [], "missing": None,
+        }
+    # 3. Without a verified policy there is nothing to ground a suggestion in.
     policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first() if policy_id else None
     if policy is None:
-        try:
-            provider = LLMService.get_provider()
-            if not provider.is_configured:
-                raise LLMConfigurationError(f"No API key configured for provider '{provider.name}'")
-            raw = provider.complete(
-                MISSING_POLICY_PROMPT,
-                f"Flag reason: {flag_reason}\nQuestion: {question.strip()}",
-                max_tokens=700,
-                json_mode=True,
-                timeout_seconds=TIMEOUT_SECONDS,
-                retry_rate_limit=True,
-            )
-            model = ModelAnalysis.model_validate(_parse(raw))
-            candidates = [
-                {
-                    "question": c.question,
-                    "relation": c.relation,
-                    "note": c.note or "Clarifies customer or policy identifier.",
-                    "passages": [],
-                    "top_score": 0.0,
-                }
-                for c in model.candidates[:MAX_CANDIDATES]
-            ]
-            if len(candidates) < 2:
-                candidates.append({
-                    "question": "Could you provide the customer's full name, account number, or policy number?",
-                    "relation": "related",
-                    "note": "Provides required policy identification details.",
-                    "passages": [],
-                    "top_score": 0.0,
-                })
-            return {
-                **base,
-                "status": "ready",
-                "type": model.type,
-                "category": "other" if model.type != "out_of_scope" else "out_of_scope",
-                "reason": model.reason,
-                "candidates": candidates[:2],
-                "dropped_candidates": 0,
-                "missing": "This question is not associated with a specific policy, so there is no policy wording to search.",
-                "missing_form": None,
-                "policy_number": None,
-                "model_used": provider.model,
-                "provider": provider.name,
-                "upload_available": False,
-            }
-        except (LLMConfigurationError, LLMProviderError) as exc:
-            logger.warning("Attention analysis unavailable for missing policy: %s", type(exc).__name__)
-            return {**base, "status": "failed", "reason": "The language model is not available right now (it may be busy)."}
-        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Attention analysis rejected for missing policy: %s", type(exc).__name__)
-            return {**base, "status": "failed", "reason": "The language model's reply did not match the required format."}
+        return {
+            **base, "status": "ready", "type": "policy_context_missing", "category": "policy_context_missing",
+            "reason": "No single policy was identified for this question, so suggestions cannot be grounded in policy wording.",
+            "candidates": [], "missing": None,
+        }
 
+    # 4. Verified customer and policy: one model call, then code checks.
     context, forms = _policy_context(policy, db)
     try:
         provider = LLMService.get_provider()
@@ -277,9 +261,8 @@ def analyze(question: str, policy_id: Optional[str], retrieval: dict, db: Sessio
             f"{search.get('coverages_searched', 0)} coverages, {search.get('forms_searched', 0)} forms and "
             f"{search.get('clauses_searched', 0)} clauses; {FLAG_LINES.get(flag_reason, f'flagged with reason: {flag_reason}.')}"
         )
-        user_prompt = f"{context}\n\n{found_line}\n\nActual flag reason: {flag_reason}\nOriginal Question: {question.strip()}"
         raw = provider.complete(
-            SYSTEM_PROMPT, user_prompt,
+            SYSTEM_PROMPT, f"{context}\n\n{found_line}\n\nActual flag reason: {flag_reason}\nOriginal question: {question.strip()}",
             max_tokens=700, json_mode=True, timeout_seconds=TIMEOUT_SECONDS, retry_rate_limit=True,
         )
         model = ModelAnalysis.model_validate(_parse(raw))
@@ -296,73 +279,17 @@ def analyze(question: str, policy_id: Optional[str], retrieval: dict, db: Sessio
     if form is not None:
         kind = "missing_form_or_edition"
     elif kind == "missing_form_or_edition":
-        # The question names no form or edition the policy lacks: treat it as a gap in coverage wording.
-        kind = "coverage_no_evidence"
+        kind = "coverage_no_evidence"  # names no form the policy lacks: a gap in coverage wording
+    if kind in ("customer_not_found", "other"):
+        kind = "out_of_scope" if kind == "other" else kind
 
-    candidates = []
-    for candidate in model.candidates[:MAX_CANDIDATES]:
-        relation = candidate.relation
-        if kind in ("coverage_no_evidence", "missing_form_or_edition"):
-            relation = "related"  # rewording cannot answer a real gap
-            note = candidate.note or "Alternative question based on policy coverage data."
-        elif kind in WRONG_WORDING:
-            relation = "same"
-            note = None
-        else:
-            note = candidate.note if relation == "related" else None
-
-        passages, top = _passages(candidate.question, policy.id, db)
-        candidates.append({
-            "question": candidate.question,
-            "relation": relation,
-            "note": note,
-            "passages": passages,
-            "top_score": top,
-        })
-
-    # Ensure exactly two candidates are returned based on the actual context and policy data
-    if len(candidates) < 2:
-        if kind in ("coverage_no_evidence", "missing_form_or_edition"):
-            coverages = db.query(CoreCoverage).filter(CoreCoverage.policy_id == policy.id).order_by(CoreCoverage.sort_order).all()
-            cov_name = coverages[0].name if coverages else "property coverage"
-            fallback_q = f"What perils and exclusions apply to {cov_name} under policy {policy.policy_number}?"
-            p, top = _passages(fallback_q, policy.id, db)
-            candidates.append({
-                "question": fallback_q,
-                "relation": "related",
-                "note": f"Alternative inquiry based on available {cov_name} data.",
-                "passages": p,
-                "top_score": top,
-            })
-        elif kind in WRONG_WORDING:
-            fallback_q = f"Does policy {policy.policy_number} cover {question.strip().rstrip('?')}?"
-            p, top = _passages(fallback_q, policy.id, db)
-            candidates.append({
-                "question": fallback_q,
-                "relation": "same",
-                "note": None,
-                "passages": p,
-                "top_score": top,
-            })
-        else:
-            fallback_q = f"What coverage forms and endorsements are attached to policy {policy.policy_number}?"
-            p, top = _passages(fallback_q, policy.id, db)
-            candidates.append({
-                "question": fallback_q,
-                "relation": "related",
-                "note": "Inquires about attached policy forms and endorsements.",
-                "passages": p,
-                "top_score": top,
-            })
-
-    return {
+    result = {
         **base,
         "status": "ready",
         "type": kind,
         "category": "wrong_wording" if kind in WRONG_WORDING else "out_of_scope" if kind == "out_of_scope" else "evidence_missing",
         "reason": model.reason,
-        "candidates": candidates[:2],
-        "dropped_candidates": 0,
+        "candidates": [],
         "missing": _missing_text(kind, policy, base["original_search"], form),
         "missing_form": form,
         "policy_number": policy.policy_number,
@@ -370,3 +297,35 @@ def analyze(question: str, policy_id: Optional[str], retrieval: dict, db: Sessio
         "provider": provider.name,
         "upload_available": False,  # no flow exists to add a form or edition
     }
+    if kind == "out_of_scope":
+        return result
+
+    # Exactly two distinct, usable suggestions, or none at all: nothing is padded or made up.
+    proposed, seen = [], set()
+    for candidate in model.candidates:
+        key = " ".join(_content_words(candidate.question)) or candidate.question.lower()
+        if key in seen or candidate.question.strip().lower() == question.strip().lower():
+            continue
+        if kind in EVIDENCE_MISSING and _restates(candidate.question, question):
+            continue  # restating an unanswerable question would imply it can be answered
+        seen.add(key)
+        proposed.append(candidate)
+    if len(proposed) != MAX_CANDIDATES:
+        logger.warning("Attention analysis: the model gave %d usable suggestions, not %d", len(proposed), MAX_CANDIDATES)
+        return {**base, "status": "failed",
+                "reason": "The language model did not return two distinct, usable suggestions. Try again."}
+
+    for candidate in proposed:
+        relation = "related" if kind in EVIDENCE_MISSING else "same" if kind in WRONG_WORDING else candidate.relation
+        note = (candidate.note or None) if relation == "related" else None
+        if relation == "related" and not note:
+            note = "A related question; it does not answer the original question itself."
+        passages, top = _passages(candidate.question, policy.id, db)
+        result["candidates"].append({
+            "question": candidate.question,
+            "relation": relation,
+            "note": note,
+            "passages": passages,
+            "top_score": top,
+        })
+    return result

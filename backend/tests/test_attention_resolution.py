@@ -196,3 +196,67 @@ def test_blocked_roles_cannot_work_the_queue(session):
     res = client.post("/api/dashboard/attention/resolve", headers=blocked,
                       json={"entry_id": body["ledger_id"], "action": "dismissed", "reason": "x"})
     assert res.status_code == 403
+
+
+def test_customer_not_found_is_analysed_without_the_model_and_gets_no_suggestions(session, monkeypatch):
+    headers, made = session
+
+    def must_not_be_called(*args, **kwargs):
+        raise AssertionError("no suggestion may be generated before the customer is verified")
+
+    monkeypatch.setattr(ai_client, "attention_analysis", must_not_be_called)
+    conv = client.post("/api/conversations", json={}, headers=headers).json()["conversation_id"]
+    made.append(conv)
+    # A realistic unknown name (letters only), unique to this run.
+    name = "Zor" + "".join(chr(97 + int(c, 16) % 26) for c in uuid.uuid4().hex[:6])
+    body = client.post(f"/api/conversations/{conv}/questions",
+                       json={"question": f"What are the policies of {name.capitalize()}?"}, headers=headers).json()
+    assert body["status"] == "insufficient_evidence" and body["portfolio"]["policies"] == []  # no other customers
+    item = queue_item(name.capitalize())
+    assert item is not None and item["reason"] == "customer_not_found"
+    analysis = client.post(f"/api/dashboard/attention/{body['ledger_id']}/analyze", headers=headers).json()
+    assert analysis["type"] == "customer_not_found" and analysis["candidates"] == []
+    assert queue_item(name.capitalize())["analysis"]["candidates"] == []
+
+
+def test_queue_items_carry_the_policy_but_never_another_employees_conversation(session):
+    marker, _ = flagged(session)
+    item = queue_item(marker)
+    assert item["policy_id"] and "conversation_id" not in item
+
+
+def test_asking_a_suggestion_in_the_chat_does_not_resolve_the_item(session):
+    headers, made = session
+    marker, body = flagged(session)
+    store_analysis(body["ledger_id"], [GROUNDED])
+    # What the Resolve box does on click: a new conversation of the employee, with the item's policy.
+    item = queue_item(marker)
+    conv = client.post("/api/conversations", json={"policy_id": item["policy_id"]}, headers=headers).json()["conversation_id"]
+    made.append(conv)
+    answer = client.post(f"/api/conversations/{conv}/questions", json={"question": GROUNDED}, headers=headers)
+    assert answer.status_code == 201 and answer.json()["outcome"] == "answered"
+    assert queue_item(marker) is not None  # stays flagged until the employee resolves it
+
+
+def test_marking_resolved_needs_a_reason_and_is_logged(session):
+    headers, _ = session
+    marker, body = flagged(session)
+    bad = client.post("/api/dashboard/attention/resolve", headers=headers,
+                      json={"entry_id": body["ledger_id"], "action": "resolved", "reason": ""})
+    assert bad.status_code == 422
+    ok = client.post("/api/dashboard/attention/resolve", headers=headers, json={
+        "entry_id": body["ledger_id"], "action": "resolved", "reason": "Answered via the water back-up suggestion.",
+    })
+    assert ok.status_code == 201 and ok.json()["resolution"]["action_label"] == "Marked resolved"
+    assert queue_item(marker) is None
+
+
+def test_a_name_with_digits_is_not_found_and_reveals_no_other_customer(session):
+    headers, made = session
+    conv = client.post("/api/conversations", json={}, headers=headers).json()["conversation_id"]
+    made.append(conv)
+    body = client.post(f"/api/conversations/{conv}/questions",
+                       json={"question": "What are the policies of Sirivalli123?"}, headers=headers).json()
+    assert body["status"] == "insufficient_evidence"
+    assert "Sirivalli" in body["answer"] and not body.get("evidence")
+    assert (body.get("portfolio") or {}).get("policies", []) == []  # no other customer is revealed

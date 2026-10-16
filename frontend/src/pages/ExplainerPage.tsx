@@ -437,16 +437,23 @@ export function ExplainerPage() {
         setProcess((prev) => ({
           ...prev,
           phase: notFound ? 'failed' : 'needs_input',
-          stages: {
-            ...freshStages(),
-            verify: { status: notFound ? 'failed' : 'attention', detail: verification.message },
-            context: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
-            retrieve: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
-            ground: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
-            generate: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
-            citation: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
-            deliver: { status: notFound ? 'skipped' : 'pending', detail: notFound ? 'Skipped: customer verification failed.' : undefined },
-          },
+          stages: (() => {
+            // Not found: nothing after verification runs. Ambiguous: the rest waits for the employee's choice.
+            const after = notFound
+              ? { status: 'skipped' as const, detail: 'Skipped: customer verification failed.' }
+              : { status: 'waiting' as const };
+            return {
+              ...freshStages(),
+              verify: { status: notFound ? ('failed' as const) : ('attention' as const), detail: verification.message },
+              context: after,
+              retrieve: after,
+              ground: after,
+              generate: after,
+              citations: after,
+              validate: after,
+              deliver: after,
+            };
+          })(),
         }));
         push({
           kind: 'assistant',
@@ -458,6 +465,14 @@ export function ExplainerPage() {
           suggestions: notFound ? [] : verification.customers.map((c) => c.name),
         });
         openPanel({ mode: 'live' }, null);
+        if (notFound) {
+          // Recorded, so it stays flagged in Needs attention: the backend verifies the customer again,
+          // records the failed verification in the ledger and answers nothing about any policy.
+          ensureConversation()
+            .then((convId) => submitQuestion(convId, text))
+            .then(() => notifyConversationsChanged())
+            .catch(() => undefined);
+        }
         return;
       }
       setProcess((prev) => ({

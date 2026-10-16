@@ -528,8 +528,8 @@ export interface AttentionItem {
   reason_label: string;
   detail: string;
   policy_number?: string | null;
+  /** The verified policy, so a suggestion is asked in a new conversation with the same context. */
   policy_id?: string | null;
-  conversation_id?: string | null;
   insured?: string | null;
   line_of_business?: string | null;
   times_asked: number;
@@ -583,13 +583,14 @@ export type AttentionAnalysisType =
   | 'missing_form_or_edition'
   | 'out_of_scope'
   | 'customer_not_found'
+  | 'policy_context_missing'
   | 'other';
 
 /** The stored analysis of a flagged question: the model classifies, code verifies and states facts. */
 export interface AttentionAnalysis {
   status: 'ready' | 'failed' | string;
   type?: AttentionAnalysisType | null;
-  category?: 'wrong_wording' | 'evidence_missing' | 'out_of_scope' | null;
+  category?: 'wrong_wording' | 'evidence_missing' | 'out_of_scope' | 'customer_not_found' | 'policy_context_missing' | null;
   reason?: string;
   candidates?: AttentionCandidate[];
   dropped_candidates?: number;

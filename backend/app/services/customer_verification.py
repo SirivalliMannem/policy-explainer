@@ -65,68 +65,73 @@ def _customer(account: CoreAccount) -> VerifiedCustomer:
 _POLICY_NUMBER_OR_CLAIM = re.compile(r"\b(?:HO|PA|CLM)[-\s]?\d+", re.IGNORECASE)
 
 
+# Words that are never a person's name in a question, beyond the resolver's non-name words: pronouns,
+# articles and common question words ("does it have", "is the account past due").
+_NOT_A_NAME = {
+    "it", "its", "this", "that", "these", "those", "they", "them", "he", "she", "him", "her", "his", "hers",
+    "i", "you", "your", "yours", "we", "our", "ours", "me", "my", "the", "a", "an", "any", "all", "some",
+    "no", "not", "what", "which", "who", "whom", "how", "when", "where", "why", "if", "and", "or",
+    "anyone", "someone", "everyone", "nobody", "somebody", "everybody", "past", "due", "now", "today",
+    "coverage", "covered", "cover", "covers", "policy", "deductible", "endorsement", "endorsements",
+    "form", "forms", "clause", "clauses", "wording", "mold", "water", "backup", "theft", "fire",
+}
+
+# A person is named in these phrases whatever the case ("policies of sirivalli", "does ravi have").
+_NAME = r"([A-Za-z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)?)"
+_PERSON_PHRASES = (
+    re.compile(rf"\bpolic(?:y|ies)\s+(?:of|for|held\s+by|owned\s+by)\s+{_NAME}", re.IGNORECASE),
+    re.compile(rf"\b(?:does|do|did|has)\s+{_NAME}\s+(?:have|has|hold|own|got)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:customer|policyholder|insured|client)\s+(?:named|called)\s+{_NAME}", re.IGNORECASE),
+)
+# After "for / of / about / regarding" only a capitalised name counts ("the deductible for Priya"):
+# "the exclusion for mold" or "the account of the insured" name nobody.
+_CAPITALISED_AFTER = re.compile(r"\b(?:for|of|about|regarding)\s+([A-Z][a-z][A-Za-z'\-]*(?:\s+[A-Z][a-z][A-Za-z'\-]*)?)")
+
+
+def _as_name(candidate: str) -> Optional[str]:
+    """The candidate as a name, with non-name words trimmed from its edges ("Is Priya" is "Priya"),
+    or None when what is left is not a name."""
+    blocked = NON_NAME_WORDS | STATE_WORDS | _NOT_A_NAME
+    words = candidate.split()
+    while words and words[0].lower() in blocked:
+        words.pop(0)
+    while words and words[-1].lower() in blocked:
+        words.pop()
+    name = " ".join(words)
+    if not words or _POLICY_NUMBER_OR_CLAIM.search(name) or any(w.lower() in blocked for w in words):
+        return None
+    return name
+
+
 def _named_people(question: str, interpretation: Optional[dict]) -> list[str]:
-    """People the question names: from the interpreter when it ran, else capitalised or contextual names."""
+    """People the question names. Only what was typed counts: the interpreter's names (it keeps only
+    names on file or typed in the question), capitalised full names and possessives, and names in a
+    phrase that is about a person ("policies of X", "does X have", "customer named X"). Ordinary words
+    ("past due", "mold") are never a customer, so a question about them is not a customer lookup."""
     names = [n for n in (interpretation or {}).get("policyholders") or [] if isinstance(n, str) and n.strip()]
     if (interpretation or {}).get("policyholder_name"):
-        st = interpretation["policyholder_name"].strip()
-        if st and st not in names:
-            names.append(st)
+        stated = interpretation["policyholder_name"].strip()
+        if stated and stated not in names and stated.lower() in question.lower():
+            names.append(stated)
     if names:
         return names
-    q_clean = question.strip().rstrip("?.!")
+
+    text = question.strip().rstrip("?.!")
     found: list[str] = []
+    for m in _POSSESSIVE.finditer(text):
+        found.append(m.group(1).strip())
+    for pattern in _PERSON_PHRASES:
+        for m in pattern.finditer(text):
+            found.append(m.group(1).strip())
+    for m in _CAPITALISED_AFTER.finditer(text):
+        found.append(m.group(1).strip())
+    for m in _FULL_NAME.finditer(text):
+        found.append(m.group(1).strip())
+    found = [name for name in (_as_name(f) for f in found) if name]
 
-    # 1. Possessive ("Smith's", "Sirivalli's")
-    for m in _POSSESSIVE.finditer(q_clean):
-        candidate = m.group(1).strip()
-        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not all(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in candidate.split()):
-            found.append(candidate)
-
-    # 2. Prepositional phrases: of X, for X, about X, regarding X, under X
-    for m in re.finditer(r"\b(?:of|for|about|with|under|regarding)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b", q_clean, re.IGNORECASE):
-        candidate = m.group(1).strip()
-        words = candidate.split()
-        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not any(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in words):
-            found.append(candidate)
-
-    # 3. Does X have, is X covered, has X
-    for m in re.finditer(r"\b(?:does|is|has)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:have|covered|own|insured)\b", q_clean, re.IGNORECASE):
-        candidate = m.group(1).strip()
-        words = candidate.split()
-        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not any(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in words):
-            found.append(candidate)
-
-    # 4. Role-introduced names
-    for m in re.finditer(r"\b(?:customer|policyholder|insured|client|account)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b", q_clean, re.IGNORECASE):
-        candidate = m.group(1).strip()
-        words = candidate.split()
-        if not _POLICY_NUMBER_OR_CLAIM.search(candidate) and not any(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in words):
-            found.append(candidate)
-
-    # 5. Full capitalized names ("John Smith", "Margaret Chen")
-    for m in _FULL_NAME.finditer(question):
-        candidate = m.group(1).strip()
-        if not all(w.lower() in NON_NAME_WORDS | STATE_WORDS for w in candidate.split()):
-            found.append(candidate)
-
-    # 6. Single capitalized words not in non-names
-    for m in re.finditer(r"\b([A-Z][a-zA-Z\-]{2,})\b", question):
-        w = m.group(1).strip()
-        if not _POLICY_NUMBER_OR_CLAIM.search(w) and w.lower() not in NON_NAME_WORDS | STATE_WORDS and w not in found:
-            found.append(w)
-
-    # If full name is present, filter out individual component words
+    # A full name covers its own words ("Margaret Chen" is not also "Margaret").
     multi = [f for f in found if " " in f]
-    if multi:
-        filtered = []
-        for f in found:
-            if " " in f:
-                filtered.append(f)
-            elif not any(f in m.split() for m in multi):
-                filtered.append(f)
-        found = filtered
-
+    found = [f for f in found if " " in f or not any(f in m.split() for m in multi)]
     return list(dict.fromkeys(found))
 
 

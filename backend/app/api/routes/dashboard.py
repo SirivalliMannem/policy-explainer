@@ -337,11 +337,12 @@ def resolve_attention(
     if resolution_for_entry(entry, db) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This question has already been closed")
 
-    if payload.action == "dismissed":
+    if payload.action in ("dismissed", "resolved"):
         reason = (payload.reason or "").strip()
         if not reason:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Dismissing needs a reason")
-        return AttentionResolveResponse(resolution=resolution_payload(record_closure(entry, "dismissed", employee, db, note=reason)))
+            what = "Dismissing" if payload.action == "dismissed" else "Marking it resolved"
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{what} needs a reason")
+        return AttentionResolveResponse(resolution=resolution_payload(record_closure(entry, payload.action, employee, db, note=reason)))
 
     if payload.action not in ASK_ACTIONS:
         detail = (

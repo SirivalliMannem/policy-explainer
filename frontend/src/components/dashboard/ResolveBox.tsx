@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, ChevronDown, Loader2, Sparkles, X } from 'lucide-react';
-import { analyzeAttention, getConversation, resolveAttention } from '../../services/api';
+import { analyzeAttention, resolveAttention } from '../../services/api';
 import { describeError } from '../../lib/explainer';
+import { resolveView, suggestionNavigation } from '../../lib/resolveSuggestions';
 import type {
   AttentionAnalysis,
   AttentionCandidate,
@@ -133,20 +134,61 @@ function SuggestionCard({
   );
 }
 
-const HEADINGS: Record<string, string> = {
-  coverage_no_evidence: 'ASK THIS INSTEAD',
-  typo: 'WRONG WORDING · TRY THESE',
-  vague_wording: 'WRONG WORDING · TRY THESE',
-  definition: 'TRY THESE INSTEAD',
-  customer_not_found: 'IDENTIFY CUSTOMER · TRY THESE',
-  missing_form_or_edition: 'CHECK FORMS · TRY THESE',
-  out_of_scope: 'CLARIFY INQUIRY · TRY THESE',
-  other: 'TRY THESE INSTEAD',
-};
+/** A closing action that needs a reason in the log: Mark resolved, or Dismiss. */
+function CloseWithReason({
+  label,
+  placeholder,
+  busy,
+  onConfirm,
+}: {
+  label: string;
+  placeholder: string;
+  busy: boolean;
+  onConfirm: (reason: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="text-[12px] font-semibold text-muted-foreground hover:text-espresso"
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-1.5">
+          <textarea
+            aria-label={`Reason: ${label}`}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            maxLength={2000}
+            placeholder={placeholder}
+            className="w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[12.5px] focus:border-orange-btn focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => onConfirm(reason.trim())}
+            disabled={busy || !reason.trim()}
+            className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-3 py-1 text-[12px] font-semibold text-espresso hover:border-espresso disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} {label}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
- * The Resolve box: dynamic suggestions from the stored analysis. Asking one navigates to the chatbot
- * to run the question through the normal answering pipeline; Dismiss closes it with a reason.
+ * The Resolve box. What it shows is decided by resolveView: an unverified customer or a missing
+ * policy shows no suggestions; otherwise exactly two suggestions from the stored analysis. Clicking a
+ * suggestion (or an edited question) opens a new chat conversation of the employee with the verified
+ * policy and asks it through the normal pipeline. The item stays flagged until the employee marks it
+ * resolved or dismisses it, each with a reason. Nobody else is involved.
  */
 export function ResolveBox({
   item,
@@ -158,18 +200,13 @@ export function ResolveBox({
   const navigate = useNavigate();
   const [analysis, setAnalysis] = useState<AttentionAnalysis | null>(item.analysis ?? null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [edited, setEdited] = useState(item.question);
   const [showEdit, setShowEdit] = useState(false);
-  const [dismissing, setDismissing] = useState(false);
-  const [reason, setReason] = useState('');
 
-  const ready = analysis?.status === 'ready';
-  const candidates = ready ? analysis?.candidates ?? [] : [];
-  const outOfScope = ready && analysis?.category === 'out_of_scope';
-  const missingEvidence = ready && analysis?.category === 'evidence_missing';
-  const noAlternative = ready && !outOfScope && candidates.length === 0 && Boolean(analysis?.type);
+  const view = resolveView(item, analysis);
+  const canAsk = view.mode !== 'customer_not_found' && view.mode !== 'policy_context_missing' && view.mode !== 'out_of_scope';
 
   const analyze = async () => {
     setAnalyzing(true);
@@ -183,50 +220,20 @@ export function ResolveBox({
     }
   };
 
-  const handleSuggestionClick = async (candidate: AttentionCandidate) => {
-    setBusy(candidate.question);
-    let target = '/app/explainer';
-    if (item.conversation_id) {
-      try {
-        await getConversation(item.conversation_id);
-        target = `/app/explainer/c/${item.conversation_id}`;
-      } catch {
-        // Conversation does not exist or belongs to another employee;
-        // safely fallback to the supported new-conversation workflow
-        target = '/app/explainer';
-      }
-    }
-    setBusy(null);
-    navigate(target, {
-      state: {
-        initialQuestion: candidate.question,
-        policyId: item.policy_id || undefined,
-      },
-    });
+  // Asks in the chat; the flagged item is not resolved by this.
+  const askInChat = (question: string) => {
+    const { path, state } = suggestionNavigation(item, question);
+    navigate(path, { state });
   };
 
-  const ask = async (action: 'asked_suggestion' | 'edited_and_asked', question: string) => {
-    setBusy(question);
+  const close = async (action: 'dismissed' | 'resolved', reason: string, summary: string) => {
+    setClosing(true);
     setError(null);
     try {
-      const result = await resolveAttention({ entry_id: item.latest_entry_id, action, question });
-      onClosed(result, `Asked “${question}”`);
+      onClosed(await resolveAttention({ entry_id: item.latest_entry_id, action, reason }), summary);
     } catch (err) {
       setError(describeError(err).message);
-      setBusy(null);
-    }
-  };
-
-  const dismiss = async () => {
-    if (!reason.trim()) return;
-    setBusy('dismiss');
-    setError(null);
-    try {
-      const result = await resolveAttention({ entry_id: item.latest_entry_id, action: 'dismissed', reason: reason.trim() });
-      onClosed(result, 'Dismissed as out of scope');
-    } catch (err) {
-      setError(describeError(err).message);
-      setBusy(null);
+      setClosing(false);
     }
   };
 
@@ -234,21 +241,31 @@ export function ResolveBox({
     <div className="rounded-xl border border-[#FDC9A0] bg-[#FFFBF7] p-4 text-[13px] leading-relaxed text-espresso">
       <h5 className="mb-2 text-[10.5px] font-semibold tracking-[0.08em] text-orange-btn">RESOLVE</h5>
 
-      {(item.reason === 'customer_not_found' || analysis?.type === 'customer_not_found') && (
-        <div className="mb-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-[12.5px] text-[#991B1B]">
-          <h6 className="text-[11px] font-bold tracking-[0.08em] text-[#B91C1C]">CUSTOMER NOT FOUND · VERIFICATION REQUIRED</h6>
-          <p className="mt-1 font-medium">{item.detail || analysis?.reason || "I couldn't find a matching customer in the records. Please verify the customer name or provide a valid policy number."}</p>
-          <div className="mt-2 space-y-1 text-[11.5px] text-[#7F1D1D]">
-            <p className="font-semibold">Recommended Actions:</p>
-            <ul className="list-disc pl-4 space-y-0.5">
-              <li>Verify the customer's spelling or full name in customer records.</li>
-              <li>Search using a supported policy number (e.g. HO-XXXX-XXXX) or account number.</li>
-            </ul>
-          </div>
+      {view.mode === 'customer_not_found' && (
+        <div role="alert" className="mb-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-[12.5px] text-[#991B1B]">
+          <h6 className="text-[11px] font-bold tracking-[0.08em] text-[#B91C1C]">CUSTOMER NOT FOUND · VERIFICATION FAILED</h6>
+          <p className="mt-1 font-medium">{item.detail || 'No matching customer was found in the customer records.'}</p>
+          <p className="mt-1.5 text-[11.5px] text-[#7F1D1D]">
+            No questions are suggested: there is no verified customer or policy to base them on. To verify the customer:
+          </p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11.5px] text-[#7F1D1D]">
+            <li>Check the spelling of the customer&apos;s full name against the customer records.</li>
+            <li>Ask again using a supported identifier: policy number, account number, claim number, email or phone.</li>
+          </ul>
         </div>
       )}
 
-      {!ready && (
+      {view.mode === 'policy_context_missing' && (
+        <div className="mb-3 rounded-lg bg-white px-3 py-2 text-[12.5px] text-[#334155]">
+          <p className="font-semibold text-espresso">Policy not identified</p>
+          <p className="text-[12px] text-muted-foreground">
+            No single verified policy is linked to this question, so no questions are suggested. Ask again with the policy
+            number (or another supported identifier) to give it a policy context.
+          </p>
+        </div>
+      )}
+
+      {view.mode === 'not_ready' && (
         <div className="mb-3 rounded-lg bg-white px-3 py-2 text-[12.5px] text-[#334155]">
           <p className="font-semibold text-espresso">Suggestions not ready</p>
           <p className="text-[12px] text-muted-foreground">
@@ -263,74 +280,66 @@ export function ResolveBox({
             className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-orange-btn bg-white px-2.5 py-1 text-[12px] font-semibold text-orange-btn hover:bg-[#FFF1E6] disabled:opacity-60"
           >
             {analyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            Analyze now
+            {analysis?.status === 'failed' ? 'Try again' : 'Analyze now'}
           </button>
         </div>
       )}
 
-      {ready && outOfScope && (
+      {view.mode === 'out_of_scope' && (
         <div className="mb-3">
           <h6 className="text-[11px] font-bold tracking-[0.08em] text-[#A12A2A]">NO EVIDENCE CAN EXIST</h6>
           <p className="mt-0.5 text-[12.5px] text-[#334155]">{analysis?.reason}</p>
         </div>
       )}
 
-      {ready && missingEvidence && (
+      {(view.mode === 'suggestions' || view.mode === 'no_alternative') && analysis?.category === 'evidence_missing' && (
         <div className="mb-3">
           <h6 className="text-[11px] font-bold tracking-[0.08em] text-[#A12A2A]">EVIDENCE IS MISSING</h6>
-          {analysis?.missing && (
+          {analysis.missing && (
             <p className="mt-0.5 text-[12.5px] text-[#334155]">
               <b className="font-semibold text-espresso">What is missing: </b>
               {analysis.missing}
             </p>
           )}
-          {analysis?.type === 'missing_form_or_edition' && !analysis.upload_available && (
+          {analysis.type === 'missing_form_or_edition' && !analysis.upload_available && (
             <p className="mt-1 text-[11.5px] text-muted-foreground">The missing edition cannot be added here.</p>
           )}
         </div>
       )}
 
-      {ready && !outOfScope && !analysis?.type && analysis?.reason && (
-        <p className="mb-3 text-[12.5px] text-[#334155]">{analysis.reason}</p>
-      )}
-
-      {candidates.length > 0 && (
+      {view.mode === 'suggestions' && (
         <div className="mb-3">
-          <h6 className="mb-1.5 text-[11px] font-bold tracking-[0.08em] text-espresso">
-            {missingEvidence ? 'ASK THIS INSTEAD' : HEADINGS[analysis?.type ?? ''] ?? 'TRY THESE'}
-          </h6>
+          <h6 className="mb-1.5 text-[11px] font-bold tracking-[0.08em] text-espresso">{view.heading}</h6>
           <ul className="space-y-2">
-            {candidates.map((c, i) => (
+            {view.candidates.map((c, i) => (
               <SuggestionCard
                 key={c.question}
                 original={item.question}
                 analysis={analysis as AttentionAnalysis}
                 candidate={c}
                 recommended={i === 0}
-                busy={busy !== null}
-                onAsk={() => handleSuggestionClick(c)}
+                busy={closing}
+                onAsk={() => askInChat(c.question)}
               />
             ))}
           </ul>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            A suggestion opens in a new chat. This item stays in the queue until you mark it resolved.
+          </p>
         </div>
       )}
 
-      {noAlternative && (
+      {view.mode === 'no_alternative' && (
         <div className="mb-3 rounded-lg bg-white px-3 py-2">
           <p className="text-[12.5px] font-semibold text-espresso">No answerable alternative found</p>
           {analysis?.reason && <p className="text-[12px] text-muted-foreground">{analysis.reason}</p>}
         </div>
       )}
 
-      {busy && busy !== 'dismiss' && (
-        <p className="mb-2 flex items-center gap-1.5 text-[12px] text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-orange-btn" /> Asking “{busy}” as a new question…
-        </p>
-      )}
       {error && <p className="mb-2 text-[12px] text-red-700">{error}</p>}
 
       <div className="space-y-2 border-t border-[#FDC9A0] pt-3">
-        {!outOfScope && !noAlternative && (
+        {canAsk && (
           <div>
             <button
               type="button"
@@ -352,47 +361,28 @@ export function ResolveBox({
                 />
                 <button
                   type="button"
-                  onClick={() => ask('edited_and_asked', edited.trim())}
-                  disabled={busy !== null || !edited.trim()}
+                  onClick={() => askInChat(edited.trim())}
+                  disabled={!edited.trim()}
                   className="inline-flex items-center gap-1 rounded-lg border border-orange-btn bg-orange-btn px-3 py-1 text-[12px] font-semibold text-white hover:bg-[#C2410C] disabled:opacity-60"
                 >
-                  <Check className="h-3.5 w-3.5" /> Ask
+                  <Check className="h-3.5 w-3.5" /> Ask in chat
                 </button>
               </div>
             )}
           </div>
         )}
-        <div>
-          <button
-            type="button"
-            onClick={() => setDismissing((v) => !v)}
-            aria-expanded={dismissing}
-            className="text-[12px] font-semibold text-muted-foreground hover:text-espresso"
-          >
-            {outOfScope || noAlternative ? 'Dismiss' : 'Dismiss as out of scope'}
-          </button>
-          {dismissing && (
-            <div className="mt-1.5 space-y-1.5">
-              <textarea
-                aria-label="Reason for dismissing"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                rows={2}
-                maxLength={2000}
-                placeholder="Why this needs no answer (required)"
-                className="w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[12.5px] focus:border-orange-btn focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={dismiss}
-                disabled={busy !== null || !reason.trim()}
-                className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-3 py-1 text-[12px] font-semibold text-espresso hover:border-espresso disabled:opacity-60"
-              >
-                {busy === 'dismiss' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />} Dismiss
-              </button>
-            </div>
-          )}
-        </div>
+        <CloseWithReason
+          label="Mark resolved"
+          placeholder="How the original issue was resolved (required)"
+          busy={closing}
+          onConfirm={(reason) => close('resolved', reason, 'Marked resolved')}
+        />
+        <CloseWithReason
+          label={view.mode === 'out_of_scope' || view.mode === 'no_alternative' ? 'Dismiss' : 'Dismiss as out of scope'}
+          placeholder="Why this needs no answer (required)"
+          busy={closing}
+          onConfirm={(reason) => close('dismissed', reason, 'Dismissed as out of scope')}
+        />
       </div>
     </div>
   );

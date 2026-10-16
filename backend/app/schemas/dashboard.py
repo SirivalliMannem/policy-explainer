@@ -79,8 +79,8 @@ class AttentionItem(BaseModel):
     reason_label: str
     detail: str
     policy_number: Optional[str] = None
+    # The verified policy, so a suggestion can be asked in a new conversation with the same context.
     policy_id: Optional[str] = None
-    conversation_id: Optional[str] = None
     insured: Optional[str] = None
     line_of_business: Optional[str] = None
     times_asked: int
@@ -120,6 +120,8 @@ class AttentionResolveRequest(BaseModel):
 
     asked_suggestion: ask one of the stored, verified suggestions (question must match it).
     edited_and_asked: ask an edited question. dismissed: close it, with a reason (required).
+    resolved: the employee resolved the original issue (for example by asking a suggestion in the
+    chat); a note saying how is required.
     """
     entry_id: str
     action: str
