@@ -190,7 +190,9 @@ def portfolio_suggestions(result: PortfolioResult) -> list[str]:
     return [f"What does {p.policy_number} cover?" for p in result.policies[:3]]
 
 
-def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
+def answer_portfolio_question(
+    question: str, db: Session, default_account: Optional[CoreAccount] = None
+) -> PortfolioResult:
     """Answer a customer or portfolio question from policy records."""
     text = question.strip()
     accounts, _ = find_accounts(text, db)
@@ -216,6 +218,10 @@ def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
             policies=[],
             prior_terms={},
         )
+
+    if not accounts and default_account:
+        accounts = [default_account]
+        scope = "customer"
 
     # Household members are included only when asked for: listing a spouse's policies
     # unprompted would disclose a contract the caller may not be party to.

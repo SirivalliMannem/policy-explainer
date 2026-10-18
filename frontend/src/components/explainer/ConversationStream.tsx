@@ -155,10 +155,10 @@ function InterpretedAs({ result }: { result: QuestionAnswerResponse }) {
 
 /** Starter prompts for an empty conversation; the employee completes them with a policy. */
 const STARTERS = [
-  { label: 'Coverages, limits and deductibles', prompt: 'What are the coverages, limits and deductibles on policy ', icon: ShieldCheck },
-  { label: 'Forms and endorsements', prompt: 'Which forms and endorsements are attached to policy ', icon: FileText },
-  { label: 'Claims on a policy', prompt: 'What claims are on policy ', icon: AlertTriangle },
-  { label: "A customer's policies", prompt: 'How many policies does ', icon: User },
+  { label: 'Coverages, limits and deductibles', prompt: 'What is the wind and hail deductible on this policy?', icon: ShieldCheck },
+  { label: 'Forms and endorsements', prompt: 'Which endorsement excludes flood damage?', icon: FileText },
+  { label: 'Claims on a policy', prompt: 'Are there any open claims on this policy?', icon: AlertTriangle },
+  { label: "A customer's policies", prompt: 'Which policies does this customer currently hold?', icon: User },
 ];
 
 function timeGreeting(now = new Date()): string {
@@ -663,28 +663,36 @@ export function ConversationStream({
 
   if (messages.length === 0 && !isWorking) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden px-5 py-10 sm:px-10">
-        <div className="w-full max-w-[640px] text-center">
-          <span className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0F2A43] shadow-sm">
-            <Shield className="h-5 w-5 text-[#F97316]" />
-          </span>
-          <h2 className="font-display text-[28px] leading-tight text-[#0F2A43]">
-            Explore
-          </h2>
-          <p className="mx-auto mt-2 max-w-lg text-[14px] leading-relaxed text-[#64748B]">
-            Explore policy coverage, limits, deductibles, forms, claims, billing, and customer policies. Ask a question to get evidence-grounded answers with citations.
+      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden px-4 py-8 sm:px-8">
+        <div className="w-full max-w-[780px] flex flex-col items-center text-center">
+          <div className="flex h-[52px] w-[52px] items-center justify-center rounded-[14px] bg-[#0F2A43] shadow-[0_4px_14px_rgba(15,42,67,0.2)]">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z" />
+            </svg>
+          </div>
+          <h1 className="mt-[22px] mb-2 font-['Instrument_Serif',Georgia,serif] font-normal text-[36px] sm:text-[44px] leading-[1.1] text-[#0F2A43] tracking-[-0.01em]">
+            What would you like to know about a policy?
+          </h1>
+          <p className="mb-[34px] text-[16px] text-[#64748B]">
+            Answers come from the policy wording, with citations.
           </p>
-          <div className="mt-7 grid gap-2 text-left sm:grid-cols-2">
+
+          <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
             {STARTERS.map(({ label, prompt, icon: Icon }) => (
               <button
                 key={label}
                 type="button"
                 onClick={() => onPrefill(prompt)}
-                className="group flex items-center gap-3 rounded-xl border border-[#E2E8F0] bg-white px-3.5 py-3 text-[13px] text-[#0F2A43] transition-colors hover:border-[#F97316] hover:bg-[#FFF7ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                className="group flex items-center gap-3.5 rounded-[14px] border border-[#E3E8F0] bg-white p-4 text-[#0F2A43] transition-all hover:border-[#EA580C] hover:shadow-[0_6px_18px_rgba(15,42,67,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
               >
-                <Icon className="h-4 w-4 shrink-0 text-[#EA580C]" aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate">{label}</span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-[#CBD5E1] group-hover:text-[#EA580C]" aria-hidden="true" />
+                <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[10px] bg-[#FFF1E6]">
+                  <Icon className="h-5 w-5 text-[#C2410C]" strokeWidth={2} aria-hidden="true" />
+                </span>
+                <span className="flex flex-1 flex-col gap-0.5 min-w-0">
+                  <span className="text-[12.5px] font-semibold text-[#64748B] truncate">{label}</span>
+                  <span className="text-[15px] font-medium leading-[1.4] text-[#0F2A43] line-clamp-2">{prompt}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-[#94A3B8] transition-colors group-hover:text-[#EA580C]" aria-hidden="true" />
               </button>
             ))}
           </div>

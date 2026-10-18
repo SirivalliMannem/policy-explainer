@@ -42,6 +42,11 @@ NON_NAME_WORDS = {
     "property", "structure", "structures", "open", "named", "loss", "hotel",
     "use", "living", "expense", "expenses", "vehicle", "vehicles", "car", "cars",
     "term", "terms", "effective", "expiration", "date", "dates", "status", "edition", "editions",
+    "compare", "comparison", "versus", "vs", "between", "differ", "difference", "differences",
+    "details", "detail", "provisions", "provision", "benefits", "benefit", "payouts", "payout",
+    "rates", "rate", "discounts", "discount", "records", "record", "quotes", "quote",
+    "earthquake", "hurricane", "tornado", "lightning", "freeze", "freezing", "smoke",
+    "explosion", "vandalism", "collapse", "sinkhole", "ordinance", "law",
 }
 
 # Words of US state names, so "Texas" or "York" are never read as a surname.

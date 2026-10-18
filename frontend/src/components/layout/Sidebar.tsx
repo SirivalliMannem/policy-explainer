@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Shield, ChevronLeft, ChevronRight, ChevronUp, LogOut } from 'lucide-react';
+import { Shield, ChevronLeft, ChevronRight, ChevronUp, LogOut, Layers } from 'lucide-react';
 import { PRIMARY_NAV_ITEMS, SECONDARY_NAV_ITEMS } from '../../config';
 import { cn } from '../../lib/utils';
 import { Tooltip } from '../ui/Tooltip';
@@ -82,7 +82,11 @@ export function Sidebar({
         {/* Brand identity header */}
         <div className={cn('flex h-16 items-center px-4', isCollapsed ? 'justify-center px-2' : 'justify-between')}>
           {/* The collapsed rail is too narrow for the logo and the toggle; keep only the toggle there. */}
-          <div className={cn('flex items-center gap-3 overflow-hidden', isCollapsed && 'lg:hidden')}>
+          <NavLink
+            to="/app/explainer"
+            className={cn('flex items-center gap-3 overflow-hidden cursor-pointer hover:opacity-85 transition-opacity', isCollapsed && 'lg:hidden')}
+            title="Policy Explainer"
+          >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-subtle text-primary border border-primary/20">
               <Shield className="h-5 w-5" />
             </div>
@@ -96,7 +100,7 @@ export function Sidebar({
                 </span>
               </div>
             )}
-          </div>
+          </NavLink>
 
           {/* Desktop collapse toggle */}
           <button
@@ -113,6 +117,47 @@ export function Sidebar({
         {/* Navigation stays fixed; only the employee's conversation list scrolls. On a very short
             screen, where even the list's minimum height does not fit, the whole section scrolls. */}
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-4">
+          {/* Top item: FI360 Agent Hub placed above Workspace */}
+          <nav className="shrink-0 space-y-1">
+            {isCollapsed ? (
+              <Tooltip content="FI360 Agent Hub" position="right" className="w-full">
+                <NavLink
+                  to="/"
+                  onClick={onCloseMobile}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center justify-center rounded-lg px-2 py-2 text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-surface-subtle text-primary font-semibold'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    )
+                  }
+                >
+                  <Layers className="h-4 w-4 shrink-0 text-orange-600" />
+                </NavLink>
+              </Tooltip>
+            ) : (
+              <NavLink
+                to="/"
+                onClick={onCloseMobile}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-surface-subtle text-primary font-semibold'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )
+                }
+              >
+                <Layers className="h-4 w-4 shrink-0 text-orange-600" />
+                <span className="truncate">FI360 Agent Hub</span>
+              </NavLink>
+            )}
+          </nav>
+
+          <Separator className="shrink-0" />
+
+          {/* Workspace Section */}
           <nav className="flex flex-1 flex-col gap-1">
             {!isCollapsed && (
               <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

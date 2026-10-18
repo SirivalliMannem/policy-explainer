@@ -34,6 +34,8 @@ class QuestionResolveRequest(BaseModel):
     # When given, the question's understanding is cached for that conversation's next submission,
     # and the conversation's previous question helps resolve follow-ups.
     conversation_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    policy_id: Optional[str] = None
 
 
 class VerifiedCustomer(BaseModel):
