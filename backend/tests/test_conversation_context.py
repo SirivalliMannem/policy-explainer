@@ -68,7 +68,7 @@ def numbers(r):
 
 
 def choose_customer(conv, customer_id, confirm=False):
-    return client.post(f"/api/conversations/{conv}/customer-context",
+    return client.post(f"/api/conversations/{conv}/context",
                        json={"customer_id": customer_id, "confirm_different_customer": confirm}, headers=H)
 
 

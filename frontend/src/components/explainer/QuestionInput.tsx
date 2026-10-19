@@ -12,6 +12,7 @@ interface QuestionInputProps {
   inputRef: MutableRefObject<HTMLInputElement | null>;
   /** "bare": no border of its own, for use inside a composer box that draws one. */
   variant?: 'default' | 'bare';
+  onOpenContextSelector?: () => void;
 }
 
 // The policy-number fragment being typed at the caret: "HO-28", "ho 28", "pa6120-77", or bare digits "2847".
@@ -63,7 +64,15 @@ function currentTerms(candidates: PolicyContextCandidate[], compact: string): Po
  * The question box. While a policy number is being typed, a list of matching policies opens above it;
  * choosing one replaces the partial number with the full one. The question is not sent.
  */
-export function QuestionInput({ value, onChange, disabled, placeholder, inputRef, variant = 'default' }: QuestionInputProps) {
+export function QuestionInput({
+  value,
+  onChange,
+  disabled,
+  placeholder,
+  inputRef,
+  variant = 'default',
+  onOpenContextSelector,
+}: QuestionInputProps) {
   const listId = useId();
   const [fragment, setFragment] = useState<Fragment | null>(null);
   const [matches, setMatches] = useState<PolicyContextCandidate[]>([]);
@@ -121,6 +130,9 @@ export function QuestionInput({ value, onChange, disabled, placeholder, inputRef
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === '@' || (e.shiftKey && (e.key === '@' || e.code === 'Digit2'))) {
+      onOpenContextSelector?.();
+    }
     if (!open || matches.length === 0) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -192,8 +204,12 @@ export function QuestionInput({ value, onChange, disabled, placeholder, inputRef
         type="text"
         value={value}
         onChange={(e) => {
-          onChange(e.target.value);
-          refresh(e.target.value, e.target.selectionStart);
+          const val = e.target.value;
+          onChange(val);
+          refresh(val, e.target.selectionStart);
+          if (val.endsWith('@') || (val.length > value.length && val.slice(value.length).includes('@'))) {
+            onOpenContextSelector?.();
+          }
         }}
         onKeyDown={onKeyDown}
         onKeyUp={(e) => {

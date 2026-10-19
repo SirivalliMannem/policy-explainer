@@ -1,13 +1,12 @@
-import { Loader2, Shield } from 'lucide-react';
-import type { CustomerContext, PolicyContextCandidate } from '../../types';
+import { Loader2, Shield, User, X } from 'lucide-react';
+import type { CustomerContextSummary, PolicyContextCandidate } from '../../types';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
 import { QUICK_ACTIONS } from './QuickPolicyActions';
 import { formatDate, lineLabel, statusLabel } from '../../lib/explainer';
 
 interface PolicyContextBannerProps {
   policy: PolicyContextCandidate | null;
-  /** The conversation's customer when no single policy is selected. */
-  customer?: CustomerContext | null;
+  customer?: CustomerContextSummary | null;
   isResolving?: boolean;
   openTab?: PolicyFeatureTab | null;
   onOpenTab: (tab: PolicyFeatureTab) => void;
@@ -33,25 +32,34 @@ export function PolicyContextBanner({
   isResolving,
   openTab,
   onOpenTab,
+  onClear,
 }: PolicyContextBannerProps) {
   const inForce = policy?.status === 'in_force';
 
   return (
     <div
       className={`flex min-h-[60px] shrink-0 items-center gap-3 border-b border-[#E2E8F0] ${
-        policy ? 'bg-white' : 'bg-[#F8FAFC]'
+        policy || customer ? 'bg-white' : 'bg-[#F8FAFC]'
       } px-4 py-2.5 sm:px-6`}
     >
       <span
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-          policy ? 'bg-[#0F2A43]' : 'border border-[#E2E8F0] bg-white shadow-xs'
+          policy
+            ? 'bg-[#0F2A43]'
+            : customer
+            ? 'bg-sky-50 border border-sky-200 shadow-xs'
+            : 'border border-[#E2E8F0] bg-white shadow-xs'
         }`}
         aria-hidden="true"
       >
         {isResolving ? (
           <Loader2 className="h-4 w-4 animate-spin text-[#F97316] motion-reduce:animate-none" />
+        ) : policy ? (
+          <Shield className="h-4 w-4 text-[#F97316]" />
+        ) : customer ? (
+          <User className="h-4 w-4 text-sky-700" />
         ) : (
-          <Shield className={`h-4 w-4 ${policy ? 'text-[#F97316]' : 'text-[#64748B]'}`} />
+          <Shield className="h-4 w-4 text-[#64748B]" />
         )}
       </span>
 
@@ -92,21 +100,38 @@ export function PolicyContextBanner({
             </nav>
           </div>
         </div>
-      ) : customer && !isResolving ? (
-        <div className="min-w-0 flex-1" role="group" aria-label="Conversation customer">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="truncate text-[14px] font-semibold text-[#0F2A43]">{customer.customer_name}</span>
-            {customer.policy_count !== undefined && (
-              <span className="rounded border border-[#CBD5E1] bg-white px-1.5 py-px text-[10px] font-semibold uppercase text-[#475569]">
-                {customer.policy_count === 1 ? '1 policy' : `${customer.policy_count} policies`}
+      ) : customer ? (
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-2" role="group" aria-label="Conversation customer">
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="truncate text-[14px] font-semibold text-[#0F2A43]">{customer.customer_name}</span>
+              {customer.account_number && (
+                <span className="font-mono text-[12px] font-semibold text-[#64748B]">{customer.account_number}</span>
+              )}
+              <span className="rounded border border-sky-200 bg-sky-50 px-1.5 py-px text-[10px] font-semibold uppercase text-sky-700">
+                Customer Context
               </span>
-            )}
+              {typeof customer.policy_count === 'number' && (
+                <span className="text-[11.5px] text-[#64748B]">
+                  ({customer.policy_count} {customer.policy_count === 1 ? 'policy' : 'policies'})
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 truncate text-[11.5px] text-[#64748B]">
+              Customer selected — questions will answer from this customer’s policies or portfolio records.
+            </p>
           </div>
-          <p className="truncate text-[12px] text-[#64748B]">
-            {customer.policy_count === 0
-              ? 'No policies on file for this customer.'
-              : 'Questions refer to this customer’s policies — name one (“the auto policy”, “the second one”) to pick it.'}
-          </p>
+          {onClear && (
+            <button
+              type="button"
+              onClick={onClear}
+              aria-label="Clear customer context"
+              title="Clear context"
+              className="rounded-lg p-1.5 text-[#64748B] hover:bg-slate-100 hover:text-[#0F2A43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       ) : (
         <div className="min-w-0 flex-1">
@@ -116,11 +141,12 @@ export function PolicyContextBanner({
           <p className="truncate text-[12px] text-[#64748B]">
             {isResolving
               ? 'Resolving policy from your question…'
-              : 'No policy selected — ask a question about a customer or enter a policy number to get started.'}
+              : 'No context selected — click @ in chat to select a Customer or Policy, or ask a question.'}
           </p>
         </div>
       )}
     </div>
   );
 }
+
 

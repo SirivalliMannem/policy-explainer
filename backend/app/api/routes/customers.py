@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
 from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.customer import CustomerResponse, PolicySummaryResponse
@@ -14,20 +15,40 @@ router = APIRouter(prefix="/api/customers", tags=["customers"])
 
 @router.get("", response_model=list[CustomerResponse])
 def list_customers(
-    search: Optional[str] = Query(None, description="Search by customer name or email"),
+    search: Optional[str] = Query(None, description="Search by customer name, email, or account number"),
+    limit: int = Query(50, ge=1, le=100),
+    employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    """Retrieve list of customers with optional name/email search filter."""
+    """Retrieve list of customers with optional name/email/account_number search filter."""
+    if (employee.role or "").strip().lower() in {"unauthorized", "suspended", "inactive"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Employee is not authorized to search customer records",
+        )
+
     query = db.query(CoreAccount)
-    if search:
+    if search and search.strip():
         search_filter = f"%{search.strip()}%"
         query = query.filter(
             or_(
                 CoreAccount.name.ilike(search_filter),
                 CoreAccount.email.ilike(search_filter),
+                CoreAccount.account_number.ilike(search_filter),
             )
         )
-    return query.order_by(CoreAccount.name.asc()).all()
+    accounts = query.order_by(CoreAccount.name.asc()).limit(limit).all()
+    return [
+        CustomerResponse(
+            id=acc.id,
+            name=acc.name,
+            account_number=acc.account_number or "",
+            email=acc.email or "",
+            phone=acc.phone or None,
+            policy_count=len(acc.policies) if acc.policies else 0,
+        )
+        for acc in accounts
+    ]
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)

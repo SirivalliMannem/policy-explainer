@@ -192,16 +192,16 @@ def portfolio_suggestions(result: PortfolioResult) -> list[str]:
     return [f"What does {p.policy_number} cover?" for p in result.policies[:3]]
 
 
-def answer_portfolio_question(question: str, db: Session, customer: Optional[CoreAccount] = None) -> PortfolioResult:
+def answer_portfolio_question(
+    question: str, db: Session, default_account: Optional[CoreAccount] = None
+) -> PortfolioResult:
     """Answer a customer or portfolio question from policy records.
 
-    ``customer`` is the conversation's customer for a question that refers to them without a name
-    ("Does she have another policy?"); a question naming someone is answered for whoever it names.
+    ``default_account`` is the conversation's customer, for a question that names nobody ("Does she
+    have another policy?"); a name that matches nobody is still reported, never defaulted.
     """
     text = question.strip()
     accounts, _ = find_accounts(text, db)
-    if not accounts and customer is not None:
-        accounts = [customer]
     scope = "customer" if accounts else "book"
 
     # A name was given but matches nobody: say so rather than answering for the whole book.
@@ -224,6 +224,10 @@ def answer_portfolio_question(question: str, db: Session, customer: Optional[Cor
             policies=[],
             prior_terms={},
         )
+
+    if not accounts and default_account:
+        accounts = [default_account]
+        scope = "customer"
 
     # Household members are included only when asked for: listing a spouse's policies
     # unprompted would disclose a contract the caller may not be party to.

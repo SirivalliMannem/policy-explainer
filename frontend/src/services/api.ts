@@ -17,6 +17,7 @@ import type {
   ConversationMessageRecord,
   ConversationResponse,
   CoverageItem,
+  CustomerListItem,
   DashboardResponse,
   FormItem,
   HealthCheckResponse,
@@ -27,6 +28,7 @@ import type {
   LedgerSummary,
   PolicyContextCandidate,
   PolicyDetail,
+  PolicyListItem,
   QuestionAnswerResponse,
   QuestionResolution,
   SourceDocument,
@@ -243,6 +245,32 @@ export async function searchPolicyContext(query: string): Promise<PolicyContextC
   });
 }
 
+export async function searchCustomers(
+  search?: string,
+  limit?: number
+): Promise<CustomerListItem[]> {
+  return apiClient.get<CustomerListItem[]>('/api/customers', {
+    params: {
+      ...(search ? { search } : {}),
+      ...(limit ? { limit } : {}),
+    },
+  });
+}
+
+export async function searchPoliciesList(
+  search?: string,
+  customerId?: string,
+  limit?: number
+): Promise<PolicyListItem[]> {
+  return apiClient.get<PolicyListItem[]>('/api/policies', {
+    params: {
+      ...(search ? { search } : {}),
+      ...(customerId ? { customer_id: customerId } : {}),
+      ...(limit ? { limit } : {}),
+    },
+  });
+}
+
 export async function resolvePolicyContext(policyId: string): Promise<PolicyContextCandidate> {
   return apiClient.post<PolicyContextCandidate>('/api/policy-resolution/resolve', {
     policy_id: policyId,
@@ -252,11 +280,18 @@ export async function resolvePolicyContext(policyId: string): Promise<PolicyCont
 /** Ask the backend which policy, if any, a free-text question refers to. */
 export async function resolvePolicyFromQuestion(
   question: string,
-  conversationId?: string | null
+  conversationId?: string | null,
+  customerId?: string | null,
+  policyId?: string | null
 ): Promise<QuestionResolution> {
   return apiClient.post<QuestionResolution>(
     '/api/policy-resolution/from-question',
-    { question, conversation_id: conversationId ?? undefined },
+    {
+      question,
+      conversation_id: conversationId ?? undefined,
+      customer_id: customerId ?? undefined,
+      policy_id: policyId ?? undefined,
+    },
     // Includes one language-model call to understand the question.
     { timeoutMs: 30_000 }
   );
@@ -278,31 +313,16 @@ export async function getConversation(conversationId: string): Promise<Conversat
 
 export async function setConversationContext(
   conversationId: string,
-  policyId: string,
+  policyId?: string | null,
   options?: { customerId?: string; confirmDifferentCustomer?: boolean }
 ): Promise<ConversationResponse> {
   return apiClient.post<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/context`,
     {
-      policy_id: policyId,
+      policy_id: policyId || undefined,
       customer_id: options?.customerId,
       confirm_different_customer: options?.confirmDifferentCustomer ?? false,
     }
-  );
-}
-
-/**
- * Make a customer the conversation's context without choosing one of their policies
- * ("What are Elena's policies?"). Another customer needs `confirmDifferentCustomer` (409 otherwise).
- */
-export async function setCustomerContext(
-  conversationId: string,
-  customerId: string,
-  options?: { confirmDifferentCustomer?: boolean }
-): Promise<ConversationResponse> {
-  return apiClient.post<ConversationResponse>(
-    `/api/conversations/${encodeURIComponent(conversationId)}/customer-context`,
-    { customer_id: customerId, confirm_different_customer: options?.confirmDifferentCustomer ?? false }
   );
 }
 
@@ -339,11 +359,17 @@ export async function submitQuestion(
   conversationId: string,
   question: string,
   policyId?: string,
-  documentId?: string
+  documentId?: string,
+  customerId?: string
 ): Promise<QuestionAnswerResponse> {
   return apiClient.post<QuestionAnswerResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}/questions`,
-    { question, ...(policyId ? { policy_id: policyId } : {}), ...(documentId ? { document_id: documentId } : {}) },
+    {
+      question,
+      ...(policyId ? { policy_id: policyId } : {}),
+      ...(documentId ? { document_id: documentId } : {}),
+      ...(customerId ? { customer_id: customerId } : {}),
+    },
     { timeoutMs: QUESTION_TIMEOUT_MS }
   );
 }

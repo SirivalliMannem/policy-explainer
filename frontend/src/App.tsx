@@ -1,6 +1,8 @@
 import { ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
+import { AgentHubPage } from './pages/AgentHubPage';
+import { AgentCataloguePage } from './pages/AgentCataloguePage';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ExplainerPage } from './pages/ExplainerPage';
@@ -21,8 +23,9 @@ export function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* The app opens on the login page */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        {/* Landing Page: FI360 Agent Hub */}
+        <Route path="/" element={<AgentHubPage />} />
+        <Route path="/agents" element={<AgentCataloguePage />} />
 
         {/* Auth Route */}
         <Route path="/login" element={<LoginPage />} />
@@ -49,8 +52,8 @@ export function App() {
           <Route path="settings" element={<SettingsPage />} />
         </Route>
 
-        {/* Catch-all redirect to the login page */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        {/* Catch-all redirect to the FI360 landing page */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

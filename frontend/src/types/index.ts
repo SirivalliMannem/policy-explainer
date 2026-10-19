@@ -430,6 +430,34 @@ export interface ConversationListPage {
   offset: number;
 }
 
+export interface CustomerListItem {
+  id: string;
+  name: string;
+  account_number?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  policy_count: number;
+}
+
+export interface PolicyListItem {
+  id: string;
+  policy_number: string;
+  customer_id: string;
+  customer_name: string;
+  line_of_business: string;
+  status: string;
+  effective_date: string;
+  expiration_date: string;
+}
+
+export interface CustomerContextSummary {
+  customer_id: string;
+  customer_name: string;
+  account_number?: string | null;
+  email?: string | null;
+  policy_count?: number;
+}
+
 export interface ConversationResponse {
   conversation_id: string;
   employee_id: string;
@@ -442,7 +470,7 @@ export interface ConversationResponse {
     'policy_id' | 'policy_number' | 'customer_id' | 'customer_name' | 'line_of_business' | 'product_name' | 'status'
   > | null;
   /** The conversation's customer: the policy's, or one chosen without a single policy. */
-  customer_context?: CustomerContext | null;
+  customer_context?: CustomerContextSummary | null;
 }
 
 export interface ConversationMessageRecord {

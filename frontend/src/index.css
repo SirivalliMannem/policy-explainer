@@ -22,6 +22,10 @@
   --accent-foreground: #FFFFFF;
   --gold: #FDBA74;
   --btn-orange: #EA580C;
+  --orange: #EA580C;
+  --orange-dark: #C2410C;
+  --orange-soft: #FFF1E6;
+  --line-strong: #D5DCE7;
 
   --primary: #0F2A43;
   --primary-foreground: #FFFFFF;
@@ -58,11 +62,9 @@
   html,
   body,
   #root {
-    height: 100%;
-    max-height: 100%;
+    min-height: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden;
   }
 
   body {

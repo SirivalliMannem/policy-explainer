@@ -175,8 +175,11 @@ def resolve_policy_from_question_text(
         if payload.conversation_id
         else None
     )
-    prior = previous_question(conversation.id, conversation.policy_id, db) if conversation else None
-    active = db.get(CorePolicy, conversation.policy_id) if conversation and conversation.policy_id else None
+    active_policy_id = payload.policy_id or (conversation.policy_id if conversation else None)
+    active_customer_id = payload.customer_id or (conversation.customer_id if conversation else None)
+    prior = previous_question(conversation.id, active_policy_id, db) if conversation else None
+    active = db.get(CorePolicy, active_policy_id) if active_policy_id else None
+    active_cust = db.get(CoreAccount, active_customer_id) if active_customer_id else (active.account if active else None)
 
     # Greetings, thanks and "what can you do?" get a conversational reply. No language model is
     # called and nothing is recorded: they are not policy questions.
@@ -192,6 +195,34 @@ def resolve_policy_from_question_text(
             status="no_reference", intent="conversation", reply=reply.text, suggestions=reply.suggestions
         )
 
+    # Step 1: Validate customer identity before resolving policy context, retrieving policy
+    # evidence, generating suggestions, or invoking the LLM. If the question explicitly names a
+    # customer who does not exist in the database, return the customer-not-found response immediately
+    # and terminate the current request flow.
+    typed = resolve_policy_from_question(question, db)
+    early_verification = customer_verification.verify_customer(typed, question, None, None, db)
+    # A customer who is on file but has no policies is not "not found": they are said to have none below.
+    on_file_without_policies = typed.status == "not_found" and typed.matched_on in ("customer_name", "surname", "first_name")
+    if early_verification.status == "not_found" and not on_file_without_policies:
+        if conversation:
+            customer_verification.remember(conversation.id, question, early_verification)
+        return QuestionResolution(
+            status="not_found",
+            intent="portfolio" if asks_about_portfolio(question, None) else "policy",
+            reply=None,
+            suggestions=[],
+            suggested_policies=[],
+            customer_verification=early_verification,
+            term_selection=None,
+            answer_all=False,
+            interpretation=None,
+            matched_on=early_verification.matched_on or "customer_name",
+            reference=early_verification.reference or typed.reference,
+            policy=None,
+            candidates=[],
+            message=early_verification.message,
+        )
+
     # Understand the question first: "margret chen" becomes "Margaret Chen", "ho 2847 1193" becomes
     # "HO-2847-1193", "polcies" becomes "policies". Without the AI service it falls back to the raw text.
     interpretation = ai_client.interpret(question, prior)
@@ -202,7 +233,6 @@ def resolve_policy_from_question_text(
     # Exact identifiers are read from what the employee typed: the interpreter may rewrite them
     # ("margaret.chen@example.com" became "Margaret Chen"), and a rewritten claim number, VIN or
     # phone would match the wrong record or none. Names and loose wording use the understood text.
-    typed = resolve_policy_from_question(question, db)
     if typed.matched_on in EXACT_IDENTIFIERS:
         result = typed
     else:
@@ -210,8 +240,9 @@ def resolve_policy_from_question_text(
         if result.status == "no_reference" and understood != question:
             result = typed
 
-    # The conversation's customer: chosen with a policy, or alone ("What are Elena's policies?").
-    customer = conversation_context.active_customer(conversation, db)
+    # The conversation's customer: chosen in the context selector, chosen alone ("What are Elena's
+    # policies?"), or the selected policy's customer.
+    customer = active_cust
     portfolio_question = asks_about_portfolio(question, interpretation, has_selected_policy=bool(active))
     refers_to_someone = bool(conversation_context.PRONOUN.search(question))
     # Someone named who is not the conversation's customer is never answered from that customer's
@@ -302,6 +333,8 @@ def resolve_policy_from_question_text(
     status_to_report = result.status
     if verification.status == "not_found":
         status_to_report = "not_found"
+        suggested = []
+        reply = None
     elif result.status == "no_reference":
         if (interpretation or {}).get("intent") == "other":
             # The interpreter judged it unrelated to insurance policies ("what's the weather?").
@@ -314,16 +347,16 @@ def resolve_policy_from_question_text(
         status=status_to_report,
         intent=intent,
         reply=reply.text if reply else None,
-        suggestions=reply.suggestions if reply else [],
-        suggested_policies=[_to_candidate(p) for p in suggested],
+        suggestions=reply.suggestions if reply and status_to_report != "not_found" else [],
+        suggested_policies=[_to_candidate(p) for p in suggested] if status_to_report != "not_found" else [],
         customer_verification=verification,
-        term_selection=term_choice,
+        term_selection=term_choice if status_to_report != "not_found" else None,
         answer_all=result.status == "ambiguous" and len({p.account_id for p in result.candidates}) == 1,
-        interpretation=interpretation,
+        interpretation=interpretation if status_to_report != "not_found" else None,
         matched_on=verification.matched_on if verification.status == "not_found" else result.matched_on,
         reference=verification.reference if verification.status == "not_found" else result.reference,
-        policy=_to_candidate(result.policy) if result.policy else None,
-        candidates=[_to_candidate(p) for p in result.candidates],
+        policy=_to_candidate(result.policy) if result.policy and status_to_report != "not_found" else None,
+        candidates=[_to_candidate(p) for p in result.candidates] if status_to_report != "not_found" else [],
         message=verification.message if verification.status == "not_found" else result.message,
         customer=verified,
         from_context=from_context,

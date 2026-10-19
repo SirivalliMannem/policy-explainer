@@ -15,6 +15,7 @@ how its customer was verified.
 
 from __future__ import annotations
 
+import difflib
 import re
 import threading
 import time
@@ -24,11 +25,23 @@ from sqlalchemy.orm import Session
 
 from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.policy_resolution import CustomerVerification, VerifiedCustomer
-from app.services.policy_resolver import NON_NAME_WORDS, STATE_WORDS, ResolutionResult, find_accounts
+from app.services.policy_resolver import NON_NAME_WORDS, STATE_WORDS, ResolutionResult, find_accounts, name_words
 
-# Two capitalised words in a row ("John Smith") or a capitalised possessive ("Smith's").
-_FULL_NAME = re.compile(r"\b([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,})\b")
-_POSSESSIVE = re.compile(r"\b([A-Z][a-zA-Z\-]{1,}(?:\s+[A-Z][a-zA-Z\-]{1,})?)(?:'s|’s)\b")
+
+def is_near_miss_customer(candidate: str, db: Session, cutoff: float = 0.75) -> bool:
+    """True if candidate name closely matches an existing customer's full name, first name, or surname."""
+    account_names = [name for (name,) in db.query(CoreAccount.name).all() if name]
+    if not account_names:
+        return False
+    cand_low = candidate.lower().strip()
+    all_full = [n.lower() for n in account_names]
+    if difflib.get_close_matches(cand_low, all_full, n=1, cutoff=cutoff):
+        return True
+    all_parts = [p.lower() for n in account_names for p in n.split()]
+    for word in cand_low.split():
+        if len(word) >= 4 and difflib.get_close_matches(word, all_parts, n=1, cutoff=cutoff):
+            return True
+    return False
 
 _TTL_SECONDS = 600
 _cache: dict[tuple[str, str], tuple[float, dict]] = {}
@@ -74,18 +87,28 @@ _NOT_A_NAME = {
     "anyone", "someone", "everyone", "nobody", "somebody", "everybody", "past", "due", "now", "today",
     "coverage", "covered", "cover", "covers", "policy", "deductible", "endorsement", "endorsements",
     "form", "forms", "clause", "clauses", "wording", "mold", "water", "backup", "theft", "fire",
+    "pocket", "wind", "damage", "collision", "dwelling", "loss", "use",
+    "ho", "pa", "clm",
 }
 
-# A person is named in these phrases whatever the case ("policies of sirivalli", "does ravi have").
-_NAME = r"([A-Za-z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)?)"
+# A person is named in these phrases whatever the case ("policies of sirivalli", "exclusions of siri", "does ravi have").
+_NAME = r"([A-Za-z][A-Za-z'\-]+(?:\s+[A-Za-z][A-Za-z'\-]+)?)"
 _PERSON_PHRASES = (
-    re.compile(rf"\bpolic(?:y|ies)\s+(?:of|for|held\s+by|owned\s+by)\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\b(?:does|do|did|has)\s+{_NAME}\s+(?:have|has|hold|own|got)\b", re.IGNORECASE),
-    re.compile(rf"\b(?:customer|policyholder|insured|client)\s+(?:named|called)\s+{_NAME}", re.IGNORECASE),
+    re.compile(
+        rf"\b(?:polic(?:y|ies)|details?|exclusions?|coverages?|covered|deductibles?|premiums?|limits?|endorsements?|"
+        rf"claims?|terms?|forms?|provisions?|clauses?|benefits?|payouts?|payments?|rates?|discounts?|records?|quotes?|"
+        rf"billing|account)\s+(?:of|for|held\s+by|owned\s+by|belonging\s+to|associated\s+with|about|regarding)\s+{_NAME}",
+        re.IGNORECASE,
+    ),
+    re.compile(rf"\b(?:does|do|did|has|have|can|is)\s+{_NAME}\s+(?:have|has|hold|own|got|covered|pay|paying|eligible|qualify)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:customer|policyholder|insured|client|account\s+holder|member)\s+(?:named|called|is|for|of)?\s+{_NAME}", re.IGNORECASE),
+    re.compile(rf"\b(?:compare|between)\s+{_NAME}\s+(?:and|with|to|vs\.?)\s+{_NAME}", re.IGNORECASE),
+    re.compile(rf"\b(?:compare|between)\s+{_NAME}\b", re.IGNORECASE),
+    re.compile(rf"\bthe\s+{_NAME}\s+polic(?:y|ies)\b", re.IGNORECASE),
 )
-# After "for / of / about / regarding" only a capitalised name counts ("the deductible for Priya"):
-# "the exclusion for mold" or "the account of the insured" name nobody.
-_CAPITALISED_AFTER = re.compile(r"\b(?:for|of|about|regarding)\s+([A-Z][a-z][A-Za-z'\-]*(?:\s+[A-Z][a-z][A-Za-z'\-]*)?)")
+_POSSESSIVE = re.compile(r"\b([A-Za-z][A-Za-z'\-]+(?:\s+[A-Za-z][A-Za-z'\-]+)?)(?:'s|’s)\b")
+_CAPITALISED_AFTER = re.compile(r"\b(?:for|of|about|regarding|with|versus|vs\.?)\s+([A-Z][a-zA-Z'\-]*(?:\s+[A-Z][a-zA-Z'\-]*)?)")
+_FULL_NAME = re.compile(r"\b([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,})\b")
 
 
 def _as_name(candidate: str) -> Optional[str]:
@@ -93,46 +116,43 @@ def _as_name(candidate: str) -> Optional[str]:
     or None when what is left is not a name."""
     blocked = NON_NAME_WORDS | STATE_WORDS | _NOT_A_NAME
     words = candidate.split()
-    while words and words[0].lower() in blocked:
+    while words and words[0].lower().rstrip("-") in blocked:
         words.pop(0)
-    while words and words[-1].lower() in blocked:
+    while words and words[-1].lower().rstrip("-") in blocked:
         words.pop()
     name = " ".join(words)
-    if not words or _POLICY_NUMBER_OR_CLAIM.search(name) or any(w.lower() in blocked for w in words):
+    if not words or _POLICY_NUMBER_OR_CLAIM.search(name) or any(w.lower().rstrip("-") in blocked for w in words):
         return None
     return name
 
 
 def _named_people(question: str, interpretation: Optional[dict]) -> list[str]:
-    """People the question names. Only what was typed counts: the interpreter's names (it keeps only
-    names on file or typed in the question), capitalised full names and possessives, and names in a
-    phrase that is about a person ("policies of X", "does X have", "customer named X"). Ordinary words
-    ("past due", "mold") are never a customer, so a question about them is not a customer lookup."""
+    """People the question names. Both what was typed and the interpreter's names count."""
     names = [n for n in (interpretation or {}).get("policyholders") or [] if isinstance(n, str) and n.strip()]
     if (interpretation or {}).get("policyholder_name"):
         stated = interpretation["policyholder_name"].strip()
         if stated and stated not in names and stated.lower() in question.lower():
             names.append(stated)
-    if names:
-        return names
 
     text = question.strip().rstrip("?.!")
-    found: list[str] = []
+    found: list[str] = list(names)
     for m in _POSSESSIVE.finditer(text):
         found.append(m.group(1).strip())
     for pattern in _PERSON_PHRASES:
         for m in pattern.finditer(text):
-            found.append(m.group(1).strip())
+            for g in m.groups():
+                if g:
+                    found.append(g.strip())
     for m in _CAPITALISED_AFTER.finditer(text):
         found.append(m.group(1).strip())
     for m in _FULL_NAME.finditer(text):
         found.append(m.group(1).strip())
-    found = [name for name in (_as_name(f) for f in found) if name]
+    cleaned = [name for name in (_as_name(f) for f in found) if name]
 
     # A full name covers its own words ("Margaret Chen" is not also "Margaret").
-    multi = [f for f in found if " " in f]
-    found = [f for f in found if " " in f or not any(f in m.split() for m in multi)]
-    return list(dict.fromkeys(found))
+    multi = [f for f in cleaned if " " in f]
+    cleaned = [f for f in cleaned if " " in f or not any(f in m.split() for m in multi)]
+    return list(dict.fromkeys(cleaned))
 
 
 def verify_customer(
@@ -205,7 +225,19 @@ def verify_customer(
         if accs:
             known.extend(accs)
         else:
+            if interpretation is None and is_near_miss_customer(p, db):
+                continue
             unknown.append(p)
+
+    # Filter out unknown candidates that are just near-miss variants of a known customer
+    if known and unknown:
+        known_names = [a.name.lower() for a in known]
+        known_parts = [part.lower() for a in known for part in a.name.split()]
+        unknown = [
+            u for u in unknown
+            if not difflib.get_close_matches(u.lower(), known_names, n=1, cutoff=0.75)
+            and not any(len(w) >= 4 and difflib.get_close_matches(w, known_parts, n=1, cutoff=0.75) for w in u.lower().split())
+        ]
 
     # A customer was explicitly named but not found in the customer records:
     # NEVER fall back to active conversation context; fail verification.

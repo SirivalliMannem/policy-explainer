@@ -24,6 +24,23 @@ class PolicyDetailResponse(BaseModel):
     annual_premium: float
 
 
+class PolicyListItemResponse(BaseModel):
+    """Lightweight policy list item for search/selection with customer context."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    policy_number: str
+    customer_id: str
+    customer_name: str
+    customer_account_number: Optional[str] = None
+    line_of_business: str
+    product_name: Optional[str] = None
+    status: str
+    effective_date: Optional[date] = None
+    expiration_date: Optional[date] = None
+
+
 class CoverageResponse(BaseModel):
     """Policy coverage item response."""
 

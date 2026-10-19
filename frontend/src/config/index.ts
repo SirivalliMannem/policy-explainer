@@ -1,4 +1,4 @@
-import { LayoutDashboard, Sparkles, Settings, ScrollText } from 'lucide-react';
+import { LayoutDashboard, Sparkles, Settings, ScrollText, Layers } from 'lucide-react';
 import { NavItem } from '../types';
 
 export const APP_CONFIG = {

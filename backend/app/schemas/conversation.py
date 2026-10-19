@@ -20,31 +20,30 @@ class PolicyContextSummary(BaseModel):
 
 
 class CustomerContextSummary(BaseModel):
-    """The customer a conversation is about, with or without a single selected policy."""
+    """Context of the currently resolved customer within a conversation."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     customer_id: str
     customer_name: str
-    policy_count: int = 0
-
-
-class CustomerContextUpdateRequest(BaseModel):
-    """Make a customer the conversation's context without choosing one of their policies."""
-
-    customer_id: str = Field(..., min_length=1)
-    confirm_different_customer: bool = Field(False, description="Explicit confirmation when switching to an unrelated customer")
+    account_number: Optional[str] = None
+    email: Optional[str] = None
+    # How many policies the customer has on file (current terms).
+    policy_count: Optional[int] = None
 
 
 class ConversationCreateRequest(BaseModel):
     """Request payload to initiate a new conversation session."""
 
     policy_id: Optional[str] = None
+    customer_id: Optional[str] = None
 
 
 class ConversationContextUpdateRequest(BaseModel):
-    """Request payload to set/update resolved policy context for a conversation."""
+    """Request payload to set/update resolved policy or customer context for a conversation."""
 
-    policy_id: str = Field(..., min_length=1, description="Policy UUID to bind to context")
-    customer_id: Optional[str] = Field(None, description="Expected customer/account UUID for relationship validation")
+    policy_id: Optional[str] = Field(None, description="Policy UUID to bind to context")
+    customer_id: Optional[str] = Field(None, description="Customer/account UUID to bind to context or validate relationship")
     confirm_different_customer: bool = Field(False, description="Explicit confirmation when switching to an unrelated customer")
 
 
@@ -122,6 +121,8 @@ class QuestionSubmitRequest(BaseModel):
     # Answer about this policy instead of the conversation's context, without changing the context.
     # Used when one question is answered for each of a customer's matching policies.
     policy_id: Optional[str] = None
+    # Context-selected customer ID to constrain question answering and portfolio resolution.
+    customer_id: Optional[str] = None
     # Answer from this uploaded document only (attached to the same conversation by the same employee).
     document_id: Optional[str] = None
 
