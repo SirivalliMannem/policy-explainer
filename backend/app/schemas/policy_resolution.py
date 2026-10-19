@@ -80,3 +80,11 @@ class QuestionResolution(BaseModel):
     customer_verification: Optional[CustomerVerification] = None
     # The employee's recently checked policies, offered when a question names no policy.
     suggested_policies: list[PolicyContextCandidate] = []
+    # The customer the question is about (named, or the conversation's customer for a follow-up),
+    # once verified. The chat makes it the conversation's customer.
+    customer: Optional[VerifiedCustomer] = None
+    # True when the resolution came from the conversation's context ("What are the exclusions?" after
+    # "What are Elena's policies?") rather than from the words of the question.
+    from_context: bool = False
+    # A message that only names a customer ("Elena"): list their policies; nothing else is asked.
+    customer_lookup: bool = False

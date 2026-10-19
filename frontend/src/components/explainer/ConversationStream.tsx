@@ -18,7 +18,8 @@ import {
   ListChecks,
   Loader2,
 } from 'lucide-react';
-import type { AskedBy, DocumentInfo, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import type { AskedBy, CustomerContext, DocumentInfo, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import { sideLabel } from '../../lib/conversationContext';
 import type { ProcessState } from '../../lib/explainer';
 import { askerName, fullWhen } from '../../lib/conversations';
 import { answerConfidence, confidenceExplanation, isRecordAnswer } from '../../lib/confidence';
@@ -79,9 +80,16 @@ export type ChatMessage =
 
 import { InlineCustomerSwitchCard } from './InlineCustomerSwitchCard';
 
+/** One side of a customer switch: the customer, with the policy when a single one is meant. */
+export interface SwitchSide extends CustomerContext {
+  policy: PolicyContextCandidate | null;
+  /** The target customer's matching policies, when no single policy is meant. */
+  candidates?: PolicyContextCandidate[];
+}
+
 export interface PendingCustomerSwitch {
-  currentPolicy: PolicyContextCandidate;
-  targetPolicy: PolicyContextCandidate;
+  current: SwitchSide;
+  target: SwitchSide;
   pendingQuestion?: string | null;
   matchedOn?: string | null;
 }
@@ -912,12 +920,12 @@ export function ConversationStream({
       {pendingSwitch && onConfirmSwitchContext && onConfirmStartNew && onCancelSwitch && (
         <div className="my-6 flex justify-center w-full" role="region" aria-label="Customer context switch">
           <InlineCustomerSwitchCard
-            currentCustomerName={pendingSwitch.currentPolicy.customer_name}
-            currentPolicyNumber={pendingSwitch.currentPolicy.policy_number}
-            currentLineOfBusiness={pendingSwitch.currentPolicy.line_of_business}
-            targetCustomerName={pendingSwitch.targetPolicy.customer_name}
-            targetPolicyNumber={pendingSwitch.targetPolicy.policy_number}
-            targetLineOfBusiness={pendingSwitch.targetPolicy.line_of_business}
+            currentCustomerName={pendingSwitch.current.customer_name}
+            currentPolicyNumber={sideLabel(pendingSwitch.current.policy, pendingSwitch.current.policy_count)}
+            currentLineOfBusiness={pendingSwitch.current.policy?.line_of_business}
+            targetCustomerName={pendingSwitch.target.customer_name}
+            targetPolicyNumber={sideLabel(pendingSwitch.target.policy, pendingSwitch.target.candidates?.length || null)}
+            targetLineOfBusiness={pendingSwitch.target.policy?.line_of_business}
             onSwitchContext={onConfirmSwitchContext}
             onStartNewConversation={onConfirmStartNew}
             onCancel={onCancelSwitch}

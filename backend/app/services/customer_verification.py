@@ -141,8 +141,13 @@ def verify_customer(
     interpretation: Optional[dict],
     active: Optional[CorePolicy],
     db: Session,
+    customer: Optional[CoreAccount] = None,
 ) -> CustomerVerification:
-    """Verify the customer a question refers to, from the policy resolution and the customer records."""
+    """Verify the customer a question refers to, from the policy resolution and the customer records.
+
+    ``customer`` is the conversation's customer when it has no single selected policy.
+    """
+    current = active.account if active is not None and active.account is not None else customer
     if result.status == "resolved" and result.policy and result.policy.account:
         return CustomerVerification(
             status="verified",
@@ -165,13 +170,13 @@ def verify_customer(
                 message=f"{account.name} is in the customer records and has more than one matching policy.",
             )
         # The customer already selected in this conversation is one of them: keep with that customer.
-        if active and active.account_id in accounts:
+        if current is not None and current.id in accounts:
             return CustomerVerification(
                 status="verified",
                 matched_on="conversation",
                 reference=result.reference,
-                customers=[_customer(accounts[active.account_id])],
-                message=f"Several customers match; continuing with {accounts[active.account_id].name}, "
+                customers=[_customer(accounts[current.id])],
+                message=f"Several customers match; continuing with {accounts[current.id].name}, "
                 "the customer already selected in this conversation.",
             )
         names = sorted(a.name for a in accounts.values())
@@ -235,13 +240,13 @@ def verify_customer(
             )
 
     # No customer named in question: use verified active context if available
-    if active and active.account:
+    if current is not None:
         return CustomerVerification(
             status="verified",
             matched_on="conversation",
-            reference=active.account.name,
-            customers=[_customer(active.account)],
-            message=f"{active.account.name}, the customer already selected in this conversation.",
+            reference=current.name,
+            customers=[_customer(current)],
+            message=f"{current.name}, the customer already selected in this conversation.",
         )
     return CustomerVerification(status="not_named", message="The question does not name a customer yet.")
 

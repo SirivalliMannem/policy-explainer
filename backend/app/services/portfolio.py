@@ -26,6 +26,8 @@ PORTFOLIO_PATTERNS = [
     re.compile(rf"\bhow many\b.*\b{SUBJECT}\b", re.IGNORECASE),
     re.compile(rf"\b(?:what|which|list|show|give|display|name)\b.*\b{SUBJECT}\b", re.IGNORECASE),
     re.compile(rf"\b(?:any|other|all)\s+(?:other\s+)?(?:{SUBJECT})\b", re.IGNORECASE),
+    # "Does she have another policy?", "has he got more policies?", "is there a second policy?"
+    re.compile(rf"\b(?:does|do|has|have|is\s+there|are\s+there)\b.*\b(?:another|more|second)\s+(?:{SUBJECT})\b", re.IGNORECASE),
 ]
 # Questions about what a policy *says* or individual policy metadata stay with the grounded explainer even if they say "policy".
 CONTENT_TERMS = re.compile(
@@ -190,10 +192,16 @@ def portfolio_suggestions(result: PortfolioResult) -> list[str]:
     return [f"What does {p.policy_number} cover?" for p in result.policies[:3]]
 
 
-def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
-    """Answer a customer or portfolio question from policy records."""
+def answer_portfolio_question(question: str, db: Session, customer: Optional[CoreAccount] = None) -> PortfolioResult:
+    """Answer a customer or portfolio question from policy records.
+
+    ``customer`` is the conversation's customer for a question that refers to them without a name
+    ("Does she have another policy?"); a question naming someone is answered for whoever it names.
+    """
     text = question.strip()
     accounts, _ = find_accounts(text, db)
+    if not accounts and customer is not None:
+        accounts = [customer]
     scope = "customer" if accounts else "book"
 
     # A name was given but matches nobody: say so rather than answering for the whole book.

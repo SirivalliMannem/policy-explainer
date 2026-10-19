@@ -11,8 +11,10 @@ from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
 from app.models.conversation import ContextSwitchAudit, Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
-from app.models.policy import CorePolicy
+from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.conversation import (
+    CustomerContextSummary,
+    CustomerContextUpdateRequest,
     ContextCheckResponse,
     ContextSwitchAuditItem,
     ConversationArchiveResponse,
@@ -64,7 +66,9 @@ from app.services.factual_lookup import (
     is_factual_query,
     is_wording_query,
 )
-from app.services.policy_resolver import resolve_policy_from_question
+from app.services.policy_resolver import find_accounts, resolve_policy_from_question
+from app.services import conversation_context
+from app.services.customer_verification import _named_people
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -110,6 +114,18 @@ def _build_policy_context(policy_id: Optional[str], db: Session) -> Optional[Pol
     )
 
 
+def _customer_context(conv: Conversation, db: Session) -> Optional[CustomerContextSummary]:
+    """The conversation's customer, with how many policies they have on file."""
+    account = conversation_context.active_customer(conv, db)
+    if account is None:
+        return None
+    return CustomerContextSummary(
+        customer_id=account.id,
+        customer_name=account.name,
+        policy_count=len(conversation_context.customer_policies(account, db)),
+    )
+
+
 def _get_conversation_or_404(conversation_id: str, db: Session, employee: EmployeeUser) -> Conversation:
     """The conversation if it belongs to the current employee; otherwise 404.
 
@@ -152,6 +168,7 @@ def create_conversation(
     conversation = Conversation(
         employee_id=employee.id,
         policy_id=policy_id,
+        customer_id=policy.account_id if policy else None,
         status="active",
         created_at=now,
         updated_at=now,
@@ -179,6 +196,7 @@ def create_conversation(
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         policy_context=_build_policy_context(conversation.policy_id, db),
+        customer_context=_customer_context(conversation, db),
     )
 
 
@@ -260,6 +278,7 @@ def rename_conversation(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=_build_policy_context(conv.policy_id, db),
+        customer_context=_customer_context(conv, db),
     )
 
 
@@ -279,6 +298,7 @@ def get_conversation(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=_build_policy_context(conv.policy_id, db),
+        customer_context=_customer_context(conv, db),
     )
 
 
@@ -327,7 +347,8 @@ def set_conversation_context(
 
     # 3. Evaluate transition against active context
     current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
-    check = evaluate_context_transition(current_policy, target_policy)
+    current_customer = conversation_context.active_customer(conv, db)
+    check = evaluate_context_transition(current_policy, target_policy, current_customer)
 
     # 4. Require explicit confirmation if switching to a different customer
     if check.switch_type == "different_customer" and not payload.confirm_different_customer:
@@ -340,12 +361,13 @@ def set_conversation_context(
             switch_type=check.switch_type,
             outcome="rejected",
             reason="Unconfirmed switch to a different customer",
+            previous_customer=current_customer,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"You're switching to a different customer. "
-                f"You're currently discussing a policy belonging to {check.current_customer.name if check.current_customer else 'Customer A'}. "
+                f"You're currently discussing {check.current_customer.name if check.current_customer else 'Customer A'}. "
                 f"The selected policy belongs to {check.target_customer.name}. "
                 "Explicit confirmation is required to switch the existing conversation."
             ),
@@ -353,6 +375,7 @@ def set_conversation_context(
 
     # 5. Apply context update
     conv.policy_id = policy_id
+    conv.customer_id = target_policy.account_id
     conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(conv)
@@ -369,6 +392,7 @@ def set_conversation_context(
         new_policy=target_policy,
         switch_type=check.switch_type,
         outcome="success",
+        previous_customer=current_customer,
     )
 
     return ConversationResponse(
@@ -379,6 +403,7 @@ def set_conversation_context(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=_build_policy_context(conv.policy_id, db),
+        customer_context=_customer_context(conv, db),
     )
 
 
@@ -391,7 +416,9 @@ def clear_conversation_context(
     """Clear the currently bound policy context from the conversation."""
     conv = _get_conversation_or_404(conversation_id, db, employee)
     current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
+    current_customer = conversation_context.active_customer(conv, db)
     conv.policy_id = None
+    conv.customer_id = None
     conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(conv)
@@ -406,6 +433,7 @@ def clear_conversation_context(
         new_policy=None,
         switch_type="clear_context",
         outcome="success",
+        previous_customer=current_customer,
     )
 
     return ConversationResponse(
@@ -416,6 +444,72 @@ def clear_conversation_context(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=None,
+    )
+
+
+@router.post("/{conversation_id}/customer-context", response_model=ConversationResponse)
+def set_customer_context(
+    conversation_id: str,
+    payload: CustomerContextUpdateRequest,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Make a customer the conversation's context without choosing one of their policies
+    ("What are Elena's policies?"). Follow-ups then resolve to that customer's policies.
+
+    The selected policy is kept when it is that customer's; another customer needs the same explicit
+    confirmation as a policy of another customer, and the switch is recorded in the audit trail.
+    """
+    conv = _get_conversation_or_404(conversation_id, db, employee)
+    account = db.get(CoreAccount, payload.customer_id.strip())
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+    for policy in db.query(CorePolicy).filter(CorePolicy.account_id == account.id).all():
+        validate_employee_authorization(employee, policy)
+
+    current_policy = db.get(CorePolicy, conv.policy_id) if conv.policy_id else None
+    current_customer = conversation_context.active_customer(conv, db)
+    if current_customer is not None and current_customer.id == account.id:
+        # Already this customer's conversation: nothing changes.
+        if conv.customer_id != account.id:
+            conv.customer_id = account.id
+            db.commit()
+            db.refresh(conv)
+    else:
+        switch_type = "different_customer" if current_customer is not None else "initial_selection"
+        if switch_type == "different_customer" and not payload.confirm_different_customer:
+            record_context_switch(
+                db=db, conversation_id=conv.id, employee=employee, previous_policy=current_policy, new_policy=None,
+                switch_type=switch_type, outcome="rejected", reason="Unconfirmed switch to a different customer",
+                previous_customer=current_customer, new_customer=account,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"You're currently discussing {current_customer.name}. The question is about {account.name}. "
+                    "Explicit confirmation is required to switch the existing conversation."
+                ),
+            )
+        conv.policy_id = None
+        conv.customer_id = account.id
+        conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+        db.refresh(conv)
+        invalidate_conversation(conv.id)
+        record_context_switch(
+            db=db, conversation_id=conv.id, employee=employee, previous_policy=current_policy, new_policy=None,
+            switch_type=switch_type, outcome="success", previous_customer=current_customer, new_customer=account,
+        )
+
+    return ConversationResponse(
+        conversation_id=conv.id,
+        employee_id=conv.employee_id,
+        status=conv.status,
+        title=conv.title,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+        policy_context=_build_policy_context(conv.policy_id, db),
+        customer_context=_customer_context(conv, db),
     )
 
 
@@ -477,9 +571,13 @@ def submit_question(
 
     # 1. Customer and portfolio questions ("how many policies does X have?", "what are the policies of Sirivalli")
     # are answered from policy records. If an unknown customer is named, answer_portfolio_question returns
-    # scope="not_found", policies=[], and does not expose other customers' policies.
-    if not payload.policy_id and asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
-        return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee)
+    # scope="not_found", policies=[], and does not expose other customers' policies. A message that only
+    # names a customer ("Elena") lists their policies, and so does a question about a customer on file
+    # who has none. "Does she have another policy?" is about the conversation's customer.
+    if not payload.policy_id:
+        subject = _portfolio_subject(conv, question_text, interpretation, db)
+        if subject is not None or asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
+            return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee, subject or None)
 
     # 2. Customer verification check: for policy-specific questions, if the question explicitly names a customer
     # who is not on file, fail customer verification immediately without exposing other customers' policies.
@@ -489,15 +587,28 @@ def submit_question(
     if cust_verif.status == "not_found":
         return _answer_customer_not_found(conv, question_text, cust_verif, db, started, employee)
 
-    # 3. Explicit reference to a different customer in question text requires confirmation if not specified in payload
-    if not payload.policy_id and conv.policy_id and active_policy and cust_verif.status == "verified" and cust_verif.matched_on != "conversation":
-        if cust_verif.customers and active_policy.account and cust_verif.customers[0].customer_id != active_policy.account_id:
+    # 3. Explicit reference to a different customer in question text requires confirmation if not specified in payload.
+    # The conversation's customer counts even without a selected policy ("What are Elena's policies?").
+    current_customer = conversation_context.active_customer(conv, db)
+    if not payload.policy_id and current_customer is not None and cust_verif.status == "verified" and cust_verif.matched_on != "conversation":
+        if cust_verif.customers and cust_verif.customers[0].customer_id != current_customer.id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
                     f"You're asking about a policy belonging to {cust_verif.customers[0].name}. "
-                    f"You're currently discussing a policy belonging to {active_policy.account.name}. "
+                    f"You're currently discussing {current_customer.name}. "
                     "Explicit confirmation is required to switch the existing conversation."
+                ),
+            )
+    # An explicit policy (one of several answered in turn) must be the conversation customer's.
+    if payload.policy_id and current_customer is not None:
+        explicit = db.get(CorePolicy, payload.policy_id)
+        if explicit is not None and explicit.account_id != current_customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Policy {explicit.policy_number} does not belong to {current_customer.name}, the customer of this "
+                    "conversation. Switch the conversation's customer first."
                 ),
             )
 
@@ -533,6 +644,7 @@ def submit_question(
     # explicit policy (one of a customer's several policies, answered in turn) never changes it.
     if not conv.policy_id and not payload.policy_id:
         conv.policy_id = policy_id
+        conv.customer_id = policy.account_id
         conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
 
@@ -1062,6 +1174,38 @@ def _answer_customer_not_found(
     )
 
 
+def _portfolio_subject(
+    conv: Conversation, question_text: str, interpretation: Optional[dict], db: Session
+) -> Optional[CoreAccount | bool]:
+    """Whether a question is a customer lookup, and whose.
+
+    Returns the conversation's customer for "Does she have another policy?" / "What are her policies?",
+    True for a message that only names a customer or names a customer with no policies (the named
+    customer is found from the question), and None for anything else.
+    """
+    canonical = understood_text(question_text, interpretation)
+    accounts, _ = find_accounts(canonical, db)
+    if not accounts and canonical != question_text:
+        accounts, _ = find_accounts(question_text, db)
+    if accounts:
+        if conversation_context.is_name_only(question_text, accounts):
+            return True
+        unique = {a.id: a for a in accounts}
+        if len(unique) == 1 and not db.query(CorePolicy).filter(CorePolicy.account_id.in_(unique)).count():
+            return True
+        return None
+    if _named_people(question_text, interpretation):
+        return None
+    customer = conversation_context.active_customer(conv, db)
+    if (
+        customer is not None
+        and conversation_context.PRONOUN.search(question_text)
+        and asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id))
+    ):
+        return customer
+    return None
+
+
 def _answer_portfolio_question(
     conv: Conversation,
     question_text: str,
@@ -1069,12 +1213,19 @@ def _answer_portfolio_question(
     interpretation: Optional[dict],
     started: float,
     employee: EmployeeUser,
+    customer: Optional[CoreAccount | bool] = None,
 ) -> QuestionAnswerResponse:
-    """Answer a customer/portfolio question from policy records and record it in the ledger."""
+    """Answer a customer/portfolio question from policy records and record it in the ledger.
+
+    ``customer`` answers for the conversation's customer when the question refers to them ("her policies").
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     lookup_started = time.perf_counter()
     # The canonical wording carries corrected spelling and exact policyholder names.
-    result = answer_portfolio_question(understood_text(question_text, interpretation), db)
+    result = answer_portfolio_question(
+        understood_text(question_text, interpretation), db,
+        customer=customer if isinstance(customer, CoreAccount) else None,
+    )
     lookup_ms = int(round((time.perf_counter() - lookup_started) * 1000))
 
     payload = portfolio_payload(result)

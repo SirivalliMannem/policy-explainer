@@ -1,11 +1,13 @@
 import { Loader2, Shield } from 'lucide-react';
-import type { PolicyContextCandidate } from '../../types';
+import type { CustomerContext, PolicyContextCandidate } from '../../types';
 import type { PolicyFeatureTab } from './PolicyFeaturesPanel';
 import { QUICK_ACTIONS } from './QuickPolicyActions';
 import { formatDate, lineLabel, statusLabel } from '../../lib/explainer';
 
 interface PolicyContextBannerProps {
   policy: PolicyContextCandidate | null;
+  /** The conversation's customer when no single policy is selected. */
+  customer?: CustomerContext | null;
   isResolving?: boolean;
   openTab?: PolicyFeatureTab | null;
   onOpenTab: (tab: PolicyFeatureTab) => void;
@@ -27,6 +29,7 @@ const TABS: { tab: PolicyFeatureTab; label: string }[] = [
  */
 export function PolicyContextBanner({
   policy,
+  customer,
   isResolving,
   openTab,
   onOpenTab,
@@ -88,6 +91,22 @@ export function PolicyContextBanner({
               ))}
             </nav>
           </div>
+        </div>
+      ) : customer && !isResolving ? (
+        <div className="min-w-0 flex-1" role="group" aria-label="Conversation customer">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="truncate text-[14px] font-semibold text-[#0F2A43]">{customer.customer_name}</span>
+            {customer.policy_count !== undefined && (
+              <span className="rounded border border-[#CBD5E1] bg-white px-1.5 py-px text-[10px] font-semibold uppercase text-[#475569]">
+                {customer.policy_count === 1 ? '1 policy' : `${customer.policy_count} policies`}
+              </span>
+            )}
+          </div>
+          <p className="truncate text-[12px] text-[#64748B]">
+            {customer.policy_count === 0
+              ? 'No policies on file for this customer.'
+              : 'Questions refer to this customer’s policies — name one (“the auto policy”, “the second one”) to pick it.'}
+          </p>
         </div>
       ) : (
         <div className="min-w-0 flex-1">

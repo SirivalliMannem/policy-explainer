@@ -19,6 +19,21 @@ class PolicyContextSummary(BaseModel):
     status: Optional[str] = None
 
 
+class CustomerContextSummary(BaseModel):
+    """The customer a conversation is about, with or without a single selected policy."""
+
+    customer_id: str
+    customer_name: str
+    policy_count: int = 0
+
+
+class CustomerContextUpdateRequest(BaseModel):
+    """Make a customer the conversation's context without choosing one of their policies."""
+
+    customer_id: str = Field(..., min_length=1)
+    confirm_different_customer: bool = Field(False, description="Explicit confirmation when switching to an unrelated customer")
+
+
 class ConversationCreateRequest(BaseModel):
     """Request payload to initiate a new conversation session."""
 
@@ -96,6 +111,8 @@ class ConversationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     policy_context: Optional[PolicyContextSummary] = None
+    # The conversation's customer: the policy's customer, or a customer chosen without one policy.
+    customer_context: Optional[CustomerContextSummary] = None
 
 
 class QuestionSubmitRequest(BaseModel):

@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, ArrowUp, FileText, FileX2, Loader2, Plus, Upload, X } from 'lucide-react';
 import type {
   AskedBy,
+  CustomerContext,
   DocumentInfo,
   EvidenceItem,
   PolicyContextCandidate,
@@ -22,6 +23,7 @@ import {
   resolvePolicyContext,
   resolvePolicyFromQuestion,
   setConversationContext,
+  setCustomerContext,
   submitQuestion,
 } from '../services/api';
 import { currentEmployee } from '../services/auth';
@@ -46,6 +48,7 @@ import {
 } from '../lib/explainer';
 import { notifyConversationsChanged } from '../lib/conversations';
 import { groupPolicyAnswers } from '../lib/answerGroups';
+import { contextAction, currentCustomer } from '../lib/conversationContext';
 
 /** Most policies one question is answered for at once; more than this, the employee chooses. */
 const MAX_ANSWER_ALL = 4;
@@ -272,9 +275,28 @@ export function ExplainerPage() {
   const newVisitRef = useRef<string | null>(null);
   const loadIdRef = useRef(0);
 
+  // The conversation's customer when no single policy is selected ("What are Elena's policies?").
+  const [activeCustomer, setActiveCustomerState] = useState<CustomerContext | null>(null);
+  const customerRef = useRef<CustomerContext | null>(null);
+  const setActiveCustomer = (customer: CustomerContext | null) => {
+    customerRef.current = customer;
+    setActiveCustomerState(customer);
+  };
+  /** Select a policy; its customer becomes the conversation's customer. Clearing it keeps the customer. */
   const setActivePolicy = (policy: PolicyContextCandidate | null) => {
     policyRef.current = policy;
     setActivePolicyState(policy);
+    if (policy) setActiveCustomer({ customer_id: policy.customer_id, customer_name: policy.customer_name });
+  };
+  /** Make a customer the conversation's context without one of their policies (the server records it). */
+  const bindCustomer = async (convId: string, target: CustomerContext, confirmDifferentCustomer = false) => {
+    const conv = await setCustomerContext(convId, target.customer_id, { confirmDifferentCustomer });
+    if (!conv.policy_context) {
+      policyRef.current = null;
+      setActivePolicyState(null);
+      setFeatureTab(null);
+    }
+    setActiveCustomer(conv.customer_context ?? target);
   };
   const nextId = (prefix: string) => `${prefix}-${++idRef.current}`;
   const push = (msg: ChatMessage) => setMessages((prev) => [...prev, msg]);
@@ -331,7 +353,8 @@ export function ExplainerPage() {
     convId: string,
     contextDetail: string,
     forPolicy?: PolicyContextCandidate,
-    verified?: string
+    verified?: string,
+    portfolio = false
   ) => {
     // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
     openPanel({ mode: 'live' }, null);
@@ -351,7 +374,7 @@ export function ExplainerPage() {
 
     try {
       const targetPolicy = forPolicy || policyRef.current;
-      const result = await submitQuestion(convId, question, targetPolicy?.policy_id);
+      const result = await submitQuestion(convId, question, portfolio ? undefined : targetPolicy?.policy_id);
       setProcess((prev) => ({
         ...prev,
         phase: 'completed',
@@ -385,6 +408,7 @@ export function ExplainerPage() {
     setPendingSwitch(null);
     setPolicySwitcherOpen(false);
     setAttachedDoc(null);
+    setActiveCustomer(null);
   };
 
   const unitLabel = (doc: DocumentInfo) => `${doc.page_count} ${doc.unit === 'page' ? 'page' : 'section'}${doc.page_count === 1 ? '' : 's'}`;
@@ -493,14 +517,14 @@ export function ExplainerPage() {
     }));
   };
 
-  const handleAsk = async (raw: string) => {
+  const handleAsk = async (raw: string, options: { echo?: boolean } = {}) => {
     const text = raw.trim();
     if (!text || busyRef.current) return;
     busyRef.current = true;
     setIsWorking(true);
     setInput('');
     const askedAt = new Date().toISOString();
-    push({ kind: 'user', id: nextId('user'), time: nowTime(), text, askedBy: me(), askedAt });
+    if (options.echo !== false) push({ kind: 'user', id: nextId('user'), time: nowTime(), text, askedBy: me(), askedAt });
     setProcess({
       phase: 'running',
       result: null,
@@ -653,11 +677,46 @@ export function ExplainerPage() {
       const understood = interpretedText(resolution.interpretation);
       const understoodNote = understood ? ` · understood as “${understood}”` : '';
 
-      // Customer / portfolio questions are answered from policy records. They need no single-policy
-      // context, and they neither change the active context nor ask which policy to check.
+      // A question about another customer than the conversation's never runs against the current one:
+      // the employee switches this conversation or starts a new one first.
+      const cur = currentCustomer(policyRef.current, customerRef.current);
+      const action = contextAction(resolution, cur);
+      if (action.kind === 'switch' && cur) {
+        const pendingAsk = pendingQuestionRef.current;
+        setPendingSwitch({
+          current: { ...cur, policy: policyRef.current, policy_count: customerRef.current?.policy_count },
+          // A lookup ("David", "What are David's policies?") switches to the customer, then lists their policies.
+          target: {
+            ...action.target,
+            policy: resolution.intent === 'portfolio' ? null : action.policy,
+            candidates: resolution.candidates.length ? resolution.candidates : resolution.policy ? [resolution.policy] : [],
+          },
+          pendingQuestion: pendingAsk && isBareReference(text, resolution) ? pendingAsk : text,
+          matchedOn: resolution.matched_on || null,
+        });
+        setProcess(IDLE_PROCESS);
+        return;
+      }
+
+      // Customer / portfolio questions are answered from policy records. A lookup of one customer
+      // ("Elena", "What are Elena's policies?") makes them the conversation's customer, so the next
+      // question ("What are the exclusions?") needs no name.
       if (resolution.intent === 'portfolio') {
+        try {
+          if (action.kind === 'set_policy') {
+            await setConversationContext(convId, action.policy.policy_id, { customerId: action.policy.customer_id });
+            setActivePolicy(action.policy);
+          } else if (action.kind === 'set_customer') {
+            await bindCustomer(convId, action.target);
+          }
+        } catch (err) {
+          const friendly = describeError(err);
+          failProcess(friendly);
+          push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+          return;
+        }
         const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
-        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records`);
+        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records`, undefined, undefined, true);
         return;
       }
 
@@ -675,8 +734,8 @@ export function ExplainerPage() {
         // Scenario C: If switching to an unrelated customer, require explicit confirmation via inline card
         if (current && current.customer_id && resolved.customer_id && current.customer_id !== resolved.customer_id) {
           setPendingSwitch({
-            currentPolicy: current,
-            targetPolicy: resolved,
+            current: { customer_id: current.customer_id, customer_name: current.customer_name, policy: current },
+            target: { customer_id: resolved.customer_id, customer_name: resolved.customer_name, policy: resolved },
             pendingQuestion: question,
             matchedOn: resolution.matched_on || null,
           });
@@ -716,14 +775,24 @@ export function ExplainerPage() {
         resolution.status === 'ambiguous' &&
         resolution.answer_all &&
         resolution.candidates.length <= MAX_ANSWER_ALL &&
-        // Another customer's policies still go through the switch confirmation below.
-        (!current || resolution.candidates.every((c) => c.customer_id === current.customer_id))
+        // Another customer's policies went through the switch confirmation above.
+        (!cur || resolution.candidates.every((c) => c.customer_id === cur.customer_id))
       ) {
         // Several policies of one customer: answer the question for each, labelled by policy number.
         const pending = pendingQuestionRef.current;
         if (pending && isBareReference(text, resolution)) question = pending;
         pendingQuestionRef.current = null;
         const policies = resolution.candidates;
+        if (action.kind === 'set_customer') {
+          try {
+            await bindCustomer(convId, action.target);
+          } catch (err) {
+            const friendly = describeError(err);
+            failProcess(friendly);
+            push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+            return;
+          }
+        }
         push({
           kind: 'assistant',
           id: nextId('assistant'),
@@ -812,12 +881,13 @@ export function ExplainerPage() {
     setPolicySwitcherOpen(false);
     const current = policyRef.current;
     const pending = pendingQuestionRef.current;
+    const cur = currentCustomer(current, customerRef.current);
 
     // Scenario C: If selecting a policy belonging to a different customer, require confirmation via inline card
-    if (current && current.customer_id && candidate.customer_id && current.customer_id !== candidate.customer_id) {
+    if (cur && candidate.customer_id && cur.customer_id !== candidate.customer_id) {
       setPendingSwitch({
-        currentPolicy: current,
-        targetPolicy: candidate,
+        current: { ...cur, policy: current, policy_count: customerRef.current?.policy_count },
+        target: { customer_id: candidate.customer_id, customer_name: candidate.customer_name, policy: candidate },
         pendingQuestion: pending || null,
         matchedOn: null,
       });
@@ -935,8 +1005,23 @@ export function ExplainerPage() {
   /** Scenario D: Start a new conversation with the newly selected customer/policy. */
   const handleConfirmStartNew = async () => {
     if (!pendingSwitch) return;
-    const { targetPolicy, pendingQuestion } = pendingSwitch;
+    const { target, pendingQuestion } = pendingSwitch;
+    const targetPolicy = target.policy;
     setPendingSwitch(null);
+
+    if (!targetPolicy) {
+      // The other customer has several policies (or the question was a lookup): the new conversation
+      // resolves the question from scratch, with that customer named in it.
+      try {
+        const newConv = await createConversation();
+        notifyConversationsChanged();
+        navigate(`/app/explainer/c/${newConv.conversation_id}`, { state: pendingQuestion ? { initialQuestion: pendingQuestion } : {} });
+      } catch (err) {
+        const friendly = describeError(err);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+      }
+      return;
+    }
 
     try {
       const newConv = await createConversation(targetPolicy.policy_id);
@@ -968,8 +1053,33 @@ export function ExplainerPage() {
   /** Scenario C action 2: Switch the existing conversation to the newly selected customer. */
   const handleConfirmSwitchExisting = async () => {
     if (!pendingSwitch) return;
-    const { targetPolicy, pendingQuestion, matchedOn } = pendingSwitch;
+    const { target, pendingQuestion, matchedOn } = pendingSwitch;
+    const targetPolicy = target.policy;
     setPendingSwitch(null);
+
+    if (!targetPolicy) {
+      // The other customer becomes this conversation's customer; the question is then answered for them
+      // (each of their policies, or their policy list) exactly as if the conversation had started there.
+      const convId = conversationRef.current;
+      if (!convId) return;
+      try {
+        await bindCustomer(convId, { customer_id: target.customer_id, customer_name: target.customer_name }, true);
+        notifyConversationsChanged();
+      } catch (err) {
+        const friendly = describeError(err);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+        return;
+      }
+      push({
+        kind: 'assistant',
+        id: nextId('assistant'),
+        time: nowTime(),
+        text: `Switched this conversation to ${target.customer_name}. Questions now refer to ${target.customer_name}'s policies.`,
+        suggestions: [],
+      });
+      if (pendingQuestion) await handleAsk(pendingQuestion, { echo: false });
+      return;
+    }
 
     busyRef.current = true;
     setIsWorking(true);
@@ -1039,6 +1149,7 @@ export function ExplainerPage() {
   const handleClearContext = async () => {
     const convId = conversationRef.current;
     setActivePolicy(null);
+    setActiveCustomer(null);
     setFeatureTab(null);
     pendingQuestionRef.current = null;
     if (convId) {
@@ -1109,6 +1220,9 @@ export function ExplainerPage() {
     const conv = await getConversation(convId);
     if (conv.policy_context && conversationRef.current === convId) {
       setActivePolicy(await resolvePolicyContext(conv.policy_context.policy_id));
+    }
+    if (conversationRef.current === convId && conv.customer_context) {
+      setActiveCustomer(conv.customer_context);
     }
     const [records, docs] = await Promise.all([
       getConversationMessages(convId),
@@ -1362,6 +1476,7 @@ export function ExplainerPage() {
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <PolicyContextBanner
           policy={activePolicy}
+          customer={activePolicy ? null : activeCustomer}
           isResolving={isResolving}
           openTab={featureTab}
           onOpenTab={(tab) => openTab(tab)}

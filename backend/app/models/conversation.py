@@ -22,6 +22,9 @@ class Conversation(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     employee_id: Mapped[str] = mapped_column(String(100), default="emp_demo_01", index=True)
     policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # The customer the conversation is about. Set with the policy, or alone when the customer has
+    # several policies ("What are Elena's policies?"), so follow-ups resolve to that customer.
+    customer_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

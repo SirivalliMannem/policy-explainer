@@ -291,6 +291,21 @@ export async function setConversationContext(
   );
 }
 
+/**
+ * Make a customer the conversation's context without choosing one of their policies
+ * ("What are Elena's policies?"). Another customer needs `confirmDifferentCustomer` (409 otherwise).
+ */
+export async function setCustomerContext(
+  conversationId: string,
+  customerId: string,
+  options?: { confirmDifferentCustomer?: boolean }
+): Promise<ConversationResponse> {
+  return apiClient.post<ConversationResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/customer-context`,
+    { customer_id: customerId, confirm_different_customer: options?.confirmDifferentCustomer ?? false }
+  );
+}
+
 export async function checkContextSwitch(
   conversationId: string,
   targetPolicyId: string

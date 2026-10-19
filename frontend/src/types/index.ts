@@ -200,6 +200,19 @@ export interface QuestionResolution {
   answer_all?: boolean;
   customer_verification?: CustomerVerification | null;
   term_selection?: TermSelection | null;
+  /** The customer the question is about once verified: named, or the conversation's customer. */
+  customer?: { customer_id: string; name: string; account_number?: string | null } | null;
+  /** Resolved from the conversation's customer ("What are the exclusions?" after "What are Elena's policies?"). */
+  from_context?: boolean;
+  /** The message only names a customer ("Elena"): their policies are listed. */
+  customer_lookup?: boolean;
+}
+
+/** The customer a conversation is about, with or without one selected policy. */
+export interface CustomerContext {
+  customer_id: string;
+  customer_name: string;
+  policy_count?: number;
 }
 
 export interface CitationItem {
@@ -428,6 +441,8 @@ export interface ConversationResponse {
     PolicyContextCandidate,
     'policy_id' | 'policy_number' | 'customer_id' | 'customer_name' | 'line_of_business' | 'product_name' | 'status'
   > | null;
+  /** The conversation's customer: the policy's, or one chosen without a single policy. */
+  customer_context?: CustomerContext | null;
 }
 
 export interface ConversationMessageRecord {
