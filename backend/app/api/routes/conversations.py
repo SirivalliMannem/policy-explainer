@@ -11,7 +11,7 @@ from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
 from app.models.conversation import ContextSwitchAudit, Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
-from app.models.policy import CorePolicy
+from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.conversation import (
     ContextCheckResponse,
     ContextSwitchAuditItem,
@@ -21,6 +21,7 @@ from app.schemas.conversation import (
     ConversationCreateRequest,
     ConversationResponse,
     ConversationTitleUpdateRequest,
+    CustomerContextSummary,
     PolicyContextSummary,
     QuestionHistoryItem,
     QuestionSubmitRequest,
@@ -64,7 +65,13 @@ from app.services.factual_lookup import (
     is_factual_query,
     is_wording_query,
 )
-from app.services.policy_resolver import resolve_policy_from_question
+from app.services.policy_resolver import (
+    current_terms,
+    find_accounts,
+    line_hint,
+    resolve_policy_from_question,
+)
+from app.services import conversation_context
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -110,6 +117,33 @@ def _build_policy_context(policy_id: Optional[str], db: Session) -> Optional[Pol
     )
 
 
+def _build_customer_context(
+    customer_id: Optional[str], policy_id: Optional[str], db: Session
+) -> Optional[CustomerContextSummary]:
+    """Helper to load and format customer context summary if customer_id or policy_id is set."""
+    if customer_id:
+        account = db.query(CoreAccount).filter(CoreAccount.id == customer_id).first()
+        if account:
+            return CustomerContextSummary(
+                customer_id=account.id,
+                customer_name=account.name,
+                account_number=account.account_number or "",
+                email=account.email or "",
+                policy_count=len(conversation_context.customer_policies(account, db)),
+            )
+    if policy_id:
+        policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
+        if policy and policy.account:
+            return CustomerContextSummary(
+                customer_id=policy.account.id,
+                customer_name=policy.account.name,
+                account_number=policy.account.account_number or "",
+                email=policy.account.email or "",
+                policy_count=len(conversation_context.customer_policies(policy.account, db)),
+            )
+    return None
+
+
 def _get_conversation_or_404(conversation_id: str, db: Session, employee: EmployeeUser) -> Conversation:
     """The conversation if it belongs to the current employee; otherwise 404.
 
@@ -135,9 +169,12 @@ def create_conversation(
     employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    """Create a new conversation session with optional initial policy context."""
+    """Create a new conversation session with optional initial policy or customer context."""
     policy_id: Optional[str] = None
+    customer_id: Optional[str] = None
     policy: Optional[CorePolicy] = None
+    account: Optional[CoreAccount] = None
+
     if payload and payload.policy_id and payload.policy_id.strip():
         policy_id = payload.policy_id.strip()
         policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
@@ -147,11 +184,21 @@ def create_conversation(
                 detail="Policy not found",
             )
         validate_employee_authorization(employee, policy)
+        customer_id = policy.account_id
+    elif payload and payload.customer_id and payload.customer_id.strip():
+        customer_id = payload.customer_id.strip()
+        account = db.query(CoreAccount).filter(CoreAccount.id == customer_id).first()
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Customer not found",
+            )
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     conversation = Conversation(
         employee_id=employee.id,
         policy_id=policy_id,
+        customer_id=customer_id,
         status="active",
         created_at=now,
         updated_at=now,
@@ -170,6 +217,16 @@ def create_conversation(
             switch_type="initial_selection",
             outcome="success",
         )
+    elif customer_id and account:
+        record_context_switch(
+            db=db,
+            conversation_id=conversation.id,
+            employee=employee,
+            previous_policy=None,
+            new_policy=None,
+            switch_type="customer_selection",
+            outcome="success",
+        )
 
     return ConversationResponse(
         conversation_id=conversation.id,
@@ -179,6 +236,7 @@ def create_conversation(
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         policy_context=_build_policy_context(conversation.policy_id, db),
+        customer_context=_build_customer_context(conversation.customer_id, conversation.policy_id, db),
     )
 
 
@@ -260,6 +318,7 @@ def rename_conversation(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=_build_policy_context(conv.policy_id, db),
+        customer_context=_build_customer_context(conv.customer_id, conv.policy_id, db),
     )
 
 
@@ -279,6 +338,7 @@ def get_conversation(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=_build_policy_context(conv.policy_id, db),
+        customer_context=_build_customer_context(conv.customer_id, conv.policy_id, db),
     )
 
 
@@ -309,28 +369,65 @@ def set_conversation_context(
     employee: EmployeeUser = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    """Update or bind a resolved policy context to the conversation with authorization and switch checks."""
+    """Update or bind a resolved policy or customer context to the conversation with authorization and switch checks."""
     conv = _get_conversation_or_404(conversation_id, db, employee)
-    policy_id = payload.policy_id.strip()
-    target_policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
-    if not target_policy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy not found",
-        )
-
-    # 1. Authorize employee access to target policy
-    validate_employee_authorization(employee, target_policy)
-
-    # 2. Validate customer relationship if customer_id specified
-    validate_policy_customer_relationship(target_policy, payload.customer_id)
-
-    # 3. Evaluate transition against active context
     current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
-    check = evaluate_context_transition(current_policy, target_policy)
+    current_customer_id = conv.customer_id or (current_policy.account_id if current_policy else None)
+    current_customer = db.get(CoreAccount, current_customer_id) if current_customer_id else None
 
-    # 4. Require explicit confirmation if switching to a different customer
-    if check.switch_type == "different_customer" and not payload.confirm_different_customer:
+    if payload.policy_id and payload.policy_id.strip():
+        policy_id = payload.policy_id.strip()
+        target_policy = db.query(CorePolicy).filter(CorePolicy.id == policy_id).first()
+        if not target_policy:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Policy not found",
+            )
+
+        # 1. Authorize employee access to target policy
+        validate_employee_authorization(employee, target_policy)
+
+        # 2. Validate customer relationship if customer_id specified
+        validate_policy_customer_relationship(target_policy, payload.customer_id)
+
+        # 3. Evaluate transition against active context
+        check = evaluate_context_transition(current_policy, target_policy, current_customer)
+
+        # 4. Require explicit confirmation if switching to a different customer
+        if check.switch_type == "different_customer" and not payload.confirm_different_customer:
+            record_context_switch(
+                db=db,
+                conversation_id=conv.id,
+                employee=employee,
+                previous_policy=current_policy,
+                new_policy=target_policy,
+                switch_type=check.switch_type,
+                outcome="rejected",
+                reason="Unconfirmed switch to a different customer",
+                previous_customer=current_customer,
+            )
+            current_cust_name = check.current_customer.name if check.current_customer else "Customer A"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"You're switching to a different customer. "
+                    f"You're currently discussing {current_cust_name}. "
+                    f"The selected policy belongs to {check.target_customer.name}. "
+                    "Explicit confirmation is required to switch the existing conversation."
+                ),
+            )
+
+        # 5. Apply context update
+        conv.policy_id = target_policy.id
+        conv.customer_id = target_policy.account_id
+        conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+        db.refresh(conv)
+
+        # 6. Invalidate interpretation cache to prevent cross-policy contamination
+        invalidate_conversation(conv.id)
+
+        # 7. Record successful context transition audit
         record_context_switch(
             db=db,
             conversation_id=conv.id,
@@ -338,48 +435,83 @@ def set_conversation_context(
             previous_policy=current_policy,
             new_policy=target_policy,
             switch_type=check.switch_type,
-            outcome="rejected",
-            reason="Unconfirmed switch to a different customer",
+            outcome="success",
+            previous_customer=current_customer,
         )
+
+        return ConversationResponse(
+            conversation_id=conv.id,
+            employee_id=conv.employee_id,
+            status=conv.status,
+            title=conv.title,
+            created_at=conv.created_at,
+            updated_at=conv.updated_at,
+            policy_context=_build_policy_context(conv.policy_id, db),
+            customer_context=_build_customer_context(conv.customer_id, conv.policy_id, db),
+        )
+
+    elif payload.customer_id and payload.customer_id.strip():
+        customer_id = payload.customer_id.strip()
+        target_customer = db.query(CoreAccount).filter(CoreAccount.id == customer_id).first()
+        if not target_customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Customer not found",
+            )
+
+        if current_customer_id and current_customer_id != target_customer.id and not payload.confirm_different_customer:
+            current_cust = db.query(CoreAccount).filter(CoreAccount.id == current_customer_id).first()
+            current_name = current_cust.name if current_cust else "Customer A"
+            record_context_switch(
+                db=db, conversation_id=conv.id, employee=employee, previous_policy=current_policy, new_policy=None,
+                switch_type="different_customer", outcome="rejected", reason="Unconfirmed switch to a different customer",
+                previous_customer=current_cust, new_customer=target_customer,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"You're switching to a different customer. "
+                    f"You're currently discussing {current_name}. "
+                    f"The selected customer is {target_customer.name}. "
+                    "Explicit confirmation is required to switch the existing conversation."
+                ),
+            )
+
+        conv.customer_id = target_customer.id
+        conv.policy_id = None
+        conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+        db.refresh(conv)
+
+        invalidate_conversation(conv.id)
+
+        record_context_switch(
+            db=db,
+            conversation_id=conv.id,
+            employee=employee,
+            previous_policy=current_policy,
+            new_policy=None,
+            switch_type="customer_selection" if not current_customer_id else ("different_customer" if current_customer_id != target_customer.id else "same_customer"),
+            outcome="success",
+            previous_customer=current_customer,
+            new_customer=target_customer,
+        )
+
+        return ConversationResponse(
+            conversation_id=conv.id,
+            employee_id=conv.employee_id,
+            status=conv.status,
+            title=conv.title,
+            created_at=conv.created_at,
+            updated_at=conv.updated_at,
+            policy_context=None,
+            customer_context=_build_customer_context(conv.customer_id, None, db),
+        )
+    else:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"You're switching to a different customer. "
-                f"You're currently discussing a policy belonging to {check.current_customer.name if check.current_customer else 'Customer A'}. "
-                f"The selected policy belongs to {check.target_customer.name}. "
-                "Explicit confirmation is required to switch the existing conversation."
-            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either policy_id or customer_id must be provided to set conversation context",
         )
-
-    # 5. Apply context update
-    conv.policy_id = policy_id
-    conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    db.commit()
-    db.refresh(conv)
-
-    # 6. Invalidate interpretation cache to prevent cross-policy contamination
-    invalidate_conversation(conv.id)
-
-    # 7. Record successful context transition audit
-    record_context_switch(
-        db=db,
-        conversation_id=conv.id,
-        employee=employee,
-        previous_policy=current_policy,
-        new_policy=target_policy,
-        switch_type=check.switch_type,
-        outcome="success",
-    )
-
-    return ConversationResponse(
-        conversation_id=conv.id,
-        employee_id=conv.employee_id,
-        status=conv.status,
-        title=conv.title,
-        created_at=conv.created_at,
-        updated_at=conv.updated_at,
-        policy_context=_build_policy_context(conv.policy_id, db),
-    )
 
 
 @router.delete("/{conversation_id}/context", response_model=ConversationResponse)
@@ -391,7 +523,9 @@ def clear_conversation_context(
     """Clear the currently bound policy context from the conversation."""
     conv = _get_conversation_or_404(conversation_id, db, employee)
     current_policy = db.query(CorePolicy).filter(CorePolicy.id == conv.policy_id).first() if conv.policy_id else None
+    current_customer = conversation_context.active_customer(conv, db)
     conv.policy_id = None
+    conv.customer_id = None
     conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(conv)
@@ -406,6 +540,7 @@ def clear_conversation_context(
         new_policy=None,
         switch_type="clear_context",
         outcome="success",
+        previous_customer=current_customer,
     )
 
     return ConversationResponse(
@@ -416,6 +551,7 @@ def clear_conversation_context(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         policy_context=None,
+        customer_context=None,
     )
 
 
@@ -463,9 +599,23 @@ def submit_question(
 
         doc = own_document(payload.document_id, employee, db, conv.id)
         return answer_from_document(conv, doc, question_text, "question", employee, db, started)
-    # An explicit policy answers this question for one of a customer's several matching policies,
-    # without changing the conversation's context; otherwise the conversation's policy is used.
+    active_customer_id = payload.customer_id or conv.customer_id
     policy_id = payload.policy_id or conv.policy_id
+
+    # Validate customer identity BEFORE resolving policy context, retrieving policy evidence,
+    # generating suggestions, or invoking the LLM. If the question explicitly names a customer
+    # who is not on file, fail customer verification immediately and do not inherit context
+    # from a previously selected policy.
+    typed_res = resolve_policy_from_question(question_text, db)
+    early_cust_verif = verify_customer(typed_res, question_text, None, None, db)
+    # A customer on file with no policies is answered with that (their policy list is empty), not as not found.
+    on_file_without_policies = typed_res.status == "not_found" and typed_res.matched_on in ("customer_name", "surname", "first_name")
+    if (
+        early_cust_verif.status == "not_found"
+        and not on_file_without_policies
+        and not asks_about_portfolio(question_text, None, has_selected_policy=bool(conv.policy_id))
+    ):
+        return _answer_customer_not_found(conv, question_text, early_cust_verif, db, started, employee)
 
     # Understand the question first (spelling, names, paraphrase). Reuses the interpretation made
     # when the frontend resolved the policy, so the language model is consulted once per question.
@@ -478,28 +628,79 @@ def submit_question(
     # 1. Customer and portfolio questions ("how many policies does X have?", "what are the policies of Sirivalli")
     # are answered from policy records. If an unknown customer is named, answer_portfolio_question returns
     # scope="not_found", policies=[], and does not expose other customers' policies.
-    if not payload.policy_id and asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id)):
-        return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee)
+    # A message that only names a customer ("Elena"), or names a customer with no policies, lists that
+    # customer's policies (or says there are none).
+    if not payload.policy_id and (
+        asks_about_portfolio(question_text, interpretation, has_selected_policy=bool(conv.policy_id))
+        or _is_customer_lookup(question_text, interpretation, db)
+    ):
+        return _answer_portfolio_question(conv, question_text, db, interpretation, started, employee, default_customer_id=active_customer_id)
+
+    # An explicit policy (one of a customer's several policies, answered in turn) must be the
+    # conversation customer's: another customer's policy needs the switch to be confirmed first.
+    current_customer = conversation_context.active_customer(conv, db)
+    if payload.policy_id and current_customer is not None:
+        explicit = db.get(CorePolicy, payload.policy_id)
+        if explicit is not None and explicit.account_id != current_customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Policy {explicit.policy_number} does not belong to {current_customer.name}, the customer of this "
+                    "conversation. Switch the conversation's customer first."
+                ),
+            )
 
     # 2. Customer verification check: for policy-specific questions, if the question explicitly names a customer
     # who is not on file, fail customer verification immediately without exposing other customers' policies.
     active_policy = db.get(CorePolicy, conv.policy_id) if conv.policy_id else None
-    typed_res = resolve_policy_from_question(question_text, db)
     cust_verif = verify_customer(typed_res, question_text, interpretation, active_policy, db)
     if cust_verif.status == "not_found":
         return _answer_customer_not_found(conv, question_text, cust_verif, db, started, employee)
 
     # 3. Explicit reference to a different customer in question text requires confirmation if not specified in payload
-    if not payload.policy_id and conv.policy_id and active_policy and cust_verif.status == "verified" and cust_verif.matched_on != "conversation":
-        if cust_verif.customers and active_policy.account and cust_verif.customers[0].customer_id != active_policy.account_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"You're asking about a policy belonging to {cust_verif.customers[0].name}. "
-                    f"You're currently discussing a policy belonging to {active_policy.account.name}. "
-                    "Explicit confirmation is required to switch the existing conversation."
-                ),
-            )
+    if not payload.policy_id:
+        if conv.policy_id and active_policy and cust_verif.status == "verified" and cust_verif.matched_on != "conversation":
+            if cust_verif.customers and active_policy.account and cust_verif.customers[0].customer_id != active_policy.account_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"You're asking about a policy belonging to {cust_verif.customers[0].name}. "
+                        f"You're currently discussing a policy belonging to {active_policy.account.name}. "
+                        "Explicit confirmation is required to switch the existing conversation."
+                    ),
+                )
+        elif active_customer_id and cust_verif.status == "verified" and cust_verif.matched_on != "conversation":
+            if cust_verif.customers and cust_verif.customers[0].customer_id != active_customer_id:
+                active_cust = db.get(CoreAccount, active_customer_id)
+                active_cust_name = active_cust.name if active_cust else "another customer"
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"You're asking about a policy belonging to {cust_verif.customers[0].name}. "
+                        f"You're currently discussing customer {active_cust_name}. "
+                        "Explicit confirmation is required to switch the existing conversation."
+                    ),
+                )
+
+    if not policy_id and active_customer_id:
+        customer = db.get(CoreAccount, active_customer_id)
+        if customer:
+            acc_policies = db.query(CorePolicy).filter(CorePolicy.account_id == customer.id).all()
+            if not acc_policies:
+                return _answer_insufficient_evidence_for_customer(conv, question_text, customer, db, started, employee)
+            terms = current_terms(acc_policies)
+            in_force = [p for p in terms if p.status == "in_force"] or terms
+            hint = line_hint(understood_text(question_text, interpretation)) or line_hint(question_text)
+            if hint:
+                hinted = [p for p in in_force if p.line_of_business == hint]
+                if len(hinted) == 1:
+                    policy_id = hinted[0].id
+                elif len(hinted) > 1:
+                    return _answer_ambiguous_customer_policies(conv, question_text, customer, hinted, db, started, employee)
+            elif len(in_force) == 1:
+                policy_id = in_force[0].id
+            else:
+                return _answer_ambiguous_customer_policies(conv, question_text, customer, in_force, db, started, employee)
 
     if not policy_id:
         canonical_q = understood_text(question_text, interpretation)
@@ -531,8 +732,9 @@ def submit_question(
 
     # Bind the policy the question resolved to as the conversation's context when it has none. An
     # explicit policy (one of a customer's several policies, answered in turn) never changes it.
-    if not conv.policy_id and not payload.policy_id:
+    if not conv.policy_id and not conv.customer_id and not payload.policy_id:
         conv.policy_id = policy_id
+        conv.customer_id = policy.account_id
         conv.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
 
@@ -1062,6 +1264,193 @@ def _answer_customer_not_found(
     )
 
 
+def _answer_insufficient_evidence_for_customer(
+    conv: Conversation,
+    question_text: str,
+    customer: CoreAccount,
+    db: Session,
+    started: float,
+    employee: EmployeeUser,
+) -> QuestionAnswerResponse:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    question_record = ConversationQuestion(
+        conversation_id=conv.id,
+        policy_id=None,
+        question=question_text,
+        status="insufficient_evidence",
+        created_at=now,
+    )
+    conv.updated_at = now
+    db.add(question_record)
+    db.commit()
+    db.refresh(question_record)
+
+    latency_ms = int(round((time.perf_counter() - started) * 1000))
+    answer_text = f"No policies are on file for {customer.name}."
+    ledger_entry = LedgerService.record_entry(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        policy_id=None,
+        question=question_text,
+        evidence=[],
+        grounding_context=f"No policy records on file for customer {customer.name}.",
+        raw_llm_response="",
+        final_answer=answer_text,
+        citations=[],
+        confidence="none",
+        guardrail_status="not_applicable",
+        suggested_questions=[],
+        db=db,
+        employee_id=conv.employee_id,
+        **_asker_fields(employee),
+        outcome="insufficient_evidence",
+        guardrail_checks=[],
+        model_used="none",
+        provider="none",
+        is_fallback=True,
+        latency_ms=latency_ms,
+        retrieval={
+            "answer_type": "no_policies_for_customer",
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "policies_matched": 0,
+        },
+    )
+
+    return QuestionAnswerResponse(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        question=question_text,
+        status="insufficient_evidence",
+        answer=answer_text,
+        evidence=[],
+        citations=[],
+        confidence="none",
+        confidence_percent=None,
+        confidence_criteria=None,
+        guardrail_status="not_applicable",
+        guardrail_checks=[],
+        suggested_questions=[],
+        retrieval={
+            "answer_type": "no_policies_for_customer",
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "policies_matched": 0,
+        },
+        ledger_id=ledger_entry.id,
+        created_at=question_record.created_at,
+        asked_by=asked_by(conv.employee_id, ledger_entry),
+        asked_at=question_record.created_at,
+        latency_ms=latency_ms,
+    )
+
+
+def _answer_ambiguous_customer_policies(
+    conv: Conversation,
+    question_text: str,
+    customer: CoreAccount,
+    policies: list[CorePolicy],
+    db: Session,
+    started: float,
+    employee: EmployeeUser,
+) -> QuestionAnswerResponse:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    question_record = ConversationQuestion(
+        conversation_id=conv.id,
+        policy_id=None,
+        question=question_text,
+        status="needs_input",
+        created_at=now,
+    )
+    conv.updated_at = now
+    db.add(question_record)
+    db.commit()
+    db.refresh(question_record)
+
+    latency_ms = int(round((time.perf_counter() - started) * 1000))
+    policy_nums = [f"{p.policy_number} ({p.line_of_business.replace('_', ' ')})" for p in policies]
+    answer_text = f"{customer.name} has {len(policies)} policies on file: {', '.join(policy_nums)}. Please select which policy you would like to ask about."
+    ledger_entry = LedgerService.record_entry(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        policy_id=None,
+        question=question_text,
+        evidence=[],
+        grounding_context=f"Multiple policies found for customer {customer.name}; waiting for policy selection.",
+        raw_llm_response="",
+        final_answer=answer_text,
+        citations=[],
+        confidence="none",
+        guardrail_status="not_applicable",
+        suggested_questions=[f"What does {p.policy_number} cover?" for p in policies[:3]],
+        db=db,
+        employee_id=conv.employee_id,
+        **_asker_fields(employee),
+        outcome="needs_review",
+        guardrail_checks=[],
+        model_used="none",
+        provider="none",
+        is_fallback=False,
+        latency_ms=latency_ms,
+        retrieval={
+            "answer_type": "ambiguous_customer_policies",
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "policies_matched": len(policies),
+        },
+    )
+
+    return QuestionAnswerResponse(
+        conversation_id=conv.id,
+        question_id=question_record.id,
+        question=question_text,
+        status="needs_input",
+        answer=answer_text,
+        evidence=[],
+        citations=[],
+        confidence="none",
+        confidence_percent=None,
+        confidence_criteria=None,
+        guardrail_status="not_applicable",
+        guardrail_checks=[],
+        suggested_questions=[f"What does {p.policy_number} cover?" for p in policies[:3]],
+        retrieval={
+            "answer_type": "ambiguous_customer_policies",
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "policies_matched": len(policies),
+            "policies": [
+                {
+                    "policy_id": p.id,
+                    "policy_number": p.policy_number,
+                    "line_of_business": p.line_of_business,
+                }
+                for p in policies
+            ],
+        },
+        ledger_id=ledger_entry.id,
+        created_at=question_record.created_at,
+        asked_by=asked_by(conv.employee_id, ledger_entry),
+        asked_at=question_record.created_at,
+        latency_ms=latency_ms,
+    )
+
+
+def _is_customer_lookup(question_text: str, interpretation: Optional[dict], db: Session) -> bool:
+    """True for a message that only names a customer ("Elena", "look up David Chen") or names a
+    customer on file who has no policies: either is answered with that customer's policy list."""
+    canonical = understood_text(question_text, interpretation)
+    accounts, _ = find_accounts(canonical, db)
+    if not accounts and canonical != question_text:
+        accounts, _ = find_accounts(question_text, db)
+    if not accounts:
+        return False
+    if conversation_context.is_name_only(question_text, accounts):
+        return True
+    unique = {a.id for a in accounts}
+    return len(unique) == 1 and not db.query(CorePolicy).filter(CorePolicy.account_id.in_(unique)).count()
+
+
 def _answer_portfolio_question(
     conv: Conversation,
     question_text: str,
@@ -1069,12 +1458,14 @@ def _answer_portfolio_question(
     interpretation: Optional[dict],
     started: float,
     employee: EmployeeUser,
+    default_customer_id: Optional[str] = None,
 ) -> QuestionAnswerResponse:
     """Answer a customer/portfolio question from policy records and record it in the ledger."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     lookup_started = time.perf_counter()
+    default_acc = db.get(CoreAccount, default_customer_id) if default_customer_id else None
     # The canonical wording carries corrected spelling and exact policyholder names.
-    result = answer_portfolio_question(understood_text(question_text, interpretation), db)
+    result = answer_portfolio_question(understood_text(question_text, interpretation), db, default_account=default_acc)
     lookup_ms = int(round((time.perf_counter() - lookup_started) * 1000))
 
     payload = portfolio_payload(result)
@@ -1137,7 +1528,7 @@ def _answer_portfolio_question(
         answer=result.answer,
         answer_type="portfolio",
         portfolio=payload,
-        policy_context=_build_policy_context(conv.policy_id, db),
+        policy_context=_build_policy_context(conv.policy_id, db) if found else None,
         evidence=evidence,
         citations=citations,
         confidence="high" if found else "none",

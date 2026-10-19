@@ -177,6 +177,37 @@ def get_document_page(
                         page_count=doc.page_count, text=page.text)
 
 
+class DocumentText(BaseModel):
+    document: DocumentInfo
+    pages: list[DocumentPageText]
+
+
+class DocumentPageText(BaseModel):
+    page_id: str
+    page_number: int
+    text: str
+
+
+DocumentText.model_rebuild()
+
+
+@router.get("/api/documents/{document_id}/pages", response_model=DocumentText)
+def get_document_pages(
+    document_id: str,
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """The whole extracted text, page by page, for opening the document from the chat (uploader only)."""
+    doc = own_document(document_id, employee, db)
+    pages = (
+        db.query(UploadedDocumentPage)
+        .filter(UploadedDocumentPage.document_id == doc.id)
+        .order_by(UploadedDocumentPage.page_number)
+        .all()
+    )
+    return DocumentText(document=_info(doc), pages=[DocumentPageText(page_id=p.id, page_number=p.page_number, text=p.text) for p in pages])
+
+
 @router.post("/api/conversations/{conversation_id}/documents/{document_id}/explain",
              response_model=QuestionAnswerResponse, status_code=status.HTTP_201_CREATED)
 def explain_document(

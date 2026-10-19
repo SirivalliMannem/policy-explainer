@@ -200,6 +200,19 @@ export interface QuestionResolution {
   answer_all?: boolean;
   customer_verification?: CustomerVerification | null;
   term_selection?: TermSelection | null;
+  /** The customer the question is about once verified: named, or the conversation's customer. */
+  customer?: { customer_id: string; name: string; account_number?: string | null } | null;
+  /** Resolved from the conversation's customer ("What are the exclusions?" after "What are Elena's policies?"). */
+  from_context?: boolean;
+  /** The message only names a customer ("Elena"): their policies are listed. */
+  customer_lookup?: boolean;
+}
+
+/** The customer a conversation is about, with or without one selected policy. */
+export interface CustomerContext {
+  customer_id: string;
+  customer_name: string;
+  policy_count?: number;
 }
 
 export interface CitationItem {
@@ -417,6 +430,34 @@ export interface ConversationListPage {
   offset: number;
 }
 
+export interface CustomerListItem {
+  id: string;
+  name: string;
+  account_number?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  policy_count: number;
+}
+
+export interface PolicyListItem {
+  id: string;
+  policy_number: string;
+  customer_id: string;
+  customer_name: string;
+  line_of_business: string;
+  status: string;
+  effective_date: string;
+  expiration_date: string;
+}
+
+export interface CustomerContextSummary {
+  customer_id: string;
+  customer_name: string;
+  account_number?: string | null;
+  email?: string | null;
+  policy_count?: number;
+}
+
 export interface ConversationResponse {
   conversation_id: string;
   employee_id: string;
@@ -428,6 +469,8 @@ export interface ConversationResponse {
     PolicyContextCandidate,
     'policy_id' | 'policy_number' | 'customer_id' | 'customer_name' | 'line_of_business' | 'product_name' | 'status'
   > | null;
+  /** The conversation's customer: the policy's, or one chosen without a single policy. */
+  customer_context?: CustomerContextSummary | null;
 }
 
 export interface ConversationMessageRecord {
@@ -523,6 +566,8 @@ export interface SourceTarget {
   sourceType: string;
   sourceId: string;
   evidence?: EvidenceItem | null;
+  /** The answer's sentence that cited this source, to point at the matching detail. */
+  claim?: string;
 }
 
 // ==========================================
@@ -782,4 +827,10 @@ export interface DocumentPage {
   page_number: number;
   page_count: number;
   text: string;
+}
+
+/** The whole extracted text of an uploaded document, page by page. */
+export interface DocumentText {
+  document: DocumentInfo;
+  pages: { page_id: string; page_number: number; text: string }[];
 }

@@ -18,7 +18,8 @@ import {
   ListChecks,
   Loader2,
 } from 'lucide-react';
-import type { AskedBy, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import type { AskedBy, CustomerContext, DocumentInfo, EvidenceItem, PolicyContextCandidate, QuestionAnswerResponse } from '../../types';
+import { sideLabel } from '../../lib/conversationContext';
 import type { ProcessState } from '../../lib/explainer';
 import { askerName, fullWhen } from '../../lib/conversations';
 import { answerConfidence, confidenceExplanation, isRecordAnswer } from '../../lib/confidence';
@@ -73,13 +74,22 @@ export type ChatMessage =
       /** One of several answers to the same question, one per matching policy: label it with its policy. */
       labelled?: boolean;
     }
-  | { kind: 'error'; id: string; time: string; title: string; text: string };
+  | { kind: 'error'; id: string; time: string; title: string; text: string }
+  /** A document uploaded into the chat, shown as a file the employee can open. Null while it is being read. */
+  | { kind: 'document'; id: string; time: string; filename: string; document: DocumentInfo | null; askedBy?: AskedBy | null; askedAt?: string | null };
 
 import { InlineCustomerSwitchCard } from './InlineCustomerSwitchCard';
 
+/** One side of a customer switch: the customer, with the policy when a single one is meant. */
+export interface SwitchSide extends CustomerContext {
+  policy: PolicyContextCandidate | null;
+  /** The target customer's matching policies, when no single policy is meant. */
+  candidates?: PolicyContextCandidate[];
+}
+
 export interface PendingCustomerSwitch {
-  currentPolicy: PolicyContextCandidate;
-  targetPolicy: PolicyContextCandidate;
+  current: SwitchSide;
+  target: SwitchSide;
   pendingQuestion?: string | null;
   matchedOn?: string | null;
 }
@@ -99,8 +109,10 @@ interface ConversationStreamProps {
   activePolicy: PolicyContextCandidate | null;
   onAsk: (question: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
-  onOpenSource: (item: EvidenceItem) => void;
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
   onOpenTab: (tab: PolicyFeatureTab, highlight?: { type: 'coverage' | 'form'; id: string }) => void;
+  /** Open an uploaded document from its card in the chat. */
+  onOpenDocument?: (document: DocumentInfo) => void;
   pendingSwitch?: PendingCustomerSwitch | null;
   onConfirmSwitchContext?: () => Promise<void> | void;
   onConfirmStartNew?: () => Promise<void> | void;
@@ -151,10 +163,10 @@ function InterpretedAs({ result }: { result: QuestionAnswerResponse }) {
 
 /** Starter prompts for an empty conversation; the employee completes them with a policy. */
 const STARTERS = [
-  { label: 'Coverages, limits and deductibles', prompt: 'What are the coverages, limits and deductibles on policy ', icon: ShieldCheck },
-  { label: 'Forms and endorsements', prompt: 'Which forms and endorsements are attached to policy ', icon: FileText },
-  { label: 'Claims on a policy', prompt: 'What claims are on policy ', icon: AlertTriangle },
-  { label: "A customer's policies", prompt: 'How many policies does ', icon: User },
+  { label: 'Coverages, limits and deductibles', prompt: 'What is the wind and hail deductible on this policy?', icon: ShieldCheck },
+  { label: 'Forms and endorsements', prompt: 'Which endorsement excludes flood damage?', icon: FileText },
+  { label: 'Claims on a policy', prompt: 'Are there any open claims on this policy?', icon: AlertTriangle },
+  { label: "A customer's policies", prompt: 'Which policies does this customer currently hold?', icon: User },
 ];
 
 function timeGreeting(now = new Date()): string {
@@ -261,7 +273,7 @@ function AnswerCard({
   result: QuestionAnswerResponse;
   time: string;
   onAsk: (q: string) => void;
-  onOpenSource: (item: EvidenceItem) => void;
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
   onOpenTab: ConversationStreamProps['onOpenTab'];
 }) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -509,7 +521,7 @@ function PortfolioCard({
   isWorking: boolean;
   onAsk: (q: string) => void;
   onChooseCandidate: (candidate: PolicyContextCandidate) => void;
-  onOpenSource: (item: EvidenceItem) => void;
+  onOpenSource: (item: EvidenceItem, claim?: string) => void;
 }) {
   const portfolio = result.portfolio;
   const policies = portfolio?.policies ?? [];
@@ -643,6 +655,7 @@ export function ConversationStream({
   onChooseCandidate,
   onOpenSource,
   onOpenTab,
+  onOpenDocument,
   pendingSwitch,
   onConfirmSwitchContext,
   onConfirmStartNew,
@@ -658,28 +671,36 @@ export function ConversationStream({
 
   if (messages.length === 0 && !isWorking) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden px-5 py-10 sm:px-10">
-        <div className="w-full max-w-[640px] text-center">
-          <span className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0F2A43] shadow-sm">
-            <Shield className="h-5 w-5 text-[#F97316]" />
-          </span>
-          <h2 className="font-display text-[28px] leading-tight text-[#0F2A43]">
-            Explore
-          </h2>
-          <p className="mx-auto mt-2 max-w-lg text-[14px] leading-relaxed text-[#64748B]">
-            Explore policy coverage, limits, deductibles, forms, claims, billing, and customer policies. Ask a question to get evidence-grounded answers with citations.
+      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden px-4 py-8 sm:px-8">
+        <div className="w-full max-w-[780px] flex flex-col items-center text-center">
+          <div className="flex h-[52px] w-[52px] items-center justify-center rounded-[14px] bg-[#0F2A43] shadow-[0_4px_14px_rgba(15,42,67,0.2)]">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z" />
+            </svg>
+          </div>
+          <h1 className="mt-[22px] mb-2 font-['Instrument_Serif',Georgia,serif] font-normal text-[36px] sm:text-[44px] leading-[1.1] text-[#0F2A43] tracking-[-0.01em]">
+            What would you like to know about a policy?
+          </h1>
+          <p className="mb-[34px] text-[16px] text-[#64748B]">
+            Answers come from the policy wording, with citations.
           </p>
-          <div className="mt-7 grid gap-2 text-left sm:grid-cols-2">
+
+          <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
             {STARTERS.map(({ label, prompt, icon: Icon }) => (
               <button
                 key={label}
                 type="button"
                 onClick={() => onPrefill(prompt)}
-                className="group flex items-center gap-3 rounded-xl border border-[#E2E8F0] bg-white px-3.5 py-3 text-[13px] text-[#0F2A43] transition-colors hover:border-[#F97316] hover:bg-[#FFF7ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                className="group flex items-center gap-3.5 rounded-[14px] border border-[#E3E8F0] bg-white p-4 text-[#0F2A43] transition-all hover:border-[#EA580C] hover:shadow-[0_6px_18px_rgba(15,42,67,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
               >
-                <Icon className="h-4 w-4 shrink-0 text-[#EA580C]" aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate">{label}</span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-[#CBD5E1] group-hover:text-[#EA580C]" aria-hidden="true" />
+                <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[10px] bg-[#FFF1E6]">
+                  <Icon className="h-5 w-5 text-[#C2410C]" strokeWidth={2} aria-hidden="true" />
+                </span>
+                <span className="flex flex-1 flex-col gap-0.5 min-w-0">
+                  <span className="text-[12.5px] font-semibold text-[#64748B] truncate">{label}</span>
+                  <span className="text-[15px] font-medium leading-[1.4] text-[#0F2A43] line-clamp-2">{prompt}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-[#94A3B8] transition-colors group-hover:text-[#EA580C]" aria-hidden="true" />
               </button>
             ))}
           </div>
@@ -717,6 +738,61 @@ export function ConversationStream({
                 </span>
               </div>
             );
+
+          case 'document': {
+            const doc = msg.document;
+            const kind = doc ? (doc.content_type.includes('pdf') ? 'PDF' : doc.content_type.includes('word') ? 'Word' : 'Text') : '';
+            const card = (
+              <>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#EA580C]">
+                  {doc ? (
+                    <FileText className="h-5 w-5 text-white" aria-hidden="true" />
+                  ) : (
+                    <Loader2 className="h-5 w-5 animate-spin text-white" aria-hidden="true" />
+                  )}
+                </span>
+                <span className="min-w-0 text-left">
+                  <span className="block truncate text-[13px] font-semibold text-[#0F2A43]" title={msg.filename}>
+                    {msg.filename}
+                  </span>
+                  <span className="block text-[11.5px] text-[#64748B]">
+                    {doc
+                      ? `${kind} · ${doc.page_count} ${doc.unit === 'page' ? 'page' : 'section'}${doc.page_count === 1 ? '' : 's'}`
+                      : 'Reading the document…'}
+                  </span>
+                </span>
+              </>
+            );
+            return (
+              <div key={msg.id} className="message-in flex items-start justify-end gap-2.5">
+                <div className="flex max-w-[85%] flex-col items-end sm:max-w-[70%]">
+                  {doc && onOpenDocument ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenDocument(doc)}
+                      title={`Open ${msg.filename}`}
+                      aria-label={`Open document ${msg.filename}`}
+                      className="flex w-72 max-w-full items-center gap-3 rounded-2xl rounded-tr-md border border-[#E2E8F0] bg-white px-3 py-2.5 shadow-sm transition-colors hover:border-[#F97316] hover:bg-[#FFF7ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                    >
+                      {card}
+                    </button>
+                  ) : (
+                    <div className="flex w-72 max-w-full items-center gap-3 rounded-2xl rounded-tr-md border border-[#E2E8F0] bg-white px-3 py-2.5 shadow-sm">
+                      {card}
+                    </div>
+                  )}
+                  <span className="mt-1 text-right text-[10.5px] text-[#64748B]">
+                    Uploaded by <span className="font-semibold text-[#0F2A43]">{askerName(msg.askedBy)}</span>
+                    {' · '}
+                    {fullWhen(msg.askedAt) || msg.time}
+                  </span>
+                </div>
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#16385A]">
+                  <User className="h-3.5 w-3.5 text-slate-200" />
+                </span>
+              </div>
+            );
+          }
 
           case 'context': {
             const isDiffCustomer = msg.switchType === 'different_customer';
@@ -852,12 +928,12 @@ export function ConversationStream({
       {pendingSwitch && onConfirmSwitchContext && onConfirmStartNew && onCancelSwitch && (
         <div className="my-6 flex justify-center w-full" role="region" aria-label="Customer context switch">
           <InlineCustomerSwitchCard
-            currentCustomerName={pendingSwitch.currentPolicy.customer_name}
-            currentPolicyNumber={pendingSwitch.currentPolicy.policy_number}
-            currentLineOfBusiness={pendingSwitch.currentPolicy.line_of_business}
-            targetCustomerName={pendingSwitch.targetPolicy.customer_name}
-            targetPolicyNumber={pendingSwitch.targetPolicy.policy_number}
-            targetLineOfBusiness={pendingSwitch.targetPolicy.line_of_business}
+            currentCustomerName={pendingSwitch.current.customer_name}
+            currentPolicyNumber={sideLabel(pendingSwitch.current.policy, pendingSwitch.current.policy_count)}
+            currentLineOfBusiness={pendingSwitch.current.policy?.line_of_business}
+            targetCustomerName={pendingSwitch.target.customer_name}
+            targetPolicyNumber={sideLabel(pendingSwitch.target.policy, pendingSwitch.target.candidates?.length || null)}
+            targetLineOfBusiness={pendingSwitch.target.policy?.line_of_business}
             onSwitchContext={onConfirmSwitchContext}
             onStartNewConversation={onConfirmStartNew}
             onCancel={onCancelSwitch}

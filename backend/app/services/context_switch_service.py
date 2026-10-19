@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import EmployeeUser
 from app.models.conversation import ContextSwitchAudit
-from app.models.policy import CorePolicy
+from app.models.policy import CoreAccount, CorePolicy
 from app.schemas.conversation import ContextCheckResponse, CustomerSummary, PolicySummary
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,13 @@ logger = logging.getLogger(__name__)
 def evaluate_context_transition(
     current_policy: Optional[CorePolicy],
     target_policy: CorePolicy,
+    current_customer: Optional[CoreAccount] = None,
 ) -> ContextCheckResponse:
-    """Determine the switch scenario between the current conversation context and target policy."""
+    """Determine the switch scenario between the current conversation context and target policy.
+
+    ``current_customer`` is the conversation's customer when it has no single policy yet
+    ("What are Elena's policies?"): a policy of another customer is still a customer switch.
+    """
     target_cust = CustomerSummary(
         id=target_policy.account_id,
         name=target_policy.account.name if target_policy.account else "Unknown Customer",
@@ -30,6 +35,33 @@ def evaluate_context_transition(
         line_of_business=target_policy.line_of_business,
         product_name=target_policy.product_name,
     )
+
+    if not current_policy and current_customer is not None:
+        current_cust = CustomerSummary(id=current_customer.id, name=current_customer.name)
+        if current_customer.id == target_policy.account_id:
+            return ContextCheckResponse(
+                switch_type="same_customer_different_policy",
+                requires_confirmation=False,
+                current_customer=current_cust,
+                current_policy=None,
+                target_customer=target_cust,
+                target_policy=target_pol,
+                allowed=True,
+                message=f"Choosing {target_pol.policy_number} of {current_cust.name}.",
+            )
+        return ContextCheckResponse(
+            switch_type="different_customer",
+            requires_confirmation=True,
+            current_customer=current_cust,
+            current_policy=None,
+            target_customer=target_cust,
+            target_policy=target_pol,
+            allowed=True,
+            message=(
+                f"You're currently discussing {current_cust.name}. "
+                f"The selected policy belongs to {target_cust.name}."
+            ),
+        )
 
     if not current_policy:
         return ContextCheckResponse(
@@ -103,16 +135,27 @@ def record_context_switch(
     switch_type: str,
     outcome: str,
     reason: Optional[str] = None,
+    previous_customer: Optional[CoreAccount] = None,
+    new_customer: Optional[CoreAccount] = None,
 ) -> ContextSwitchAudit:
-    """Record a context transition event into the audit ledger."""
+    """Record a context transition event into the audit ledger.
+
+    The customers are given when a side of the transition has a customer but no single policy.
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    prev_cust_id = previous_policy.account_id if previous_policy else None
-    prev_cust_name = previous_policy.account.name if previous_policy and previous_policy.account else None
+    prev_cust_id = previous_policy.account_id if previous_policy else (previous_customer.id if previous_customer else None)
+    prev_cust_name = (
+        previous_policy.account.name if previous_policy and previous_policy.account
+        else (previous_customer.name if previous_customer else None)
+    )
     prev_pol_id = previous_policy.id if previous_policy else None
     prev_pol_num = previous_policy.policy_number if previous_policy else None
 
-    new_cust_id = new_policy.account_id if new_policy else None
-    new_cust_name = new_policy.account.name if new_policy and new_policy.account else None
+    new_cust_id = new_policy.account_id if new_policy else (new_customer.id if new_customer else None)
+    new_cust_name = (
+        new_policy.account.name if new_policy and new_policy.account
+        else (new_customer.name if new_customer else None)
+    )
     new_pol_id = new_policy.id if new_policy else None
     new_pol_num = new_policy.policy_number if new_policy else None
 

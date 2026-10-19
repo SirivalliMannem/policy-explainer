@@ -1,10 +1,12 @@
 import { useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { Eye, EyeOff, AlertCircle, ArrowLeft } from 'lucide-react';
 import { authenticateEmployee, saveSession } from '../../services/auth';
 
 export function LoginCard() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = (location.state as { from?: string })?.from || '/app/explainer';
   const [email, setEmail] = useState('manager@feuji.com');
   const [password, setPassword] = useState('••••••••••••');
   const [showPassword, setShowPassword] = useState(false);
@@ -35,7 +37,7 @@ export function LoginCard() {
 
       if (result.success && result.user) {
         saveSession({ user: result.user, token: result.token ?? '' });
-        navigate('/app/dashboard', { replace: true });
+        navigate(from, { replace: true });
       } else {
         setError(result.error || 'Unable to sign in. Please verify your credentials.');
       }
@@ -49,6 +51,13 @@ export function LoginCard() {
   return (
     <div className="w-full max-w-[450px] mx-auto animate-card-enter">
       <div className="bg-card border border-[#e2e8f0] rounded-[20px] p-6 sm:p-8 lg:p-9 shadow-[0_4px_24px_rgba(15,42,67,0.06)]">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[#64748B] hover:text-[#0F2A43] transition-colors mb-3.5 group"
+        >
+          <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
+          <span>Back to FI360</span>
+        </Link>
         <h2 className="font-sans font-bold text-[26px] sm:text-[30px] text-[#0F2A43] mb-1.5 leading-tight tracking-tight">
           Welcome back
         </h2>

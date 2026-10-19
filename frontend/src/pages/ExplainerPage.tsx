@@ -1,14 +1,18 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, ArrowUp, FileText, Loader2, Plus, Upload, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, AtSign, FileText, FileX2, Loader2, Plus, Shield, Upload, User, X } from 'lucide-react';
 import type {
   AskedBy,
+  CustomerContextSummary,
+  CustomerListItem,
   DocumentInfo,
   EvidenceItem,
   PolicyContextCandidate,
+  PolicyListItem,
   QuestionResolution,
   SourceTarget,
 } from '../types';
+import { ContextSelectorPopover } from '../components/explainer/ContextSelectorPopover';
 import {
   ApiError,
   clearConversationContext,
@@ -25,12 +29,12 @@ import {
   submitQuestion,
 } from '../services/api';
 import { currentEmployee } from '../services/auth';
-import { PolicyContextBanner } from '../components/explainer/PolicyContextBanner';
 import { PolicyFeaturesPanel, PolicyFeatureTab } from '../components/explainer/PolicyFeaturesPanel';
 import { ChatMessage, ConversationStream, PendingCustomerSwitch } from '../components/explainer/ConversationStream';
 import { PolicySwitcherModal } from '../components/explainer/PolicySwitcherModal';
 import { QuestionInput } from '../components/explainer/QuestionInput';
 import { SourceViewer } from '../components/explainer/SourceViewer';
+import { DocumentViewer } from '../components/explainer/DocumentViewer';
 import { AIProcessPanel, AuditTarget, PanelContent } from '../components/explainer/AIProcessPanel';
 import { Skeleton } from '../components/ui/Skeleton';
 import {
@@ -45,6 +49,7 @@ import {
 } from '../lib/explainer';
 import { notifyConversationsChanged } from '../lib/conversations';
 import { groupPolicyAnswers } from '../lib/answerGroups';
+import { contextAction, currentCustomer } from '../lib/conversationContext';
 
 /** Most policies one question is answered for at once; more than this, the employee chooses. */
 const MAX_ANSWER_ALL = 4;
@@ -67,20 +72,25 @@ const MATCH_LABEL: Record<string, string> = {
 
 function detectQuestionEntityConflict(
   question: string,
-  targetPolicy: PolicyContextCandidate
+  target: { customer_name: string; policy_number?: string }
 ): { hasConflict: boolean; entity?: string } {
   const q = question.trim();
   if (!q) return { hasConflict: false };
 
   // 1. Explicit policy number in question
-  const policyNumMatch = q.match(/\b(HO|PA)[-\s]?\d{4}(?:[-\s]?\d{4})?\b/i);
-  if (policyNumMatch) {
-    const rawNum = policyNumMatch[0].replace(/[-\s]/g, '').toUpperCase();
-    const targetNum = targetPolicy.policy_number.replace(/[-\s]/g, '').toUpperCase();
-    if (rawNum !== targetNum) {
-      return { hasConflict: true, entity: `policy ${policyNumMatch[0]}` };
+  if (target.policy_number) {
+    const policyNumMatch = q.match(/\b(HO|PA)[-\s]?\d{4}(?:[-\s]?\d{4})?\b/i);
+    if (policyNumMatch) {
+      const rawNum = policyNumMatch[0].replace(/[-\s]/g, '').toUpperCase();
+      const targetNum = target.policy_number.replace(/[-\s]/g, '').toUpperCase();
+      if (rawNum !== targetNum) {
+        return { hasConflict: true, entity: `policy ${policyNumMatch[0]}` };
+      }
     }
   }
+
+  // Strip policy numbers, claims, and trailing punctuation before checking for names
+  const qClean = q.replace(/\b(HO|PA|CLM)[-\s]?\d+(?:[-\s]?\d+)?\b/gi, '');
 
   // 2. Explicit person name in question
   const nonNames = new Set([
@@ -95,44 +105,11 @@ function detectQuestionEntityConflict(
     'each', 'every', 'other', 'another', 'first', 'second', 'third', 'last', 'premium', 'deductibles',
   ]);
 
-  const targetParts = targetPolicy.customer_name.toLowerCase().split(/\s+/);
+  const targetParts = target.customer_name.toLowerCase().split(/\s+/);
 
-  const prepMatch = q.match(/\b(?:of|for|about|with|under|regarding)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b/i);
+  const prepMatch = qClean.match(/\b(?:of|for|about|with|under|regarding)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\b/i);
   if (prepMatch) {
     const candidate = prepMatch[1].trim();
-    const words = candidate.toLowerCase().split(/\s+/);
-    if (!words.some((w) => nonNames.has(w)) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
-      if (!words.some((w) => targetParts.includes(w))) {
-        return { hasConflict: true, entity: candidate };
-      }
-    }
-  }
-
-  const possMatch = q.match(/\b([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)(?:['’]s)\b/i);
-  if (possMatch) {
-    const candidate = possMatch[1].trim();
-    const words = candidate.toLowerCase().split(/\s+/);
-    if (!words.some((w) => nonNames.has(w)) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
-      if (!words.some((w) => targetParts.includes(w))) {
-        return { hasConflict: true, entity: candidate };
-      }
-    }
-  }
-
-  const verbMatch = q.match(/\b(?:does|is|has)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:have|covered|own|insured)\b/i);
-  if (verbMatch) {
-    const candidate = verbMatch[1].trim();
-    const words = candidate.toLowerCase().split(/\s+/);
-    if (!words.some((w) => nonNames.has(w)) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
-      if (!words.some((w) => targetParts.includes(w))) {
-        return { hasConflict: true, entity: candidate };
-      }
-    }
-  }
-
-  const fullMatch = q.match(/\b([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,})\b/);
-  if (fullMatch) {
-    const candidate = fullMatch[1].trim();
     const words = candidate.toLowerCase().split(/\s+/);
     if (!words.some((w) => nonNames.has(w))) {
       if (!words.some((w) => targetParts.includes(w))) {
@@ -141,12 +118,33 @@ function detectQuestionEntityConflict(
     }
   }
 
-  const singleMatch = q.match(/\b([A-Z][a-zA-Z\-]{2,})\b/);
-  if (singleMatch) {
-    const candidate = singleMatch[1].trim();
-    if (!nonNames.has(candidate.toLowerCase()) && !candidate.match(/\b(?:HO|PA|CLM)[-\s]?\d+/i)) {
-      if (!targetParts.includes(candidate.toLowerCase())) {
+  const possMatch = qClean.match(/\b([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)(?:['’]s)\b/i);
+  if (possMatch) {
+    const candidate = possMatch[1].trim();
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.some((w) => nonNames.has(w))) {
+      if (!words.some((w) => targetParts.includes(w))) {
         return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  const verbMatch = qClean.match(/\b(?:does|is|has)\s+([A-Za-z\-]+(?:\s+[A-Za-z\-]+)?)\s+(?:have|covered|own|insured)\b/i);
+  if (verbMatch) {
+    const candidate = verbMatch[1].trim();
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.some((w) => nonNames.has(w))) {
+      if (!words.some((w) => targetParts.includes(w))) {
+        return { hasConflict: true, entity: candidate };
+      }
+    }
+  }
+
+  const capitalizedWords = qClean.match(/\b([A-Z][a-zA-Z\-]{2,})\b/g) || [];
+  for (const word of capitalizedWords) {
+    if (!nonNames.has(word.toLowerCase())) {
+      if (!targetParts.includes(word.toLowerCase())) {
+        return { hasConflict: true, entity: word };
       }
     }
   }
@@ -216,6 +214,8 @@ export function ExplainerPage() {
   const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
 
   const [activePolicy, setActivePolicyState] = useState<PolicyContextCandidate | null>(null);
+  const [activeCustomer, setActiveCustomerState] = useState<CustomerContextSummary | null>(null);
+  const [contextSelectorOpen, setContextSelectorOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [process, setProcess] = useState<ProcessState>(IDLE_PROCESS);
@@ -237,6 +237,7 @@ export function ExplainerPage() {
   // Refs mirror state for async flows that must not read stale closures.
   const conversationRef = useRef<string | null>(null);
   const policyRef = useRef<PolicyContextCandidate | null>(null);
+  const customerRef = useRef<CustomerContextSummary | null>(null);
   // A document uploaded into this chat: while attached, questions are answered from it alone.
   const [attachedDoc, setAttachedDocState] = useState<DocumentInfo | null>(null);
   const attachedDocRef = useRef<DocumentInfo | null>(null);
@@ -244,7 +245,8 @@ export function ExplainerPage() {
     attachedDocRef.current = doc;
     setAttachedDocState(doc);
   };
-  const [isUploading, setIsUploading] = useState(false);
+  // The uploaded document opened from its card in the chat.
+  const [openDocument, setOpenDocument] = useState<DocumentInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // The "+" menu by the Send button: "Upload document" opens the file picker.
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -273,6 +275,18 @@ export function ExplainerPage() {
   const setActivePolicy = (policy: PolicyContextCandidate | null) => {
     policyRef.current = policy;
     setActivePolicyState(policy);
+  };
+  const setActiveCustomer = (customer: CustomerContextSummary | null) => {
+    customerRef.current = customer;
+    setActiveCustomerState(customer);
+  };
+  /** Make a customer the conversation's context without one of their policies (the server records it):
+   * "What are Elena's policies?" or a switch to a customer with several policies. */
+  const bindCustomer = async (convId: string, target: CustomerContextSummary, confirmDifferentCustomer = false) => {
+    const conv = await setConversationContext(convId, null, { customerId: target.customer_id, confirmDifferentCustomer });
+    setActivePolicy(null);
+    setFeatureTab(null);
+    setActiveCustomer(conv.customer_context ?? target);
   };
   const nextId = (prefix: string) => `${prefix}-${++idRef.current}`;
   const push = (msg: ChatMessage) => setMessages((prev) => [...prev, msg]);
@@ -315,6 +329,11 @@ export function ExplainerPage() {
     const pid = targetPolicyId || policyRef.current?.policy_id;
     const conv = await createConversation(pid);
     conversationRef.current = conv.conversation_id;
+    if (!pid && customerRef.current) {
+      await setConversationContext(conv.conversation_id, null, {
+        customerId: customerRef.current.customer_id,
+      });
+    }
     navigate(`/app/explainer/c/${conv.conversation_id}`, { replace: true });
     return conv.conversation_id;
   };
@@ -329,7 +348,8 @@ export function ExplainerPage() {
     convId: string,
     contextDetail: string,
     forPolicy?: PolicyContextCandidate,
-    verified?: string
+    verified?: string,
+    portfolio = false
   ) => {
     // A question that runs the pipeline opens the AI process panel without taking focus from the composer.
     openPanel({ mode: 'live' }, null);
@@ -349,7 +369,13 @@ export function ExplainerPage() {
 
     try {
       const targetPolicy = forPolicy || policyRef.current;
-      const result = await submitQuestion(convId, question, targetPolicy?.policy_id);
+      const result = await submitQuestion(
+        convId,
+        question,
+        portfolio ? undefined : targetPolicy?.policy_id,
+        undefined,
+        customerRef.current?.customer_id
+      );
       setProcess((prev) => ({
         ...prev,
         phase: 'completed',
@@ -372,6 +398,8 @@ export function ExplainerPage() {
     setIsLoadingHistory(false);
     setMessages([]);
     setActivePolicy(null);
+    setActiveCustomer(null);
+    setContextSelectorOpen(false);
     pendingQuestionRef.current = null;
     setFeatureTab(null);
     setHighlight(null);
@@ -383,6 +411,7 @@ export function ExplainerPage() {
     setPendingSwitch(null);
     setPolicySwitcherOpen(false);
     setAttachedDoc(null);
+    setActiveCustomer(null);
   };
 
   const unitLabel = (doc: DocumentInfo) => `${doc.page_count} ${doc.unit === 'page' ? 'page' : 'section'}${doc.page_count === 1 ? '' : 's'}`;
@@ -420,19 +449,19 @@ export function ExplainerPage() {
     if (busyRef.current) return;
     busyRef.current = true;
     setIsWorking(true);
-    setIsUploading(true);
     const askedAt = new Date().toISOString();
-    push({ kind: 'user', id: nextId('user'), time: nowTime(), text: `Uploaded “${file.name}”`, askedBy: me(), askedAt });
+    const cardId = nextId('document');
+    push({ kind: 'document', id: cardId, time: nowTime(), filename: file.name, document: null, askedBy: me(), askedAt });
     try {
       const convId = await ensureConversation();
       const doc = await uploadDocument(convId, file);
       setAttachedDoc(doc);
-      setIsUploading(false);
+      setMessages((prev) => prev.map((m) => (m.id === cardId && m.kind === 'document' ? { ...m, document: doc, filename: doc.filename } : m)));
       push({
         kind: 'assistant',
         id: nextId('assistant'),
         time: nowTime(),
-        text: `I've read “${doc.filename}” (${unitLabel(doc)}). Here it is in plain language. Ask me anything about it: my answers will come from this document only, with its ${doc.unit === 'page' ? 'page' : 'section'} numbers.`,
+        text: `I've read “${doc.filename}” (${unitLabel(doc)}). Here it is in plain language. Ask me anything about it, including how it compares with a policy: what the document says is cited with its ${doc.unit === 'page' ? 'page' : 'section'} numbers.`,
         suggestions: [],
       });
       const question = `Explain the uploaded document “${doc.filename}” in simple language`;
@@ -459,16 +488,16 @@ export function ExplainerPage() {
       notifyConversationsChanged();
     } catch (err) {
       const friendly = describeError(err);
-      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: 'Upload failed', text: friendly.message });
+      setMessages((prev) => prev.filter((m) => m.id !== cardId));
+      push({ kind: 'error', id: nextId('error'), time: nowTime(), title: `Could not upload “${file.name}”`, text: friendly.message });
     } finally {
-      setIsUploading(false);
       busyRef.current = false;
       setIsWorking(false);
       inputRef.current?.focus();
     }
   };
 
-  /** Stop answering from the document; the chat answers from the policy again. */
+  /** Stop answering from the document (it stays in the chat); questions go to the policy wording again. */
   const handleDetach = async () => {
     const doc = attachedDocRef.current;
     const convId = conversationRef.current;
@@ -476,13 +505,6 @@ export function ExplainerPage() {
     try {
       await detachDocument(convId, doc.document_id);
       setAttachedDoc(null);
-      push({
-        kind: 'assistant',
-        id: nextId('assistant'),
-        time: nowTime(),
-        text: `“${doc.filename}” is detached. Questions are answered from the policy wording again.`,
-        suggestions: [],
-      });
     } catch (err) {
       const friendly = describeError(err);
       push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
@@ -498,14 +520,14 @@ export function ExplainerPage() {
     }));
   };
 
-  const handleAsk = async (raw: string) => {
+  const handleAsk = async (raw: string, options: { echo?: boolean } = {}) => {
     const text = raw.trim();
     if (!text || busyRef.current) return;
     busyRef.current = true;
     setIsWorking(true);
     setInput('');
     const askedAt = new Date().toISOString();
-    push({ kind: 'user', id: nextId('user'), time: nowTime(), text, askedBy: me(), askedAt });
+    if (options.echo !== false) push({ kind: 'user', id: nextId('user'), time: nowTime(), text, askedBy: me(), askedAt });
     setProcess({
       phase: 'running',
       result: null,
@@ -536,6 +558,10 @@ export function ExplainerPage() {
 
       // Stage 1: identify policy context from the question (server-side resolution).
       const current = policyRef.current;
+
+      // Another customer than the conversation's is handled once the customer is verified against the
+      // records: the switch card below (an unknown name stops at verification).
+
       setIsResolving(!current);
       let resolution: QuestionResolution;
       try {
@@ -544,7 +570,9 @@ export function ExplainerPage() {
         const pending = pendingQuestionRef.current;
         resolution = await resolvePolicyFromQuestion(
           pending && looksLikeReply(text) ? `${text} — ${pending}` : text,
-          convId
+          convId,
+          customerRef.current?.customer_id,
+          policyRef.current?.policy_id
         );
       } catch (err) {
         const friendly = describeError(err);
@@ -572,10 +600,19 @@ export function ExplainerPage() {
       // Step 1: verify the customer before any policy information is retrieved. A customer who is not
       // in the records, or a name several customers share, stops here and the employee is asked.
       const verification = resolution.customer_verification;
-      if (verification && (verification.status === 'not_found' || verification.status === 'ambiguous')) {
-        const notFound = verification.status === 'not_found';
-        const pending = pendingQuestionRef.current;
-        pendingQuestionRef.current = pending && looksLikeReply(text) ? pending : text;
+      const isCustNotFound =
+        verification?.status === 'not_found' ||
+        (resolution.status === 'not_found' &&
+          (resolution.matched_on === 'customer_name' ||
+            resolution.matched_on === 'surname' ||
+            resolution.matched_on === 'first_name'));
+
+      if (isCustNotFound || verification?.status === 'ambiguous') {
+        const notFound = isCustNotFound;
+        const msg = (notFound && verification?.message) || resolution.message || 'Customer not found.';
+        pendingQuestionRef.current = notFound
+          ? null
+          : (pendingQuestionRef.current && looksLikeReply(text) ? pendingQuestionRef.current : text);
         setProcess((prev) => ({
           ...prev,
           phase: notFound ? 'failed' : 'needs_input',
@@ -586,7 +623,7 @@ export function ExplainerPage() {
               : { status: 'waiting' as const };
             return {
               ...freshStages(),
-              verify: { status: notFound ? ('failed' as const) : ('attention' as const), detail: verification.message },
+              verify: { status: notFound ? ('failed' as const) : ('attention' as const), detail: msg },
               context: after,
               retrieve: after,
               ground: after,
@@ -602,9 +639,9 @@ export function ExplainerPage() {
           id: nextId('assistant'),
           time: nowTime(),
           text: notFound
-            ? verification.message
-            : `${verification.message} Which customer did you mean?`,
-          suggestions: notFound ? [] : verification.customers.map((c) => c.name),
+            ? msg
+            : `${verification?.message || resolution.message} Which customer did you mean?`,
+          suggestions: notFound ? [] : (verification?.customers || []).map((c) => c.name),
         });
         openPanel({ mode: 'live' }, null);
         if (notFound) {
@@ -658,11 +695,47 @@ export function ExplainerPage() {
       const understood = interpretedText(resolution.interpretation);
       const understoodNote = understood ? ` · understood as “${understood}”` : '';
 
-      // Customer / portfolio questions are answered from policy records. They need no single-policy
-      // context, and they neither change the active context nor ask which policy to check.
+      // A question about another customer than the conversation's never runs against the current one:
+      // the employee switches this conversation or starts a new one first.
+      const cur = currentCustomer(policyRef.current, customerRef.current);
+      const action = contextAction(resolution, cur);
+      if (action.kind === 'switch' && cur) {
+        const pendingAsk = pendingQuestionRef.current;
+        setPendingSwitch({
+          current: { ...cur, policy: policyRef.current, policy_count: customerRef.current?.policy_count },
+          // A lookup ("David", "What are David's policies?") switches to the customer, then lists their policies.
+          target: {
+            ...action.target,
+            policy: resolution.intent === 'portfolio' ? null : action.policy,
+            candidates: resolution.candidates.length ? resolution.candidates : resolution.policy ? [resolution.policy] : [],
+          },
+          pendingQuestion: pendingAsk && isBareReference(text, resolution) ? pendingAsk : text,
+          matchedOn: resolution.matched_on || null,
+        });
+        setProcess(IDLE_PROCESS);
+        return;
+      }
+
+      // Customer / portfolio questions are answered from policy records. A lookup of one customer
+      // ("Elena", "What are Elena's policies?") makes them the conversation's customer, so the next
+      // question ("What are the exclusions?") needs no name.
       if (resolution.intent === 'portfolio') {
+        try {
+          if (action.kind === 'set_policy') {
+            await setConversationContext(convId, action.policy.policy_id, { customerId: action.policy.customer_id });
+            setActivePolicy(action.policy);
+            setActiveCustomer(null);
+          } else if (action.kind === 'set_customer') {
+            await bindCustomer(convId, action.target);
+          }
+        } catch (err) {
+          const friendly = describeError(err);
+          failProcess(friendly);
+          push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+          return;
+        }
         const subject = resolution.reference ? `Customer question · ${resolution.reference}` : 'Portfolio question · whole book';
-        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records`);
+        await runPipeline(text, convId, `Portfolio lookup · ${subject} — answered from policy records`, undefined, undefined, true);
         return;
       }
 
@@ -680,8 +753,8 @@ export function ExplainerPage() {
         // Scenario C: If switching to an unrelated customer, require explicit confirmation via inline card
         if (current && current.customer_id && resolved.customer_id && current.customer_id !== resolved.customer_id) {
           setPendingSwitch({
-            currentPolicy: current,
-            targetPolicy: resolved,
+            current: { customer_id: current.customer_id, customer_name: current.customer_name, policy: current },
+            target: { customer_id: resolved.customer_id, customer_name: resolved.customer_name, policy: resolved },
             pendingQuestion: question,
             matchedOn: resolution.matched_on || null,
           });
@@ -703,6 +776,7 @@ export function ExplainerPage() {
           return;
         }
         setActivePolicy(resolved);
+        setActiveCustomer(null);
         setFeatureTab(null);
         if (isDifferentPolicy) {
           push({
@@ -721,14 +795,24 @@ export function ExplainerPage() {
         resolution.status === 'ambiguous' &&
         resolution.answer_all &&
         resolution.candidates.length <= MAX_ANSWER_ALL &&
-        // Another customer's policies still go through the switch confirmation below.
-        (!current || resolution.candidates.every((c) => c.customer_id === current.customer_id))
+        // Another customer's policies went through the switch confirmation above.
+        (!cur || resolution.candidates.every((c) => c.customer_id === cur.customer_id))
       ) {
         // Several policies of one customer: answer the question for each, labelled by policy number.
         const pending = pendingQuestionRef.current;
         if (pending && isBareReference(text, resolution)) question = pending;
         pendingQuestionRef.current = null;
         const policies = resolution.candidates;
+        if (action.kind === 'set_customer') {
+          try {
+            await bindCustomer(convId, action.target);
+          } catch (err) {
+            const friendly = describeError(err);
+            failProcess(friendly);
+            push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+            return;
+          }
+        }
         push({
           kind: 'assistant',
           id: nextId('assistant'),
@@ -770,12 +854,27 @@ export function ExplainerPage() {
           return;
         }
       } else if (resolution.status === 'not_found') {
-        pendingQuestionRef.current = pendingQuestionRef.current ?? text;
-        askForPolicy(
-          `${resolution.message} Which policy or policyholder should I check?`,
-          [],
-          `${resolution.reference} did not match a policy on file`
-        );
+        const isCustomer =
+          resolution.customer_verification?.status === 'not_found' ||
+          resolution.matched_on === 'customer_name' ||
+          resolution.matched_on === 'surname' ||
+          resolution.matched_on === 'first_name';
+        pendingQuestionRef.current = isCustomer ? null : (pendingQuestionRef.current ?? text);
+        if (isCustomer) {
+          push({
+            kind: 'assistant',
+            id: nextId('assistant'),
+            time: nowTime(),
+            text: resolution.message,
+            suggestions: [],
+          });
+        } else {
+          askForPolicy(
+            `${resolution.message} Which policy or policyholder should I check?`,
+            [],
+            `${resolution.reference} did not match a policy on file`
+          );
+        }
         return;
       } else if (current) {
         contextDetail = `Policy ${current.policy_number} · ${current.customer_name}`;
@@ -817,12 +916,13 @@ export function ExplainerPage() {
     setPolicySwitcherOpen(false);
     const current = policyRef.current;
     const pending = pendingQuestionRef.current;
+    const cur = currentCustomer(current, customerRef.current);
 
     // Scenario C: If selecting a policy belonging to a different customer, require confirmation via inline card
-    if (current && current.customer_id && candidate.customer_id && current.customer_id !== candidate.customer_id) {
+    if (cur && candidate.customer_id && cur.customer_id !== candidate.customer_id) {
       setPendingSwitch({
-        currentPolicy: current,
-        targetPolicy: candidate,
+        current: { ...cur, policy: current, policy_count: customerRef.current?.policy_count },
+        target: { customer_id: candidate.customer_id, customer_name: candidate.customer_name, policy: candidate },
         pendingQuestion: pending || null,
         matchedOn: null,
       });
@@ -886,6 +986,7 @@ export function ExplainerPage() {
         customerId: candidate.customer_id,
       });
       setActivePolicy(candidate);
+      setActiveCustomer(null);
       setFeatureTab(null);
       pendingQuestionRef.current = null;
       push({
@@ -940,8 +1041,23 @@ export function ExplainerPage() {
   /** Scenario D: Start a new conversation with the newly selected customer/policy. */
   const handleConfirmStartNew = async () => {
     if (!pendingSwitch) return;
-    const { targetPolicy, pendingQuestion } = pendingSwitch;
+    const { target, pendingQuestion } = pendingSwitch;
+    const targetPolicy = target.policy;
     setPendingSwitch(null);
+
+    if (!targetPolicy) {
+      // The other customer has several policies (or the question was a lookup): the new conversation
+      // resolves the question from scratch, with that customer named in it.
+      try {
+        const newConv = await createConversation();
+        notifyConversationsChanged();
+        navigate(`/app/explainer/c/${newConv.conversation_id}`, { state: pendingQuestion ? { initialQuestion: pendingQuestion } : {} });
+      } catch (err) {
+        const friendly = describeError(err);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+      }
+      return;
+    }
 
     try {
       const newConv = await createConversation(targetPolicy.policy_id);
@@ -973,8 +1089,33 @@ export function ExplainerPage() {
   /** Scenario C action 2: Switch the existing conversation to the newly selected customer. */
   const handleConfirmSwitchExisting = async () => {
     if (!pendingSwitch) return;
-    const { targetPolicy, pendingQuestion, matchedOn } = pendingSwitch;
+    const { target, pendingQuestion, matchedOn } = pendingSwitch;
+    const targetPolicy = target.policy;
     setPendingSwitch(null);
+
+    if (!targetPolicy) {
+      // The other customer becomes this conversation's customer; the question is then answered for them
+      // (each of their policies, or their policy list) exactly as if the conversation had started there.
+      const convId = conversationRef.current;
+      if (!convId) return;
+      try {
+        await bindCustomer(convId, { customer_id: target.customer_id, customer_name: target.customer_name }, true);
+        notifyConversationsChanged();
+      } catch (err) {
+        const friendly = describeError(err);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+        return;
+      }
+      push({
+        kind: 'assistant',
+        id: nextId('assistant'),
+        time: nowTime(),
+        text: `Switched this conversation to ${target.customer_name}. Questions now refer to ${target.customer_name}'s policies.`,
+        suggestions: [],
+      });
+      if (pendingQuestion) await handleAsk(pendingQuestion, { echo: false });
+      return;
+    }
 
     busyRef.current = true;
     setIsWorking(true);
@@ -985,6 +1126,7 @@ export function ExplainerPage() {
         confirmDifferentCustomer: true,
       });
       setActivePolicy(targetPolicy);
+      setActiveCustomer(null);
       setFeatureTab(null);
       pendingQuestionRef.current = null;
       push({
@@ -1044,15 +1186,103 @@ export function ExplainerPage() {
   const handleClearContext = async () => {
     const convId = conversationRef.current;
     setActivePolicy(null);
+    setActiveCustomer(null);
     setFeatureTab(null);
     pendingQuestionRef.current = null;
     if (convId) {
       try {
         await clearConversationContext(convId);
+        notifyConversationsChanged();
       } catch (err) {
         const friendly = describeError(err);
         push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
       }
+    }
+  };
+
+  const handleRetainCustomerContext = async () => {
+    if (!activePolicy) return;
+    const custId = activePolicy.customer_id;
+    const custName = activePolicy.customer_name;
+    setActivePolicy(null);
+    setFeatureTab(null);
+    const summary: CustomerContextSummary = {
+      customer_id: custId,
+      customer_name: custName,
+    };
+    setActiveCustomer(summary);
+    const convId = conversationRef.current;
+    if (convId) {
+      try {
+        await setConversationContext(convId, null, { customerId: custId });
+        notifyConversationsChanged();
+      } catch (err) {
+        const friendly = describeError(err);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+      }
+    }
+  };
+
+  const handleSelectCustomerFromSelector = async (customer: CustomerListItem) => {
+    setInput((prev) => prev.replace(/@\s*$/, '').trimEnd());
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    const summary: CustomerContextSummary = {
+      customer_id: customer.id,
+      customer_name: customer.name,
+      account_number: customer.account_number,
+      email: customer.email,
+      policy_count: customer.policy_count,
+    };
+    setActiveCustomer(summary);
+    setActivePolicy(null);
+    setFeatureTab(null);
+    pendingQuestionRef.current = null;
+
+    push({
+      kind: 'assistant',
+      id: nextId('assistant'),
+      time: nowTime(),
+      text: `Active context set to **${customer.name}**${customer.account_number ? ` (${customer.account_number})` : ''} · ${customer.policy_count} ${customer.policy_count === 1 ? 'policy' : 'policies'} on file. Questions will now focus on this customer.`,
+      suggestions: customer.policy_count > 0 ? [
+        `What are the policies of ${customer.name}?`,
+        `What is the coverage of ${customer.name}?`,
+      ] : [],
+    });
+
+    const convId = conversationRef.current;
+    if (convId) {
+      try {
+        await setConversationContext(convId, null, { customerId: customer.id });
+        notifyConversationsChanged();
+      } catch (err) {
+        const friendly = describeError(err);
+        push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
+      }
+    }
+  };
+
+  const handleSelectPolicyFromSelector = async (policy: PolicyListItem) => {
+    setInput((prev) => prev.replace(/@\s*$/, '').trimEnd());
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    try {
+      const candidate = await resolvePolicyContext(policy.id);
+      await handleChooseCandidate(candidate);
+    } catch {
+      const candidate: PolicyContextCandidate = {
+        policy_id: policy.id,
+        policy_number: policy.policy_number,
+        customer_id: policy.customer_id,
+        customer_name: policy.customer_name,
+        line_of_business: policy.line_of_business,
+        status: policy.status,
+        effective_date: policy.effective_date,
+        expiration_date: policy.expiration_date,
+      };
+      await handleChooseCandidate(candidate);
     }
   };
 
@@ -1065,8 +1295,10 @@ export function ExplainerPage() {
     []
   );
 
-  const openSource = useCallback((item: EvidenceItem) => {
-    setSourceTarget({ sourceType: item.source_type, sourceId: item.source_id, evidence: item });
+  const closeDocument = useCallback(() => setOpenDocument(null), []);
+
+  const openSource = useCallback((item: EvidenceItem, claim?: string) => {
+    setSourceTarget({ sourceType: item.source_type, sourceId: item.source_id, evidence: item, claim });
   }, []);
 
   const showAudit = useCallback((target: AuditTarget, opener: HTMLElement) => {
@@ -1112,12 +1344,32 @@ export function ExplainerPage() {
     const conv = await getConversation(convId);
     if (conv.policy_context && conversationRef.current === convId) {
       setActivePolicy(await resolvePolicyContext(conv.policy_context.policy_id));
+      setActiveCustomer(null);
+    } else if (conv.customer_context && conversationRef.current === convId) {
+      setActiveCustomer(conv.customer_context);
+      setActivePolicy(null);
+    } else if (conversationRef.current === convId) {
+      setActivePolicy(null);
+      setActiveCustomer(null);
     }
-    const records = await getConversationMessages(convId);
+    const [records, docs] = await Promise.all([
+      getConversationMessages(convId),
+      listDocuments(convId).catch(() => [] as DocumentInfo[]),
+    ]);
     const restored: ChatMessage[] = [];
+    const uploads = [...docs].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    const explainQuestions = new Set(uploads.map((d) => `Explain the uploaded document “${d.filename}” in simple language`));
+    const addUploadsUntil = (when: string | null) => {
+      while (uploads.length && (when === null || Date.parse(uploads[0].created_at) <= Date.parse(when))) {
+        const d = uploads.shift()!;
+        restored.push({ kind: 'document', id: nextId('document'), time: timeOf(d.created_at), filename: d.filename, document: d, askedBy: me(), askedAt: d.created_at });
+      }
+    };
     // A question answered for each of a customer's policies shows once, with its labelled answers.
     for (const { record, startsQuestion, inGroup } of groupPolicyAnswers(records)) {
-      if (startsQuestion) {
+      addUploadsUntil(record.created_at);
+      // The explanation asked on upload shows under the document's card, not as a typed question.
+      if (startsQuestion && !explainQuestions.has(record.question)) {
         restored.push({
           kind: 'user',
           id: nextId('user'),
@@ -1146,9 +1398,9 @@ export function ExplainerPage() {
         });
       }
     }
+    addUploadsUntil(null);
     if (conversationRef.current === convId) setMessages(restored);
     // The document still attached to this conversation, if any.
-    const docs = await listDocuments(convId).catch(() => [] as DocumentInfo[]);
     if (conversationRef.current === convId) setAttachedDoc(docs.find((d) => d.is_active) ?? null);
   };
 
@@ -1350,18 +1602,6 @@ export function ExplainerPage() {
   return (
     <div className="flex h-full min-h-0 w-full flex-1 bg-white overflow-hidden">
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <PolicyContextBanner
-          policy={activePolicy}
-          isResolving={isResolving}
-          openTab={featureTab}
-          onOpenTab={(tab) => openTab(tab)}
-          onClear={handleClearContext}
-          onOpenSwitcher={() => setPolicySwitcherOpen(true)}
-          processAvailable={liveAvailable || Boolean(lastAnswer)}
-          processOpen={Boolean(panel)}
-          onToggleProcess={toggleProcess}
-        />
-
         {activePolicy && featureTab && (
           <div className="max-h-[45%] shrink-0 overflow-y-auto border-b border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 sm:px-6">
             <div className="mx-auto w-full max-w-[780px]">
@@ -1412,6 +1652,7 @@ export function ExplainerPage() {
               onAsk={handleAsk}
               onChooseCandidate={handleChooseCandidate}
               onOpenSource={openSource}
+              onOpenDocument={setOpenDocument}
               onOpenTab={openTab}
               pendingSwitch={pendingSwitch}
               onConfirmSwitchContext={handleConfirmSwitchExisting}
@@ -1420,113 +1661,200 @@ export function ExplainerPage() {
             />
           )}
 
-          <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
-            <form onSubmit={onSubmit} className="mx-auto w-full max-w-[780px]">
-              {(attachedDoc || isUploading) && (
-                <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#BFDBFE] bg-[#F0F7FF] px-3 py-1.5 text-[12.5px] text-[#1E3A5F]">
-                  {isUploading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#1D4ED8]" aria-hidden="true" />
-                      <span>Reading the document…</span>
-                    </>
-                  ) : (
-                    attachedDoc && (
-                      <>
-                        <FileText className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                        <span className="min-w-0 truncate font-semibold" title={attachedDoc.filename}>
-                          {attachedDoc.filename}
-                        </span>
-                        <span className="shrink-0 text-[#475569]">· {unitLabel(attachedDoc)} · answering from this document</span>
-                        <button
-                          type="button"
-                          onClick={handleDetach}
-                          disabled={isWorking}
-                          aria-label={`Detach ${attachedDoc.filename}`}
-                          title="Detach: answer from the policy again"
-                          className="ml-auto rounded p-0.5 text-[#475569] hover:bg-white hover:text-[#0F2A43] disabled:opacity-50 cursor-pointer"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </>
-                    )
-                  )}
-                </div>
-              )}
-              <div className="flex items-center gap-2 rounded-2xl border border-[#CBD5E1] bg-white py-1.5 pl-4 pr-1.5 shadow-[0_4px_16px_rgba(15,42,67,0.06)] transition-colors focus-within:border-[#F97316] focus-within:ring-2 focus-within:ring-[#F97316]/20">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
-                  className="sr-only"
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (file) handleUpload(file);
-                  }}
+          <div className="shrink-0 px-4 pb-4.5 pt-2 sm:px-8">
+            <form onSubmit={onSubmit} className="mx-auto w-full max-w-[820px]">
+              {/* Composer Box matching Claude mockup */}
+              <div className="relative w-full rounded-[18px] border border-[#D5DCE7] bg-white p-3 shadow-[0_1px_2px_rgba(15,42,67,0.04)] transition-all focus-within:border-[#EA580C] focus-within:shadow-[0_0_0_4px_rgba(234,88,12,0.12)]">
+                {/* Context Selector Popover */}
+                <ContextSelectorPopover
+                  isOpen={contextSelectorOpen}
+                  onClose={() => setContextSelectorOpen(false)}
+                  onSelectCustomer={handleSelectCustomerFromSelector}
+                  onSelectPolicy={handleSelectPolicyFromSelector}
+                  disabled={isWorking}
                 />
-                <QuestionInput
-                  variant="bare"
-                  value={input}
-                  onChange={setInput}
-                  disabled={isWorking || isLoadingHistory || Boolean(loadError)}
-                  placeholder={
-                    attachedDoc
-                      ? `Ask about ${attachedDoc.filename}…`
-                      : activePolicy
-                      ? `Ask about ${activePolicy.customer_name}'s policy, or another one…`
-                      : 'Message Policy Explainer…'
-                  }
-                  inputRef={inputRef}
-                />
-                <div ref={attachMenuRef} className="relative shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setAttachMenuOpen((open) => !open)}
-                    disabled={isWorking || isLoadingHistory || Boolean(loadError)}
-                    aria-label="Add"
-                    aria-haspopup="menu"
-                    aria-expanded={attachMenuOpen}
-                    title="Add a document"
-                    className="flex h-9 w-9 items-center justify-center rounded-xl text-[#475569] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F2A43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-                  >
-                    <Plus className={`h-5 w-5 transition-transform ${attachMenuOpen ? 'rotate-45' : ''}`} strokeWidth={2.25} />
-                  </button>
-                  {attachMenuOpen && (
-                    <div
-                      role="menu"
-                      aria-label="Add"
-                      className="absolute bottom-full right-0 z-30 mb-2 w-64 rounded-xl border border-[#E2E8F0] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,42,67,0.14)]"
-                    >
+
+                {/* Top context chip inside composer box */}
+                {activePolicy ? (
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-[#FDBA74] bg-[#FFF1E6] px-3 py-1 text-[12.5px] font-medium text-[#0F2A43]">
+                      <Shield className="h-3.5 w-3.5 text-[#EA580C]" />
+                      <span className="font-bold text-[#C2410C]">
+                        @{activePolicy.policy_number}
+                      </span>
+                      <span className="text-[#94A3B8]">·</span>
+                      <span className="text-[#475569]">{activePolicy.customer_name}</span>
+                      <span className="rounded border border-[#FDBA74] bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#C2410C]">
+                        {lineLabel(activePolicy.line_of_business)}
+                      </span>
                       <button
                         type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setAttachMenuOpen(false);
-                          fileInputRef.current?.click();
-                        }}
-                        className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                        onClick={handleRetainCustomerContext}
+                        aria-label="Keep customer context"
+                        title="Keep customer context without policy"
+                        className="ml-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-sky-700 bg-sky-50 border border-sky-200 hover:bg-sky-100 transition-colors cursor-pointer"
                       >
-                        <Upload className="mt-0.5 h-4 w-4 shrink-0 text-[#EA580C]" aria-hidden="true" />
-                        <span>
-                          <span className="block text-[13px] font-semibold text-[#0F2A43]">Upload document</span>
-                          <span className="block text-[11.5px] text-[#64748B]">PDF, Word or text · up to 10 MB</span>
-                        </span>
+                        Keep customer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearContext}
+                        aria-label="Remove policy and customer context"
+                        title="Remove context"
+                        className="ml-0.5 rounded-full p-0.5 text-[#9A3412] hover:bg-[#FED7AA] hover:text-[#7C2D12] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#EA580C] cursor-pointer"
+                      >
+                        <X className="h-3 w-3" />
                       </button>
                     </div>
-                  )}
+                  </div>
+                ) : activeCustomer ? (
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[12.5px] font-medium text-[#0F2A43]">
+                      <User className="h-3.5 w-3.5 text-sky-700" />
+                      <span className="font-bold text-sky-800">
+                        @{activeCustomer.customer_name}
+                      </span>
+                      {activeCustomer.account_number && (
+                        <>
+                          <span className="text-sky-300">·</span>
+                          <span className="font-mono text-[11px] text-sky-800">
+                            {activeCustomer.account_number}
+                          </span>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleClearContext}
+                        aria-label="Remove customer context"
+                        title="Remove context"
+                        className="ml-1 rounded-full p-0.5 text-sky-700 hover:bg-sky-200 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-600 cursor-pointer"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mb-1 flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setContextSelectorOpen((open) => !open)}
+                      disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                      aria-label="Select customer or policy context"
+                      aria-haspopup="dialog"
+                      aria-expanded={contextSelectorOpen}
+                      title="Select customer or policy context (@)"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[#E3E8F0] bg-[#F7F9FC] px-2.5 py-1 text-[13px] font-medium text-[#0F2A43] transition-colors hover:border-[#EA580C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                    >
+                      <b className="font-bold text-[#C2410C]">@</b>Add context
+                    </button>
+                  </div>
+                )}
+
+                {/* Input row */}
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+                    className="sr-only"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) handleUpload(file);
+                    }}
+                  />
+                  <QuestionInput
+                    variant="bare"
+                    value={input}
+                    onChange={setInput}
+                    onOpenContextSelector={() => setContextSelectorOpen(true)}
+                    disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                    placeholder={
+                      attachedDoc
+                        ? `Ask about ${attachedDoc.filename}…`
+                        : activePolicy
+                        ? `Ask about ${activePolicy.customer_name}'s policy, or another one…`
+                        : activeCustomer
+                        ? `Ask about ${activeCustomer.customer_name}’s policies or portfolio…`
+                        : 'Message Policy Explainer…'
+                    }
+                    inputRef={inputRef}
+                  />
+
+                  {/* Add document / attach button */}
+                  <div ref={attachMenuRef} className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setAttachMenuOpen((open) => !open)}
+                      disabled={isWorking || isLoadingHistory || Boolean(loadError)}
+                      aria-label="Add"
+                      aria-haspopup="menu"
+                      aria-expanded={attachMenuOpen}
+                      title="Add a document"
+                      className="flex h-[38px] w-[38px] items-center justify-center rounded-[10px] text-[#475569] transition-colors hover:bg-[#F7F9FC] hover:text-[#0F2A43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                    >
+                      <Plus className={`h-5 w-5 transition-transform ${attachMenuOpen ? 'rotate-45' : ''}`} strokeWidth={2} />
+                    </button>
+                    {attachMenuOpen && (
+                      <div
+                        role="menu"
+                        aria-label="Add"
+                        className="absolute bottom-full right-0 z-30 mb-2 w-64 rounded-xl border border-[#E2E8F0] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,42,67,0.14)]"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setAttachMenuOpen(false);
+                            fileInputRef.current?.click();
+                          }}
+                          className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                        >
+                          <Upload className="mt-0.5 h-4 w-4 shrink-0 text-[#EA580C]" aria-hidden="true" />
+                          <span>
+                            <span className="block text-[13px] font-semibold text-[#0F2A43]">Upload document</span>
+                            <span className="block text-[11.5px] text-[#64748B]">PDF, Word or text · up to 10 MB</span>
+                          </span>
+                        </button>
+                        {attachedDoc && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setAttachMenuOpen(false);
+                              handleDetach();
+                            }}
+                            className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
+                          >
+                            <FileX2 className="mt-0.5 h-4 w-4 shrink-0 text-[#64748B]" aria-hidden="true" />
+                            <span className="min-w-0">
+                              <span className="block text-[13px] font-semibold text-[#0F2A43]">Ask about the policy instead</span>
+                              <span className="block truncate text-[11.5px] text-[#64748B]" title={attachedDoc.filename}>
+                                Stop answering from {attachedDoc.filename}
+                              </span>
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Send button */}
+                  <button
+                    type="submit"
+                    aria-label="Send message"
+                    disabled={!input.trim() || isWorking || Boolean(loadError)}
+                    className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[12px] bg-[#EA580C] text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#E2E8F0] disabled:text-[#94A3B8] cursor-pointer"
+                  >
+                    <ArrowUp className="h-4.5 w-4.5" strokeWidth={2.4} />
+                  </button>
                 </div>
-                <button
-                  type="submit"
-                  aria-label="Send"
-                  disabled={!input.trim() || isWorking || Boolean(loadError)}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EA580C] text-white transition-colors hover:bg-[#C2410C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#E2E8F0] disabled:text-[#94A3B8] cursor-pointer"
-                >
-                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
-                </button>
               </div>
-              <p className="mt-2 text-center text-[11px] text-[#94A3B8]">
+
+              {/* Note */}
+              <p className="mt-2.5 text-center text-[12.5px] text-[#64748B]">
                 {attachedDoc
                   ? 'Answers come from the uploaded document, cite its pages and are recorded in the Audit Log.'
                   : 'Answers come from the policy wording, cite their sources and are recorded in the Audit Log.'}
@@ -1538,6 +1866,7 @@ export function ExplainerPage() {
 
       <AIProcessPanel content={panel} process={process} docked={docked} autoFocus={panelAutoFocus} onClose={closePanel} />
       <SourceViewer target={sourceTarget} onClose={() => setSourceTarget(null)} />
+      <DocumentViewer document={openDocument} onClose={closeDocument} />
 
       {/* Policy and Customer Selection Modal */}
       <PolicySwitcherModal

@@ -26,6 +26,8 @@ PORTFOLIO_PATTERNS = [
     re.compile(rf"\bhow many\b.*\b{SUBJECT}\b", re.IGNORECASE),
     re.compile(rf"\b(?:what|which|list|show|give|display|name)\b.*\b{SUBJECT}\b", re.IGNORECASE),
     re.compile(rf"\b(?:any|other|all)\s+(?:other\s+)?(?:{SUBJECT})\b", re.IGNORECASE),
+    # "Does she have another policy?", "has he got more policies?", "is there a second policy?"
+    re.compile(rf"\b(?:does|do|has|have|is\s+there|are\s+there)\b.*\b(?:another|more|second)\s+(?:{SUBJECT})\b", re.IGNORECASE),
 ]
 # Questions about what a policy *says* or individual policy metadata stay with the grounded explainer even if they say "policy".
 CONTENT_TERMS = re.compile(
@@ -190,8 +192,14 @@ def portfolio_suggestions(result: PortfolioResult) -> list[str]:
     return [f"What does {p.policy_number} cover?" for p in result.policies[:3]]
 
 
-def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
-    """Answer a customer or portfolio question from policy records."""
+def answer_portfolio_question(
+    question: str, db: Session, default_account: Optional[CoreAccount] = None
+) -> PortfolioResult:
+    """Answer a customer or portfolio question from policy records.
+
+    ``default_account`` is the conversation's customer, for a question that names nobody ("Does she
+    have another policy?"); a name that matches nobody is still reported, never defaulted.
+    """
     text = question.strip()
     accounts, _ = find_accounts(text, db)
     scope = "customer" if accounts else "book"
@@ -216,6 +224,10 @@ def answer_portfolio_question(question: str, db: Session) -> PortfolioResult:
             policies=[],
             prior_terms={},
         )
+
+    if not accounts and default_account:
+        accounts = [default_account]
+        scope = "customer"
 
     # Household members are included only when asked for: listing a spouse's policies
     # unprompted would disclose a contract the caller may not be party to.

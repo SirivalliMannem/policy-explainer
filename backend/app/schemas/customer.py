@@ -12,8 +12,10 @@ class CustomerResponse(BaseModel):
 
     id: str
     name: str
+    account_number: Optional[str] = ""
     email: str
     phone: Optional[str] = None
+    policy_count: Optional[int] = None
 
 
 class PolicySummaryResponse(BaseModel):

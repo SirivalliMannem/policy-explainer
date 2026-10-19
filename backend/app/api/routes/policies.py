@@ -1,10 +1,12 @@
-"""Policy details, coverages, forms, claims, and billing API endpoints."""
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.auth import EmployeeUser, get_current_employee
 from app.db.database import get_db
 from app.models.policy import (
+    CoreAccount,
     CoreBilling,
     CoreClaim,
     CoreCoverage,
@@ -17,9 +19,61 @@ from app.schemas.policy import (
     CoverageResponse,
     FormResponse,
     PolicyDetailResponse,
+    PolicyListItemResponse,
 )
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
+
+
+@router.get("", response_model=list[PolicyListItemResponse])
+def list_policies(
+    search: Optional[str] = Query(None, description="Search by policy number, customer name, account number, or line of business"),
+    customer_id: Optional[str] = Query(None, description="Filter by customer account ID"),
+    limit: int = Query(50, ge=1, le=100),
+    employee: EmployeeUser = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Search and list policies with customer context and authorization checks."""
+    if (employee.role or "").strip().lower() in {"unauthorized", "suspended", "inactive"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Employee is not authorized to search policy records",
+        )
+
+    query = db.query(CorePolicy).join(CoreAccount, CorePolicy.account_id == CoreAccount.id)
+
+    if customer_id and customer_id.strip():
+        query = query.filter(CorePolicy.account_id == customer_id.strip())
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                CorePolicy.policy_number.ilike(term),
+                CoreAccount.name.ilike(term),
+                CoreAccount.account_number.ilike(term),
+                CorePolicy.line_of_business.ilike(term),
+                CorePolicy.product_name.ilike(term),
+            )
+        )
+
+    policies = query.order_by(CorePolicy.effective_date.desc()).limit(limit).all()
+
+    return [
+        PolicyListItemResponse(
+            id=p.id,
+            policy_number=p.policy_number,
+            customer_id=p.account_id,
+            customer_name=p.account.name if p.account else "",
+            customer_account_number=p.account.account_number if p.account else None,
+            line_of_business=p.line_of_business,
+            product_name=p.product_name,
+            status=p.status,
+            effective_date=p.effective_date,
+            expiration_date=p.expiration_date,
+        )
+        for p in policies
+    ]
 
 
 def _get_policy_or_404(policy_id: str, db: Session) -> CorePolicy:
