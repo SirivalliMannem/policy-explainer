@@ -932,7 +932,7 @@ export function ConversationStream({
             currentPolicyNumber={sideLabel(pendingSwitch.current.policy, pendingSwitch.current.policy_count)}
             currentLineOfBusiness={pendingSwitch.current.policy?.line_of_business}
             targetCustomerName={pendingSwitch.target.customer_name}
-            targetPolicyNumber={sideLabel(pendingSwitch.target.policy, pendingSwitch.target.candidates?.length || null)}
+            targetPolicyNumber={sideLabel(pendingSwitch.target.policy, pendingSwitch.target.candidates?.length ?? pendingSwitch.target.policy_count ?? null)}
             targetLineOfBusiness={pendingSwitch.target.policy?.line_of_business}
             onSwitchContext={onConfirmSwitchContext}
             onStartNewConversation={onConfirmStartNew}

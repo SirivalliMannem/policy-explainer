@@ -301,9 +301,10 @@ export async function resolvePolicyFromQuestion(
 // Conversation & Question Endpoints
 // ==========================================
 
-export async function createConversation(policyId?: string): Promise<ConversationResponse> {
+export async function createConversation(policyId?: string, customerId?: string): Promise<ConversationResponse> {
   return apiClient.post<ConversationResponse>('/api/conversations', {
     policy_id: policyId || undefined,
+    customer_id: customerId || undefined,
   });
 }
 

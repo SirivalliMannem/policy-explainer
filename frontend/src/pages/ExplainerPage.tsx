@@ -911,7 +911,7 @@ export function ExplainerPage() {
     }
   };
 
-  const handleChooseCandidate = async (candidate: PolicyContextCandidate) => {
+  const handleChooseCandidate = async (candidate: PolicyContextCandidate, matchedOn: string | null = null) => {
     if (busyRef.current) return;
     setPolicySwitcherOpen(false);
     const current = policyRef.current;
@@ -924,7 +924,7 @@ export function ExplainerPage() {
         current: { ...cur, policy: current, policy_count: customerRef.current?.policy_count },
         target: { customer_id: candidate.customer_id, customer_name: candidate.customer_name, policy: candidate },
         pendingQuestion: pending || null,
-        matchedOn: null,
+        matchedOn: matchedOn || null,
       });
       return;
     }
@@ -933,6 +933,7 @@ export function ExplainerPage() {
     if (current && current.policy_id === candidate.policy_id) {
       pendingQuestionRef.current = null;
       if (pending) {
+        setInput('');
         const conflict = detectQuestionEntityConflict(pending, candidate);
         if (conflict.hasConflict && conflict.entity) {
           push({
@@ -957,6 +958,9 @@ export function ExplainerPage() {
           await setConversationContext(convId, candidate.policy_id, {
             customerId: candidate.customer_id,
           });
+          if (matchedOn === '@ selector') {
+            push({ kind: 'user', id: nextId('user'), time: nowTime(), text: pending, askedBy: me(), askedAt: new Date().toISOString() });
+          }
           await runPipeline(
             pending,
             convId,
@@ -989,12 +993,15 @@ export function ExplainerPage() {
       setActiveCustomer(null);
       setFeatureTab(null);
       pendingQuestionRef.current = null;
+      if (pending) {
+        setInput('');
+      }
       push({
         kind: 'context',
         id: nextId('context'),
         time: nowTime(),
         policy: candidate,
-        matchedOn: null,
+        matchedOn,
         switched: isSwitch,
         switchType: isSwitch ? 'same_customer_different_policy' : 'initial_selection',
         answering: pending ?? undefined,
@@ -1017,6 +1024,9 @@ export function ExplainerPage() {
           setProcess(IDLE_PROCESS);
           inputRef.current?.focus();
         } else {
+          if (matchedOn === '@ selector') {
+            push({ kind: 'user', id: nextId('user'), time: nowTime(), text: pending, askedBy: me(), askedAt: new Date().toISOString() });
+          }
           await runPipeline(
             pending,
             convId,
@@ -1044,14 +1054,20 @@ export function ExplainerPage() {
     const { target, pendingQuestion } = pendingSwitch;
     const targetPolicy = target.policy;
     setPendingSwitch(null);
+    setInput('');
+    pendingQuestionRef.current = null;
 
     if (!targetPolicy) {
       // The other customer has several policies (or the question was a lookup): the new conversation
       // resolves the question from scratch, with that customer named in it.
       try {
-        const newConv = await createConversation();
+        const newConv = await createConversation(undefined, target.customer_id);
         notifyConversationsChanged();
-        navigate(`/app/explainer/c/${newConv.conversation_id}`, { state: pendingQuestion ? { initialQuestion: pendingQuestion } : {} });
+        navigate(`/app/explainer/c/${newConv.conversation_id}`, {
+          state: pendingQuestion
+            ? { initialQuestion: pendingQuestion, customerId: target.customer_id }
+            : { customerId: target.customer_id },
+        });
       } catch (err) {
         const friendly = describeError(err);
         push({ kind: 'error', id: nextId('error'), time: nowTime(), title: friendly.title, text: friendly.message });
@@ -1092,6 +1108,8 @@ export function ExplainerPage() {
     const { target, pendingQuestion, matchedOn } = pendingSwitch;
     const targetPolicy = target.policy;
     setPendingSwitch(null);
+    setInput('');
+    pendingQuestionRef.current = null;
 
     if (!targetPolicy) {
       // The other customer becomes this conversation's customer; the question is then answered for them
@@ -1113,7 +1131,7 @@ export function ExplainerPage() {
         text: `Switched this conversation to ${target.customer_name}. Questions now refer to ${target.customer_name}'s policies.`,
         suggestions: [],
       });
-      if (pendingQuestion) await handleAsk(pendingQuestion, { echo: false });
+      if (pendingQuestion) await handleAsk(pendingQuestion, { echo: matchedOn === '@ selector' ? true : false });
       return;
     }
 
@@ -1128,7 +1146,16 @@ export function ExplainerPage() {
       setActivePolicy(targetPolicy);
       setActiveCustomer(null);
       setFeatureTab(null);
-      pendingQuestionRef.current = null;
+      if (matchedOn === '@ selector' && pendingQuestion) {
+        push({
+          kind: 'user',
+          id: nextId('user'),
+          time: nowTime(),
+          text: pendingQuestion,
+          askedBy: me(),
+          askedAt: new Date().toISOString(),
+        });
+      }
       push({
         kind: 'context',
         id: nextId('context'),
@@ -1181,6 +1208,7 @@ export function ExplainerPage() {
   /** Scenario C action 3: Cancel customer switch, retaining existing conversation context. */
   const handleCancelCustomerSwitch = () => {
     setPendingSwitch(null);
+    pendingQuestionRef.current = null;
   };
 
   const handleClearContext = async () => {
@@ -1224,10 +1252,42 @@ export function ExplainerPage() {
   };
 
   const handleSelectCustomerFromSelector = async (customer: CustomerListItem) => {
+    const rawPending = input.replace(/@\s*$/, '').trim();
     setInput((prev) => prev.replace(/@\s*$/, '').trimEnd());
     requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
+
+    const currentPol = policyRef.current;
+    const currentCust = customerRef.current;
+    const cur = currentCustomer(currentPol, currentCust);
+
+    // Scenario C: If switching to a different customer than the active context, require confirmation
+    if (cur && cur.customer_id !== customer.id) {
+      const pendingQ = rawPending || pendingQuestionRef.current || null;
+      if (pendingQ) {
+        pendingQuestionRef.current = pendingQ;
+      }
+      setPendingSwitch({
+        current: {
+          customer_id: cur.customer_id,
+          customer_name: cur.customer_name,
+          policy: currentPol,
+          policy_count: currentCust?.policy_count,
+        },
+        target: {
+          customer_id: customer.id,
+          customer_name: customer.name,
+          policy: null,
+          policy_count: customer.policy_count,
+        },
+        pendingQuestion: pendingQ,
+        matchedOn: '@ selector',
+      });
+      return;
+    }
+
+    // No customer switch required (initial customer selection or same customer)
     const summary: CustomerContextSummary = {
       customer_id: customer.id,
       customer_name: customer.name,
@@ -1264,13 +1324,17 @@ export function ExplainerPage() {
   };
 
   const handleSelectPolicyFromSelector = async (policy: PolicyListItem) => {
+    const rawPending = input.replace(/@\s*$/, '').trim();
+    if (rawPending) {
+      pendingQuestionRef.current = rawPending;
+    }
     setInput((prev) => prev.replace(/@\s*$/, '').trimEnd());
     requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
     try {
       const candidate = await resolvePolicyContext(policy.id);
-      await handleChooseCandidate(candidate);
+      await handleChooseCandidate(candidate, '@ selector');
     } catch {
       const candidate: PolicyContextCandidate = {
         policy_id: policy.id,
@@ -1282,7 +1346,7 @@ export function ExplainerPage() {
         effective_date: policy.effective_date,
         expiration_date: policy.expiration_date,
       };
-      await handleChooseCandidate(candidate);
+      await handleChooseCandidate(candidate, '@ selector');
     }
   };
 
