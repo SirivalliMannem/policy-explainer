@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
+from fi360_shared.agents import POLICY_EXPLAINER
+
 
 class PolicyContextSummary(BaseModel):
     """Context of the currently resolved policy within a conversation."""
@@ -105,6 +107,7 @@ class ConversationResponse(BaseModel):
 
     conversation_id: str
     employee_id: str
+    agent_code: str = POLICY_EXPLAINER
     status: str
     title: Optional[str] = None
     created_at: datetime

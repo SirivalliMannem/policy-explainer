@@ -35,8 +35,10 @@ class Settings:
     LLM_MODEL: str = os.getenv("LLM_MODEL", "")
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
 
-    # AI Microservice Boundary
+    # Agent services. AGENT_A02_URL is the Policy Explainer service.
+    # AI_SERVICE_URL remains the fallback so existing local environments keep working.
     AI_SERVICE_URL: str = os.getenv("AI_SERVICE_URL", "http://localhost:8001")
+    AGENT_A02_URL: str = os.getenv("AGENT_A02_URL", "")
 
 
 settings = Settings()

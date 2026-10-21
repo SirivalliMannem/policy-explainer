@@ -1,4 +1,4 @@
-"""HTTP client for Backend to AI Service microservice communication."""
+"""HTTP client the backend uses to call an agent service."""
 
 from __future__ import annotations
 
@@ -7,9 +7,11 @@ from typing import Optional
 import httpx
 from fastapi import HTTPException, status
 
-from app.core.config import settings
+from fi360_shared.agents import POLICY_EXPLAINER
+
 from app.schemas.conversation import PolicyContextSummary
 from app.schemas.explainer import AIServiceResponse
+from app.services.agent_registry import agent_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +26,11 @@ ATTENTION_ANALYSIS_TIMEOUT_SECONDS = 45.0
 
 
 class AIServiceClient:
-    """Client for calling the AI microservice."""
+    """Client for calling one agent service. Defaults to Policy Explainer (A02)."""
 
-    def __init__(self, base_url: Optional[str] = None):
-        self.base_url = (base_url or settings.AI_SERVICE_URL).rstrip("/")
+    def __init__(self, base_url: Optional[str] = None, agent_code: str = POLICY_EXPLAINER):
+        self.agent_code = agent_code
+        self.base_url = (base_url or agent_base_url(agent_code)).rstrip("/")
 
     def explain(
         self,

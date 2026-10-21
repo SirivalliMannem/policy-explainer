@@ -1,0 +1,10 @@
+[project]
+name = "fi360-shared"
+version = "0.1.0"
+description = "Shared carrier models and agent codes for the platform and agent services"
+requires-python = ">=3.11"
+dependencies = ["sqlalchemy"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fi360_shared*"]

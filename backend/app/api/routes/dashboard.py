@@ -25,6 +25,7 @@ from app.services.attention_analysis import run_analysis
 from app.services.ledger.ledger_service import RERUN_OF
 from app.schemas.conversation import QuestionSubmitRequest
 from app.models.conversation import Conversation, ConversationQuestion
+from fi360_shared.agents import POLICY_EXPLAINER
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CoreForm, CorePolicy
 from app.schemas.dashboard import (
@@ -371,7 +372,14 @@ def resolve_attention(
     from app.api.routes.conversations import submit_question
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    conversation = Conversation(employee_id=employee.id, policy_id=entry.policy_id, status="active", created_at=now, updated_at=now)
+    conversation = Conversation(
+        employee_id=employee.id,
+        agent_code=POLICY_EXPLAINER,
+        policy_id=entry.policy_id,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
     db.add(conversation)
     db.commit()
     db.refresh(conversation)

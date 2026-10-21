@@ -1,8 +1,8 @@
 """Confidence as a percentage for a recorded answer.
 
 The same rule as the chat's confidence badge (frontend/src/lib/confidence.ts), which is derived from
-the rule the AI service uses for its HIGH / MEDIUM / LOW label (_grade_confidence in
-ai-service explainer_pipeline.py). Nothing here is a new score: the percentage is the share of that
+the rule the Policy Explainer agent uses for its HIGH / MEDIUM / LOW label (_grade_confidence in
+agents/policy-explainer/app/services/explainer_pipeline.py). Nothing here is a new score: the percentage is the share of that
 rule's criteria the answer meets.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-# STRONG_EVIDENCE_SCORE in ai-service/app/services/explainer_pipeline.py.
+# STRONG_EVIDENCE_SCORE in agents/policy-explainer/app/services/explainer_pipeline.py.
 STRONG_EVIDENCE_SCORE = 12
 
 # No answer is shown as certain (100%) or as having no support at all (0%); same bounds as

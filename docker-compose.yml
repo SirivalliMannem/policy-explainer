@@ -17,11 +17,13 @@ services:
       timeout: 5s
       retries: 5
 
-  ai-service:
+  # A02 Policy Explainer. Add the next live agent as its own service and
+  # register its URL on the backend (AGENT_<CODE>_URL).
+  policy-explainer:
     build:
-      context: ./ai-service
-      dockerfile: Dockerfile
-    container_name: policy-explainer-ai-service
+      context: .
+      dockerfile: agents/policy-explainer/Dockerfile
+    container_name: policy-explainer-a02
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/policy_explainer
@@ -52,7 +54,8 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/policy_explainer
-      AI_SERVICE_URL: http://ai-service:8001
+      AI_SERVICE_URL: http://policy-explainer:8001
+      AGENT_A02_URL: http://policy-explainer:8001
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
@@ -66,7 +69,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      ai-service:
+      policy-explainer:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]

@@ -6,8 +6,6 @@
 **/venv
 **/node_modules
 frontend
-ai-service
 **/.env
 .env
 **/*.tsbuildinfo
-backend/tests

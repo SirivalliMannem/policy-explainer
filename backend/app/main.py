@@ -16,6 +16,7 @@ from app.api.routes.sources import router as sources_router
 from app.core.config import settings
 from app.db.database import get_db
 from app.db.migrate import run_migrations
+from app.services.agent_registry import registered_agents
 
 run_migrations()
 
@@ -56,7 +57,8 @@ def health_check():
     """Service health check endpoint."""
     return {
         "status": "ok",
-        "service": "policy-explainer-backend",
+        "service": settings.SERVICE_NAME,
+        "agents": registered_agents(),
     }
 
 

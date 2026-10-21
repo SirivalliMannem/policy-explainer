@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, false
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, false, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+
+from fi360_shared.agents import POLICY_EXPLAINER
 
 
 def _uuid() -> str:
@@ -25,6 +27,10 @@ class Conversation(Base):
     # The customer the conversation is about. Set with the policy, or alone when the customer has
     # several policies ("What are Elena's policies?"), so follow-ups resolve to that customer.
     customer_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Which agent owns this conversation. Existing rows are Policy Explainer.
+    agent_code: Mapped[str] = mapped_column(
+        String(10), default=POLICY_EXPLAINER, server_default=text("'A02'"), index=True
+    )
     status: Mapped[str] = mapped_column(String(30), default="active")
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

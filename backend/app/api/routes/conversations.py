@@ -12,6 +12,7 @@ from app.db.database import get_db
 from app.models.conversation import ContextSwitchAudit, Conversation, ConversationQuestion
 from app.models.ledger import EvidenceLedger
 from app.models.policy import CoreAccount, CorePolicy
+from fi360_shared.agents import POLICY_EXPLAINER
 from app.schemas.conversation import (
     ContextCheckResponse,
     ContextSwitchAuditItem,
@@ -197,6 +198,7 @@ def create_conversation(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     conversation = Conversation(
         employee_id=employee.id,
+        agent_code=POLICY_EXPLAINER,
         policy_id=policy_id,
         customer_id=customer_id,
         status="active",
@@ -231,6 +233,7 @@ def create_conversation(
     return ConversationResponse(
         conversation_id=conversation.id,
         employee_id=conversation.employee_id,
+        agent_code=conversation.agent_code,
         status=conversation.status,
         title=conversation.title,
         created_at=conversation.created_at,
@@ -313,6 +316,7 @@ def rename_conversation(
     return ConversationResponse(
         conversation_id=conv.id,
         employee_id=conv.employee_id,
+        agent_code=conv.agent_code,
         status=conv.status,
         title=conv.title,
         created_at=conv.created_at,
@@ -333,6 +337,7 @@ def get_conversation(
     return ConversationResponse(
         conversation_id=conv.id,
         employee_id=conv.employee_id,
+        agent_code=conv.agent_code,
         status=conv.status,
         title=conv.title,
         created_at=conv.created_at,
@@ -442,6 +447,7 @@ def set_conversation_context(
         return ConversationResponse(
             conversation_id=conv.id,
             employee_id=conv.employee_id,
+            agent_code=conv.agent_code,
             status=conv.status,
             title=conv.title,
             created_at=conv.created_at,
@@ -500,6 +506,7 @@ def set_conversation_context(
         return ConversationResponse(
             conversation_id=conv.id,
             employee_id=conv.employee_id,
+            agent_code=conv.agent_code,
             status=conv.status,
             title=conv.title,
             created_at=conv.created_at,
@@ -546,6 +553,7 @@ def clear_conversation_context(
     return ConversationResponse(
         conversation_id=conv.id,
         employee_id=conv.employee_id,
+        agent_code=conv.agent_code,
         status=conv.status,
         title=conv.title,
         created_at=conv.created_at,

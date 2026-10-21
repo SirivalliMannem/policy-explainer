@@ -1,0 +1,70 @@
+"""Main FastAPI application for Policy Explainer AI Service microservice."""
+
+import logging
+import threading
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.api.routes.explain import router as explain_router
+from app.core.config import settings
+from app.db.database import SessionLocal, get_db
+from app.services.retrieval.semantic_index import semantic_index
+
+# Application loggers (provider calls, fallbacks) at INFO; messages never include credentials.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
+# httpx logs full request URLs at INFO, and the Gemini endpoint carries its API key in the URL.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+)
+
+# Register routes
+app.include_router(explain_router)
+
+
+@app.on_event("startup")
+def warm_meaning_search():
+    """Load the meaning-search model in the background; questions are answered meanwhile by word match."""
+    threading.Thread(target=semantic_index.warm_up, args=(SessionLocal,), daemon=True).start()
+
+
+@app.get("/health")
+def health_check():
+    """Service health check endpoint."""
+    return {
+        "status": "ok",
+        "service": settings.SERVICE_NAME,
+        "agent_code": settings.AGENT_CODE,
+        "version": settings.VERSION,
+    }
+
+
+@app.get("/health/db")
+def health_db_check(db: Session = Depends(get_db)):
+    """Database connectivity health check."""
+    try:
+        result = db.execute(text("SELECT 1")).scalar()
+        if result == 1:
+            return {
+                "status": "ok",
+                "database": "connected",
+            }
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unexpected response from database probe",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database connection failed: {exc}",
+        )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.PORT, reload=True)
